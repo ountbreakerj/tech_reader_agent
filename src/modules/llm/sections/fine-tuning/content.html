@@ -1,0 +1,499 @@
+<section class="llm-mod llm-m-fine-tuning" id="llm-fine-tuning"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#ea580c;">
+  <h1>🎨 微调实战</h1>
+  <p>掌握Full Fine-Tuning、LoRA、QLoRA等微调方法</p>
+</div>
+
+<div class="section" id="llm-fine-tuning-s1">
+  <h2>Full Fine-Tuning</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>Full Fine-Tuning就像是把一本百科全书从头到尾重新读一遍——所有知识（参数）都更新。优点是效果好，缺点是需要很多时间和资源。
+  </div>
+
+  <h3>优缺点对比</h3>
+
+  <div class="compare">
+    <div class="compare-card left">
+      <h4>✅ 优点</h4>
+      <ul>
+        <li>效果最好</li>
+        <li>实现简单</li>
+        <li>可以适应任何任务</li>
+      </ul>
+    </div>
+    <div class="compare-card right">
+      <h4>❌ 缺点</h4>
+      <ul>
+        <li>需要大量显存</li>
+        <li>训练时间长</li>
+        <li>容易过拟合</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section" id="llm-fine-tuning-s2">
+  <h2>LoRA原理与实践</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>LoRA就像是在百科全书上贴便利贴——不重写整本书，只在关键页面贴上更新。这样既节省资源，又能达到不错的效果。
+  </div>
+
+  <h3>LoRA核心思想</h3>
+
+  <p>LoRA（Low-Rank Adaptation）的核心是<strong>低秩分解</strong>：不更新所有参数，而是只训练两个小矩阵W_A和W_B，通过它们的乘积来近似参数更新。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> peft <span class="kw">import</span> LoraConfig, get_peft_model
+<span class="kw">from</span> transformers <span class="kw">import</span> AutoModelForCausalLM
+
+<span class="cmt"># 加载预训练模型</span>
+model = AutoModelForCausalLM.<span class="fn">from_pretrained</span>(<span class="str">"meta-llama/Llama-3.1-8B-Instruct"</span>)
+
+<span class="cmt"># 配置LoRA</span>
+lora_config = LoraConfig(
+    r=<span class="num">8</span>,                          <span class="cmt"># 低秩维度（越小越省显存）</span>
+    lora_alpha=<span class="num">32</span>,                 <span class="cmt"># 缩放因子</span>
+    target_modules=[<span class="str">"q_proj"</span>, <span class="str">"k_proj"</span>, <span class="str">"v_proj"</span>, <span class="str">"o_proj"</span>],  <span class="cmt"># 所有attention投影层（推荐）</span>
+    lora_dropout=<span class="num">0.1</span>,              <span class="cmt"># Dropout防止过拟合</span>
+    bias=<span class="str">"none"</span>,                   <span class="cmt"># 不训练bias</span>
+    task_type=<span class="str">"CAUSAL_LM"</span>          <span class="cmt"># 因果语言模型任务</span>
+)
+
+<span class="cmt"># 应用LoRA</span>
+model = <span class="fn">get_peft_model</span>(model, lora_config)
+
+<span class="cmt"># 查看可训练参数量</span>
+model.<span class="fn">print_trainable_parameters()</span>
+<span class="cmt"># 输出示例（Llama-3.1-8B、r=8、q/k/v/o）：trainable params ≈ 6,815,744 || all params ≈ 8.03B || trainable% ≈ 0.085%</span></code></pre>
+  </div>
+
+  <div class="callout callout-key">
+    <strong>LoRA参数详解：</strong>
+    <ul>
+      <li><strong>r（秩）</strong>：低秩矩阵的维度。r=8最常用，越大效果越好但显存占用越多</li>
+      <li><strong>lora_alpha</strong>：缩放因子，通常设为r的2-4倍</li>
+      <li><strong>target_modules</strong>：要适配的层。最佳实践是所有attention投影层 ["q_proj", "k_proj", "v_proj", "o_proj"]，也可加入MLP层 ["gate_proj", "up_proj", "down_proj"]</li>
+      <li><strong>可训练参数量</strong>：通常只有总参数的0.1%-1%</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-fine-tuning-s3">
+  <h2>QLoRA实战</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 什么是QLoRA：</strong>QLoRA = 4-bit量化 + LoRA。将模型量化到4-bit（大幅减少显存），然后用LoRA微调。这是在消费级GPU上微调大模型的最佳方案。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> transformers <span class="kw">import</span> (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+)
+<span class="kw">from</span> peft <span class="kw">import</span> LoraConfig, get_peft_model
+<span class="kw">from</span> trl <span class="kw">import</span> SFTTrainer, SFTConfig
+
+<span class="cmt"># 1. 4-bit量化配置</span>
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=<span class="kw">True</span>,
+    bnb_4bit_quant_type=<span class="str">"nf4"</span>,        <span class="cmt"># NF4量化</span>
+    bnb_4bit_compute_dtype=torch.bfloat16,  <span class="cmt"># 计算精度</span>
+    bnb_4bit_use_double_quant=<span class="kw">True</span>,    <span class="cmt"># 双重量化</span>
+)
+
+<span class="cmt"># 2. 加载量化后的模型</span>
+model = AutoModelForCausalLM.<span class="fn">from_pretrained</span>(
+    <span class="str">"meta-llama/Llama-3.1-8B-Instruct"</span>,
+    quantization_config=bnb_config,
+    device_map=<span class="str">"auto"</span>
+)
+
+<span class="cmt"># 3. LoRA配置</span>
+lora_config = LoraConfig(
+    r=<span class="num">16</span>,
+    lora_alpha=<span class="num">32</span>,
+    target_modules=[<span class="str">"q_proj"</span>, <span class="str">"k_proj"</span>, <span class="str">"v_proj"</span>, <span class="str">"o_proj"</span>],
+    lora_dropout=<span class="num">0.05</span>,
+    bias=<span class="str">"none"</span>,
+    task_type=<span class="str">"CAUSAL_LM"</span>
+)
+
+model = <span class="fn">get_peft_model</span>(model, lora_config)
+
+<span class="cmt"># 4. 训练参数</span>
+training_args = SFTConfig(
+    output_dir=<span class="str">"./output"</span>,
+    num_train_epochs=<span class="num">3</span>,
+    per_device_train_batch_size=<span class="num">4</span>,
+    gradient_accumulation_steps=<span class="num">4</span>,
+    learning_rate=<span class="num">2e-4</span>,
+    warmup_ratio=<span class="num">0.1</span>,
+    fp16=<span class="kw">True</span>,
+    logging_steps=<span class="num">10</span>,
+    save_strategy=<span class="str">"epoch"</span>,
+    max_seq_length=<span class="num">512</span>,
+)
+
+<span class="cmt"># 5. 开始训练</span>
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=train_dataset,
+    args=training_args,
+)
+
+trainer.<span class="fn">train</span>()</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 QLoRA显存对比（以7B模型为例）：</strong>
+    <ul>
+      <li><strong>Full Fine-Tuning（FP16）</strong>：约112GB（参数 + 梯度 + 优化器状态）</li>
+      <li><strong>LoRA微调（FP16）</strong>：约28GB（冻结基座 + 可训练适配器 + 优化器）</li>
+      <li><strong>QLoRA（4-bit量化）</strong>：约6-10GB（4-bit基座约3.5GB + 适配器 + 优化器）</li>
+      <li>可训练参数量：约总参数的0.1%</li>
+      <li>效果：可达Full Fine-tuning的95%以上</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-fine-tuning-s4">
+  <h2>指令微调</h2>
+
+  <h3>指令微调数据格式</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">JSON</span></div>
+    <pre><code>{
+  <span class="str">"instruction"</span>: <span class="str">"请解释以下概念"</span>,
+  <span class="str">"input"</span>: <span class="str">"机器学习"</span>,
+  <span class="str">"output"</span>: <span class="str">"机器学习是人工智能的一个分支，它使计算机能够从数据中学习，而不需要显式编程。"</span>
+}</code></pre>
+  </div>
+
+  <h3>对话模板</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># ChatML 模板（OpenAI 风格）</span>
+template = <span class="str">"""&lt;|im_start|&gt;system
+你是一个有帮助的助手。&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+{instruction}&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+{output}&lt;|im_end|&gt;"""</span>
+
+<span class="cmt"># 实际项目优先使用 tokenizer.apply_chat_template(messages)</span>
+
+<span class="cmt"># Alpaca模板</span>
+template = <span class="str">"""Below is an instruction that describes a task. Write a response that appropriately completes the request.
+
+### Instruction:
+{instruction}
+
+### Input:
+{input}
+
+### Response:
+{output}"""</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-fine-tuning-s4b">
+  <h2>LoRA变体（2025-2026前沿）</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 LoRA的演进：</strong>原始LoRA发布后，研究者提出了多种改进变体，分别解决了不同的局限性。以下是2025-2026年最值得关注的几种。
+  </div>
+
+  <table>
+    <tr><th>方法</th><th>核心思想</th><th>优势</th></tr>
+    <tr><td><strong>DoRA</strong></td><td>将权重分解为幅度（magnitude）+ 方向（direction），仅用LoRA适配方向</td><td>更接近全参微调的效果，尤其在低秩时</td></tr>
+    <tr><td><strong>rsLoRA</strong></td><td>将LoRA的缩放因子从 alpha/r 改为 alpha/sqrt(r)</td><td>在高秩时更稳定，允许使用更大的r值</td></tr>
+    <tr><td><strong>LoRA+</strong></td><td>为A矩阵和B矩阵使用不同的学习率（B的学习率通常更大）</td><td>收敛更快，最终效果更好</td></tr>
+    <tr><td><strong>GaLore</strong></td><td>对梯度做低秩投影而非对参数做低秩分解</td><td>全参数质量，LoRA级别的显存占用</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># DoRA（Weight-Decomposed Low-Rank Adaptation）</span>
+<span class="cmt"># pip install peft>=0.10.0</span>
+<span class="kw">from</span> peft <span class="kw">import</span> LoraConfig, get_peft_model
+
+lora_config = LoraConfig(
+    r=<span class="num">16</span>,
+    lora_alpha=<span class="num">32</span>,
+    target_modules=[<span class="str">"q_proj"</span>, <span class="str">"k_proj"</span>, <span class="str">"v_proj"</span>, <span class="str">"o_proj"</span>],
+    use_dora=<span class="kw">True</span>,  <span class="cmt"># 启用DoRA</span>
+    task_type=<span class="str">"CAUSAL_LM"</span>,
+)
+
+<span class="cmt"># rsLoRA：使用rank-stabilized缩放</span>
+lora_config = LoraConfig(
+    r=<span class="num">64</span>,  <span class="cmt"># 可以使用更高的秩</span>
+    lora_alpha=<span class="num">16</span>,
+    target_modules=[<span class="str">"q_proj"</span>, <span class="str">"k_proj"</span>, <span class="str">"v_proj"</span>, <span class="str">"o_proj"</span>],
+    use_rslora=<span class="kw">True</span>,  <span class="cmt"># 启用rsLoRA</span>
+    task_type=<span class="str">"CAUSAL_LM"</span>,
+)
+
+<span class="cmt"># GaLore：梯度低秩投影</span>
+<span class="cmt"># pip install galore-torch</span>
+<span class="kw">from</span> galore_torch <span class="kw">import</span> GaLoreAdamW
+
+<span class="cmt"># GaLore作用于优化器，不需要LoRA</span>
+optimizer = GaLoreAdamW(
+    model.parameters(),
+    lr=<span class="num">1e-4</span>,
+    rank=<span class="num">128</span>,       <span class="cmt"># 梯度投影的秩</span>
+    update_proj_gap=<span class="num">200</span>,  <span class="cmt"># 每200步更新投影矩阵</span>
+)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-fine-tuning-s4c">
+  <h2>对齐训练（Alignment Training）</h2>
+
+  <div class="callout callout-key">
+    <strong>🔑 为什么需要对齐训练：</strong>SFT（监督微调）教会模型"如何回答"，但对齐训练教会模型"什么样的回答是好的"。这是让模型变得安全、有用、无害的关键步骤。没有对齐的模型可能产生有害、偏见或不真实的内容。
+  </div>
+
+  <h3>对齐训练方法概览</h3>
+
+  <table>
+    <tr><th>方法</th><th>核心思想</th><th>数据需求</th><th>代表应用</th></tr>
+    <tr><td><strong>RLHF</strong></td><td>训练奖励模型，用PPO优化策略</td><td>偏好对（chosen/rejected）</td><td>ChatGPT、Claude</td></tr>
+    <tr><td><strong>DPO</strong></td><td>直接从偏好数据优化，无需奖励模型</td><td>偏好对（chosen/rejected）</td><td>Zephyr、Llama-3</td></tr>
+    <tr><td><strong>ORPO</strong></td><td>将SFT和偏好学习合并为一步</td><td>偏好对</td><td>简洁高效</td></tr>
+    <tr><td><strong>KTO</strong></td><td>仅需二元反馈（好/坏），无需配对数据</td><td>二元标签</td><td>适合真实用户反馈</td></tr>
+    <tr><td><strong>GRPO</strong></td><td>组内相对策略优化，无需价值网络</td><td>可验证答案</td><td>DeepSeek-R1</td></tr>
+  </table>
+
+  <h3>RLHF流程</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">文本</span></div>
+    <pre><code><span class="cmt"># RLHF（Reinforcement Learning from Human Feedback）三阶段</span>
+
+<span class="num">阶段1 - SFT</span>：用高质量对话数据做监督微调
+   → 得到 SFT Model
+
+<span class="num">阶段2 - 奖励模型训练</span>：让人类标注偏好对（回答A更好 vs 回答B更好）
+   → 训练 Reward Model，输出"哪个回答更好"的分数
+
+<span class="num">阶段3 - PPO强化学习</span>：用奖励模型的分数作为奖励信号
+   → 用PPO算法优化SFT模型，使其生成更高奖励的回答
+   → 加入KL散度惩罚，防止模型偏离太远</code></pre>
+  </div>
+
+  <h3>DPO：更简单的对齐方案</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># DPO（Direct Preference Optimization）</span>
+<span class="cmt"># 不需要训练奖励模型，直接从偏好数据优化</span>
+<span class="cmt"># pip install trl>=0.12.0</span>
+
+<span class="kw">from</span> trl <span class="kw">import</span> DPOTrainer, DPOConfig
+<span class="kw">from</span> transformers <span class="kw">import</span> AutoModelForCausalLM, AutoTokenizer
+
+<span class="cmt"># 加载SFT后的模型</span>
+model = AutoModelForCausalLM.<span class="fn">from_pretrained</span>(<span class="str">"your-sft-model"</span>)
+tokenizer = AutoTokenizer.<span class="fn">from_pretrained</span>(<span class="str">"your-sft-model"</span>)
+
+<span class="cmt"># 偏好数据格式：</span>
+<span class="cmt"># {"prompt": "问题", "chosen": "好的回答", "rejected": "不好的回答"}</span>
+
+dpo_config = DPOConfig(
+    output_dir=<span class="str">"./dpo_output"</span>,
+    num_train_epochs=<span class="num">1</span>,
+    per_device_train_batch_size=<span class="num">4</span>,
+    learning_rate=<span class="num">5e-7</span>,    <span class="cmt"># DPO学习率通常比SFT小得多</span>
+    beta=<span class="num">0.1</span>,               <span class="cmt"># KL惩罚系数</span>
+)
+
+trainer = DPOTrainer(
+    model=model,
+    args=dpo_config,
+    train_dataset=preference_dataset,
+    processing_class=tokenizer,
+)
+
+trainer.<span class="fn">train</span>()</code></pre>
+  </div>
+
+  <h3>ORPO与KTO</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># ORPO：SFT + 偏好学习一步到位</span>
+<span class="kw">from</span> trl <span class="kw">import</span> ORPOTrainer, ORPOConfig
+
+orpo_config = ORPOConfig(
+    output_dir=<span class="str">"./orpo_output"</span>,
+    num_train_epochs=<span class="num">3</span>,
+    learning_rate=<span class="num">1e-5</span>,
+    beta=<span class="num">0.1</span>,  <span class="cmt"># ORPO的lambda参数</span>
+)
+trainer = ORPOTrainer(model=model, args=orpo_config, train_dataset=dataset)
+trainer.<span class="fn">train</span>()
+
+<span class="cmt"># KTO：只需二元反馈（好/坏），不需要配对数据</span>
+<span class="kw">from</span> trl <span class="kw">import</span> KTOTrainer, KTOConfig
+
+<span class="cmt"># 数据格式：{"prompt": "问题", "completion": "回答", "label": true/false}</span>
+kto_config = KTOConfig(
+    output_dir=<span class="str">"./kto_output"</span>,
+    num_train_epochs=<span class="num">1</span>,
+    learning_rate=<span class="num">5e-7</span>,
+)
+trainer = KTOTrainer(model=model, args=kto_config, train_dataset=dataset)
+trainer.<span class="fn">train</span>()</code></pre>
+  </div>
+
+  <h3>GRPO：DeepSeek-R1的方法</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># GRPO（Group Relative Policy Optimization）</span>
+<span class="cmt"># DeepSeek-R1使用的对齐方法，不需要价值网络</span>
+<span class="cmt"># 核心思想：对同一个问题生成多个回答，组内相对排序</span>
+
+<span class="kw">from</span> trl <span class="kw">import</span> GRPOTrainer, GRPOConfig
+
+grpo_config = GRPOConfig(
+    output_dir=<span class="str">"./grpo_output"</span>,
+    num_train_epochs=<span class="num">1</span>,
+    learning_rate=<span class="num">1e-6</span>,
+    num_generations=<span class="num">8</span>,      <span class="cmt"># 每个prompt生成8个候选</span>
+    max_completion_length=<span class="num">512</span>,
+)
+
+<span class="cmt"># 需要一个奖励函数来打分</span>
+<span class="cmt"># 对于数学/代码等可验证任务，可以用正确性作为奖励</span>
+<span class="kw">def</span> <span class="fn">reward_func</span>(completions, **kwargs):
+    <span class="cmt"># 根据答案正确性返回奖励分数</span>
+    <span class="kw">return</span> [<span class="fn">compute_reward</span>(c) <span class="kw">for</span> c <span class="kw">in</span> completions]
+
+trainer = GRPOTrainer(
+    model=model,
+    args=grpo_config,
+    train_dataset=dataset,
+    reward_funcs=reward_func,
+)
+trainer.<span class="fn">train</span>()</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 选择建议：</strong>
+    <ul>
+      <li><strong>入门推荐DPO</strong>：最简单，不需要训练奖励模型，TRL库直接支持</li>
+      <li><strong>资源有限选ORPO</strong>：一步到位，不需要单独的SFT阶段</li>
+      <li><strong>真实用户反馈选KTO</strong>：不需要配对数据，只需要好/坏标签</li>
+      <li><strong>数学/代码任务选GRPO</strong>：DeepSeek-R1验证了其在推理任务上的强大效果</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-fine-tuning-s4d">
+  <h2>Unsloth：高效训练工具</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 Unsloth：</strong>2025-2026年最受欢迎的LLM微调加速工具之一。通过手写Triton内核和优化计算图，实现2倍训练速度提升和70%显存节省，同时保持与HuggingFace生态完全兼容。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># pip install unsloth</span>
+<span class="cmt"># Unsloth自动优化模型加载和LoRA训练</span>
+
+<span class="kw">from</span> unsloth <span class="kw">import</span> FastLanguageModel
+
+<span class="cmt"># 加载模型（自动应用优化）</span>
+model, tokenizer = FastLanguageModel.<span class="fn">from_pretrained</span>(
+    model_name=<span class="str">"unsloth/Meta-Llama-3.1-8B"</span>,
+    max_seq_length=<span class="num">2048</span>,
+    dtype=<span class="kw">None</span>,          <span class="cmt"># 自动检测最佳精度</span>
+    load_in_4bit=<span class="kw">True</span>,   <span class="cmt"># 4-bit量化</span>
+)
+
+<span class="cmt"># 添加LoRA（Unsloth自动优化）</span>
+model = FastLanguageModel.<span class="fn">get_peft_model</span>(
+    model,
+    r=<span class="num">16</span>,
+    target_modules=[<span class="str">"q_proj"</span>, <span class="str">"k_proj"</span>, <span class="str">"v_proj"</span>, <span class="str">"o_proj"</span>,
+                    <span class="str">"gate_proj"</span>, <span class="str">"up_proj"</span>, <span class="str">"down_proj"</span>],
+    lora_alpha=<span class="num">16</span>,
+    lora_dropout=<span class="num">0</span>,
+    use_gradient_checkpointing=<span class="str">"unsloth"</span>,  <span class="cmt"># Unsloth优化的梯度检查点</span>
+)
+
+<span class="cmt"># 使用标准的SFTTrainer训练</span>
+<span class="kw">from</span> trl <span class="kw">import</span> SFTTrainer
+<span class="kw">from</span> transformers <span class="kw">import</span> TrainingArguments
+
+trainer = SFTTrainer(
+    model=model,
+    processing_class=tokenizer,
+    train_dataset=dataset,
+    args=TrainingArguments(
+        output_dir=<span class="str">"./output"</span>,
+        per_device_train_batch_size=<span class="num">2</span>,
+        gradient_accumulation_steps=<span class="num">4</span>,
+        num_train_epochs=<span class="num">3</span>,
+        learning_rate=<span class="num">2e-4</span>,
+        fp16=<span class="kw">not</span> torch.cuda.is_bf16_supported(),
+        bf16=torch.cuda.is_bf16_supported(),
+    ),
+)
+
+trainer.<span class="fn">train</span>()</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 Unsloth优势：</strong>
+    <ul>
+      <li>训练速度：比标准HuggingFace快约2倍</li>
+      <li>显存节省：约减少70%显存占用</li>
+      <li>完全兼容：支持Llama、Mistral、Qwen、Gemma等主流模型</li>
+      <li>免费开源：社区版免费，Pro版提供更多模型支持</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-fine-tuning-s5">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：QLoRA微调 + 对齐训练</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>完成从SFT到对齐训练的完整流程。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 使用Unsloth + QLoRA微调一个7B模型</p>
+      <p>② 准备偏好数据（至少50对chosen/rejected）</p>
+      <p>③ 使用DPO进行对齐训练</p>
+      <p>④ 对比SFT和DPO后模型的回答质量</p>
+      <p>⑤ 保存最终模型</p>
+    </div>
+  </div>
+</div>
+
+
+
+</div>
+
+</section>

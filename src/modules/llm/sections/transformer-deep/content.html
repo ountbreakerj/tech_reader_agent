@@ -1,0 +1,223 @@
+<section class="llm-mod llm-m-transformer-deep" id="llm-transformer-deep"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>🏗️ 模块0：Transformer深度解析</h1>
+  <p>从Attention Is All You Need到现代LLM的基石</p>
+</div><div class="section" id="llm-transformer-deep-s1">
+    <h2>整体架构</h2>
+    
+    <p>Transformer（2017, Google）彻底取代了RNN/LSTM，成为现代NLP和LLM的统一架构。</p>
+
+    <h3>核心组件</h3>
+    <table>
+    <tr><th>组件</th><th>作用</th><th>位置</th></tr>
+    <tr><td>Input Embedding</td><td>将词索引转为稠密向量</td><td>输入层</td></tr>
+<tr><td>Positional Encoding</td><td>注入位置信息（正弦/余弦编码）</td><td>输入层</td></tr>
+<tr><td>Multi-Head Attention</td><td>多头自注意力，捕捉token间关系</td><td>核心</td></tr>
+<tr><td>Feed-Forward Network</td><td>两层全连接网络，增加非线性能力</td><td>核心</td></tr>
+<tr><td>Layer Normalization</td><td>稳定训练，加速收敛</td><td>每个子层后</td></tr>
+<tr><td>Residual Connection</td><td>跳跃连接，缓解梯度消失</td><td>每个子层</td></tr>
+<tr><td>Output Layer</td><td>Linear + Softmax，输出概率分布</td><td>输出层</td></tr>
+
+  </table>
+    <h3>架构变体</h3>
+    <table>
+    <tr><th>架构</th><th>结构</th><th>预训练任务</th><th>适用场景</th><th>代表模型</th></tr>
+    <tr><td>Encoder-only</td><td>双向Transformer Encoder</td><td>MLM + NSP</td><td>理解任务（分类/NER/QA）</td><td>BERT, RoBERTa</td></tr>
+<tr><td>Decoder-only</td><td>单向Transformer Decoder</td><td>自回归语言建模</td><td>生成任务（对话/续写）</td><td>GPT, LLaMA, Qwen</td></tr>
+<tr><td>Encoder-Decoder</td><td>完整Transformer</td><td>去噪自编码</td><td>序列到序列（翻译/摘要）</td><td>T5, BART</td></tr>
+
+  </table>
+  </div><div class="section" id="llm-transformer-deep-s2">
+    <h2>位置编码</h2>
+    
+    <p>Transformer没有循环结构，需要额外注入位置信息。<strong>正弦位置编码</strong>使用不同频率的正弦/余弦函数：</p>
+    <p><code>PE(pos, 2i) = sin(pos / 10000^(2i/d_model))</code></p>
+    <p><code>PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))</code></p>
+
+    <h3>现代位置编码变体</h3>
+    <table>
+    <tr><th>方法</th><th>原理</th><th>优势</th><th>代表模型</th></tr>
+    <tr><td>正弦编码</td><td>固定公式，不可训练</td><td>可外推到更长序列</td><td>原始Transformer</td></tr>
+<tr><td>可学习编码</td><td>可训练的位置嵌入</td><td>灵活，效果好</td><td>BERT, GPT-2</td></tr>
+<tr><td>RoPE</td><td>旋转位置编码，编码相对位置</td><td>天然支持相对位置，外推性好</td><td>LLaMA, Qwen</td></tr>
+<tr><td>ALiBi</td><td>线性偏置注意力</td><td>无需额外参数，外推性强</td><td>BLOOM</td></tr>
+
+  </table>
+  </div><div class="section" id="llm-transformer-deep-s3">
+    <h2>多头注意力</h2>
+    
+    <p>多头注意力是Transformer的核心创新。它让模型同时从多个角度（"头"）关注输入的不同部分。</p>
+
+    <h3>计算过程</h3>
+    <ol>
+        <li>输入X通过三个线性变换得到 Q（查询）、K（键）、V（值）</li>
+        <li>将Q、K、V分成n_heads个头（每个头维度 = d_model / n_heads）</li>
+        <li>每个头独立计算缩放点积注意力：<code>Attention(Q,K,V) = softmax(QK^T / √d_k) V</code></li>
+        <li>拼接所有头的输出，通过线性变换得到最终结果</li>
+    </ol>
+
+    <h3>PyTorch实现</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch
+import torch.nn as nn
+import math
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, n_heads):
+        super().__init__()
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_k = d_model // n_heads
+
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+        self.W_o = nn.Linear(d_model, d_model)
+
+    def forward(self, x, mask=None):
+        B, L, _ = x.shape
+        # 线性变换 + 分头
+        Q = self.W_q(x).view(B, L, self.n_heads, self.d_k).transpose(1, 2)
+        K = self.W_k(x).view(B, L, self.n_heads, self.d_k).transpose(1, 2)
+        V = self.W_v(x).view(B, L, self.n_heads, self.d_k).transpose(1, 2)
+        # 缩放点积注意力
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, float("-inf"))
+        attn = torch.softmax(scores, dim=-1)
+        out = torch.matmul(attn, V)
+        # 拼接 + 输出投影
+        out = out.transpose(1, 2).contiguous().view(B, L, self.d_model)
+        return self.W_o(out)</code></pre>
+  </div>
+    <div class="callout callout-key">
+    <p>🔑 <strong>多头的意义：</strong>不同的头可以关注不同类型的模式——有的头关注语法关系，有的关注语义相似度，有的关注位置关系。</p>
+  </div>
+  </div><div class="section" id="llm-transformer-deep-s4">
+    <h2>前馈网络与残差连接</h2>
+    
+    <h3>前馈网络（FFN）</h3>
+    <p>每个Transformer层都包含一个两层的前馈网络：</p>
+    <p><code>FFN(x) = max(0, xW₁ + b₁)W₂ + b₂</code></p>
+    <p>内部维度通常是d_model的4倍（如d_model=768, d_ff=3072）。</p>
+
+    <h3>残差连接 + Layer Normalization</h3>
+    <p>每个子层（Attention或FFN）都有残差连接和层归一化：</p>
+    <ul>
+        <li><strong>Post-LN</strong>（原始Transformer）：<code>LayerNorm(x + SubLayer(x))</code></li>
+        <li><strong>Pre-LN</strong>（现代模型常用）：<code>x + SubLayer(LayerNorm(x))</code></li>
+    </ul>
+    <div class="callout callout-tip">
+    <p>💡 Pre-LN比Post-LN训练更稳定，是现代LLM（GPT、LLaMA等）的标准选择。</p>
+  </div>
+  </div><div class="section" id="llm-transformer-deep-s5">
+    <h2>Encoder与Decoder块</h2>
+    
+    <h3>Encoder块</h3>
+    <ol>
+        <li>多头自注意力（Self-Attention）</li>
+        <li>残差连接 + LayerNorm</li>
+        <li>前馈网络（FFN）</li>
+        <li>残差连接 + LayerNorm</li>
+    </ol>
+
+    <h3>Decoder块</h3>
+    <ol>
+        <li><strong>掩码多头自注意力</strong>（Masked Self-Attention，防止看到未来token）</li>
+        <li>残差连接 + LayerNorm</li>
+        <li><strong>交叉注意力</strong>（Cross-Attention，Q来自Decoder，KV来自Encoder）</li>
+        <li>残差连接 + LayerNorm</li>
+        <li>前馈网络（FFN）</li>
+        <li>残差连接 + LayerNorm</li>
+    </ol>
+
+    <h3>因果掩码（Causal Mask）</h3>
+    <p>Decoder-only模型（GPT、LLaMA）使用因果掩码，确保每个位置只能看到之前的位置：</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch
+
+# 创建因果掩码（下三角矩阵）
+def create_causal_mask(seq_len):
+    mask = torch.tril(torch.ones(seq_len, seq_len))
+    return mask.unsqueeze(0).unsqueeze(0)
+
+# 4个token的因果掩码
+mask = create_causal_mask(4)
+print(mask)
+# tensor([[[1, 0, 0, 0],
+#           [1, 1, 0, 0],
+#           [1, 1, 1, 0],
+#           [1, 1, 1, 1]]])</code></pre>
+  </div>
+  </div><div class="section" id="llm-transformer-deep-s6">
+    <h2>实践：实现Transformer Encoder</h2>
+    
+    <p>从零实现一个简化版Transformer Encoder层，包含多头注意力、前馈网络、残差连接和LayerNorm。</p>
+
+    <h3>PyTorch实现</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch
+import torch.nn as nn
+import math
+
+class TransformerEncoderLayer(nn.Module):
+    def __init__(self, d_model=512, n_heads=8, d_ff=2048, dropout=0.1):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_ff),
+            nn.ReLU(),
+            nn.Linear(d_ff, d_model),
+        )
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x, mask=None):
+        # Self-Attention + Residual + LN (Pre-LN)
+        attn_out, _ = self.attn(self.norm1(x), self.norm1(x), self.norm1(x),
+                                attn_mask=mask)
+        x = x + self.drop(attn_out)
+        # FFN + Residual + LN
+        ffn_out = self.ffn(self.norm2(x))
+        x = x + self.drop(ffn_out)
+        return x
+
+# 使用示例
+layer = TransformerEncoderLayer()
+x = torch.randn(2, 10, 512)  # [batch=2, seq_len=10, d_model=512]
+out = layer(x)
+print(out.shape)  # torch.Size([2, 10, 512])</code></pre>
+  </div>
+    <h3>与PyTorch内置对比</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch.nn as nn
+
+# 使用PyTorch内置的Transformer Encoder
+encoder_layer = nn.TransformerEncoderLayer(
+    d_model=512, nhead=8, dim_feedforward=2048,
+    dropout=0.1, batch_first=True, norm_first=True,  # Pre-LN
+)
+encoder = nn.TransformerEncoder(encoder_layer, num_layers=6)
+
+x = torch.randn(2, 10, 512)
+out = encoder(x)
+print(out.shape)  # torch.Size([2, 10, 512])</code></pre>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 实际开发中建议使用 <code>nn.TransformerEncoderLayer</code> 等内置模块，它们经过了充分的性能优化。从零实现主要用于学习理解。</p>
+  </div>
+  </div>
+</div></section>

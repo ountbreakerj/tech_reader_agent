@@ -1,0 +1,86 @@
+<div class="module" id="mod-harness" hidden>
+<section id="sec-h-lec-00" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <span aria-current="page">Harness 工程</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-00">Harness 工程</h1>
+    <p>模型能力强，不等于执行可靠。这门课拆解让 agent 真正可靠的那套工程基础设施——从失败诊断到图工程，14 讲 + 3 个产品化案例深析。</p>
+  </header>
+  <nav class="home-cards harness-entries" aria-label="产品化案例入口">
+    <a class="home-card" href="#/harness?section=sec-h-lec-15">
+      <h2>Claude Code</h2>
+      <p class="sub">分层记忆 · 五层压缩 · 四种扩展</p>
+      <p class="desc">Anthropic 把 harness 核心机制做成了完整的产品化实现。从作用域分层的记忆体系到 PostToolUse 钩子强制检查，拆解每个设计背后的 harness 原理。</p>
+      <div class="harness-meta">第 15 讲 · Claude Code Harness 拆解</div>
+      <div class="go">进入深析 →</div>
+    </a>
+    <a class="home-card" href="#/harness?section=sec-h-lec-16">
+      <h2>Codex</h2>
+      <p class="sub">AGENTS.md 目录页 · 开源 harness 平台</p>
+      <p class="desc">OpenAI 把驱动 Codex 的整个 harness 以 Apache-2.0 开源。AGENTS.md 当目录页写、只写不变量不微管实现、保留推理让分数翻三倍——harness 哲学与硬数据。</p>
+      <div class="harness-meta">第 16 讲 · Codex Harness 拆解</div>
+      <div class="go">进入深析 →</div>
+    </a>
+    <a class="home-card" href="#/dsh">
+      <h2>DSH Harness</h2>
+      <p class="sub">插件化架构 · 能力组合 · 可扩展运行时</p>
+      <p class="desc">DSH 把 harness 核心能力拆成可独立加载的插件。工具注册、上下文注入、任务路由和插件间通信——模块化 harness 的完整设计。</p>
+      <div class="harness-meta">深度解析 · DSH Harness 架构</div>
+      <div class="go">进入深析 →</div>
+    </a>
+    <a class="home-card" href="#/codex-harness">
+      <h2>Codex Harness 源码</h2>
+      <p class="sub">开源平台 · 并发沙箱 · 完整实现</p>
+      <p class="desc">OpenAI 以 Apache-2.0 开源的完整 harness 平台。从沙箱隔离到并发任务、从指令入口到 diff 审查，生产级 harness 的源码级拆解。</p>
+      <div class="harness-meta">深度解析 · Codex Harness 源码</div>
+      <div class="go">进入深析 →</div>
+    </a>
+  </nav>
+  <section class="harness-section">
+    <h2>课程结构</h2>
+    <p>14 讲构成完整的 harness 工程知识体系，从为什么失败到如何系统性构建可靠的 agent 运行时。</p>
+    <nav class="home-cards harness-module-grid" aria-label="课程模块">
+      <a class="home-card" href="#/harness?section=sec-h-lec-01">
+        <div class="harness-module-num">第 01–03 讲</div>
+        <h3>基础：为什么会失败</h3>
+        <p>能力鸿沟、五子系统模型、仓库即事实来源——harness 工程的认知起点。</p>
+      </a>
+      <a class="home-card" href="#/harness?section=sec-h-lec-04">
+        <div class="harness-module-num">第 04–06 讲</div>
+        <h3>指令、状态与初始化</h3>
+        <p>拆分指令文件、跨会话上下文连续、初始化必须是独立阶段。</p>
+      </a>
+      <a class="home-card" href="#/harness?section=sec-h-lec-07">
+        <div class="harness-module-num">第 07–09 讲</div>
+        <h3>任务边界与功能原语</h3>
+        <p>WIP=1 原则、功能清单作为 harness 原语、防止提前宣告完成。</p>
+      </a>
+      <a class="home-card" href="#/harness?section=sec-h-lec-10">
+        <div class="harness-module-num">第 10–12 讲</div>
+        <h3>验证与可观测性</h3>
+        <p>跑通完整流程才算验证、可观测性属于 harness、留下干净状态。</p>
+      </a>
+      <a class="home-card" href="#/harness?section=sec-h-lec-13">
+        <div class="harness-module-num">第 13–14 讲</div>
+        <h3>高级架构</h3>
+        <p>Loop 工程中的三层终止检查，Graph 工程实现并发与条件分支。</p>
+      </a>
+    </nav>
+  </section>
+  <div class="harness-section">
+    <h2>Harness 到底管什么</h2>
+    <p>假设你说"帮我修好这个失败的测试"。模型可以决定先读哪个文件，但读文件、运行测试、收集报错、限制写入范围，都需要程序来完成。这套围着模型工作的程序，就是 harness。</p>
+    <ol class="harness-flow" aria-label="一次任务的基本循环">
+      <li><b>准备</b><span>任务、规则、历史</span></li>
+      <li><b>判断</b><span>模型提出下一步</span></li>
+      <li><b>执行</b><span>工具与权限检查</span></li>
+      <li><b>反馈</b><span>把结果带回下一步</span></li>
+    </ol>
+    <p>模型不会因为"说了要运行测试"，测试就真的跑起来。只有工具返回了结果，下一次判断才有新的依据。</p>
+  </div>
+  <div class="harness-back">
+    <a href="#/harness?section=sec-h-lec-01">开始第一讲 →</a>
+  </div>
+</section>

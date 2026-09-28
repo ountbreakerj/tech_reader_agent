@@ -1,0 +1,149 @@
+<section class="llm-mod llm-m-agent-frameworks" id="llm-agent-frameworks"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>⚡ 模块0：Agent框架实战</h1>
+  <p>从概念到可运行的智能体</p>
+</div><div class="section" id="llm-agent-frameworks-s1">
+    <h2>LangChain Agent入门</h2>
+    
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from langchain_openai import ChatOpenAI
+from langchain.agents import create_agent
+from langchain_core.tools import tool
+
+@tool
+def search(query: str) -&gt; str:
+    """搜索互联网获取信息"""
+    return f"搜索结果: {query}的相关信息..."
+
+@tool
+def calculate(expression: str) -&gt; str:
+    """计算数学表达式"""
+    return str(eval(expression))
+
+# LangChain v1 推荐入口
+agent = create_agent(
+    model=ChatOpenAI(model="gpt-5.5", temperature=0),
+    tools=[search, calculate],
+    system_prompt="你是一个有用的助手，可以使用工具完成任务。",
+)
+
+result = agent.invoke({
+    "messages": [{"role": "user", "content": "北京的人口乘以2是多少?"}]
+})
+print(result["messages"][-1].content)</code></pre>
+  </div>
+  </div><div class="section" id="llm-agent-frameworks-s2">
+    <h2>LangGraph构建Agent</h2>
+    
+    <p>LangGraph使用<strong>有向图</strong>定义Agent的工作流，支持条件分支、循环、并行等复杂控制流。</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from langgraph.graph import StateGraph, MessagesState, START, END
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(model="gpt-5.5")
+
+# 定义节点
+def agent_node(state: MessagesState):
+    response = llm.invoke(state["messages"])
+    return {"messages": [response]}
+
+def tool_node(state: MessagesState):
+    # 执行工具调用
+    ...
+
+# 构建图
+graph = StateGraph(MessagesState)
+graph.add_node("agent", agent_node)
+graph.add_node("tools", tool_node)
+graph.add_edge(START, "agent")
+graph.add_conditional_edges("agent", should_use_tools,
+    {"tools": "tools", "end": END})
+graph.add_edge("tools", "agent")
+
+app = graph.compile()</code></pre>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 LangGraph的优势：状态持久化、人类介入(HITL)、检查点恢复，适合生产级Agent系统。</p>
+  </div>
+  </div><div class="section" id="llm-agent-frameworks-s3">
+    <h2>多Agent协作<sup class="tp-mark" data-tp="multi-agent" role="button" tabindex="0" title="查看技术点详情" aria-label="查看技术点详情">?</sup></h2>
+    
+    <table>
+    <tr><th>架构</th><th>说明</th><th>适用场景</th></tr>
+    <tr><td>主从式</td><td>一个主Agent分配任务给多个子Agent</td><td>任务明确、可分解</td></tr>
+<tr><td>对等式</td><td>多个Agent平等协商、互相讨论</td><td>需要多角度分析</td></tr>
+<tr><td>层级式</td><td>多层管理结构，逐级委派</td><td>大型复杂系统</td></tr>
+
+  </table>
+    <h3>CrewAI示例</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from crewai import Agent, Task, Crew
+
+# 定义Agent角色
+researcher = Agent(
+    role="研究员",
+    goal="搜索并分析最新技术资料",
+    backstory="你是一位资深AI研究员",
+    llm="gpt-5.5",
+)
+writer = Agent(
+    role="技术作家",
+    goal="将研究成果写成通俗易懂的文章",
+    backstory="你是一位技术博客作者",
+    llm="gpt-5.5",
+)
+
+# 定义任务
+research_task = Task(description="研究RAG最新进展", agent=researcher)
+write_task = Task(description="撰写技术博客", agent=writer)
+
+# 执行
+crew = Crew(agents=[researcher, writer],
+            tasks=[research_task, write_task])
+result = crew.kickoff()</code></pre>
+  </div>
+  </div><div class="section" id="llm-agent-frameworks-s4">
+    <h2>评估与调试</h2>
+    
+    <table>
+    <tr><th>问题</th><th>表现</th><th>解决方案</th></tr>
+    <tr><td>无限循环</td><td>Agent反复执行相同动作</td><td>设置最大步数限制、循环检测</td></tr>
+<tr><td>工具选择错误</td><td>调用了不合适的工具</td><td>改进工具描述、添加示例</td></tr>
+<tr><td>幻觉</td><td>编造不存在的信息</td><td>RAG增强、事实校验</td></tr>
+<tr><td>效率低</td><td>步骤过多、耗时长</td><td>优化Prompt、缓存中间结果</td></tr>
+
+  </table>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code># LangChain v1 Agent 调试：限制图步数并观察每次状态更新
+config = {"recursion_limit": 10}
+inputs = {"messages": [{"role": "user", "content": "复杂任务"}]}
+
+for update in agent.stream(
+    inputs,
+    config=config,
+    stream_mode="updates",
+):
+    print(update)  # 节点名、工具结果与新增消息
+
+# 完整结果的 messages 保留工具调用与 ToolMessage，可用于轨迹分析
+result = agent.invoke(inputs, config=config)
+for message in result["messages"]:
+    print(message.type, message.content)</code></pre>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 Agent开发的最佳实践：先用简单任务验证单步能力，再逐步增加复杂度。始终设置超时和最大步数限制。</p>
+  </div>
+  </div>
+</div></section>

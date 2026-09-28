@@ -1,0 +1,832 @@
+<section class="llm-mod llm-m-happy-source llm-happy-transformer" id="llm-happy-transformer"><div class="module-wrapper"><div class="llm-hero" style="--hero-a:#0f766e;--hero-b:#2563eb;"><h1>🔬 Happy-LLM：Transformer 架构原文融合</h1><p>从注意力机制、位置编码到完整 Encoder-Decoder，实现级拆解</p><div class="source-meta">来源：Datawhale China · Happy-LLM（本地离线融合）</div></div><div class="callout callout-info"><p>📌 本节保留 Happy-LLM 原教程的概念、公式、代码与图示，并按 Tech Reader 的单文件离线规范转换。外部图片已复制并登记为本地资源。</p></div><div class="happy-source-file"><div class="source-file-label">来源文件 · docs/chapter2/第二章 Transformer架构.md</div><div class="section" id="llm-happy-transformer-src1-s1"><h2>2.1 注意力机制</h2>
+<h3>2.1.1 什么是注意力机制</h3>
+<p>随着 NLP 从统计机器学习向深度学习迈进，作为 NLP 核心问题的文本表示方法也逐渐从统计学习向深度学习迈进。正如我们在第一章所介绍的，文本表示从最初的通过统计学习模型进行计算的向量空间模型、语言模型，通过 Word2Vec 的单层神经网络进入到通过神经网络学习文本表示的时代。但是，从 计算机视觉（Computer Vision，CV）为起源发展起来的神经网络，其核心架构有三种：</p>
+<ul>
+<li>前馈神经网络（Feedforward Neural Network，FNN），即数据从输入层单向流动到输出层，无循环结构，各层之间通过全连接或特定方式传递信息，其中多层感知机（Multi-Layer Perceptron，MLP）是最常见的形式，每一层的神经元都和上下两层的每一个神经元完全连接，如图2.1所示:</li>
+</ul>
+<div align="center">
+  <img src="@asset/happy-llm/docs/images/2-figures/1-0-c026c1fdec.png" alt="图片描述" width="90%"/>
+  <p>图2.1 全连接神经网络</p>
+</div>
+<ul>
+<li>卷积神经网络（Convolutional Neural Network，CNN），即训练参数量远小于全连接神经网络的卷积层来进行特征提取和学习，如图2.2所示:</li>
+</ul>
+<div align="center">
+  <img src="@asset/happy-llm/docs/images/2-figures/1-1-5b5954544c.png" alt="图片描述" width="90%"/>
+  <p>图2.2 卷积神经网络</p>
+</div>
+<ul>
+<li>循环神经网络（Recurrent Neural Network，RNN），能够使用历史信息作为输入、包含环和自重复的网络，如图2.3所示:</li>
+</ul>
+<div align="center">
+  <img src="@asset/happy-llm/docs/images/2-figures/1-2-32266f9e3e.png" alt="图片描述" width="90%"/>
+  <p>图2.3 循环神经网络</p>
+</div>
+<p>由于 NLP 任务所需要处理的文本往往是序列，因此专用于处理序列、时序数据的 RNN 往往能够在 NLP 任务上取得最优的效果。事实上，在注意力机制横空出世之前，RNN 以及 RNN 的衍生架构 LSTM 是 NLP 领域当之无愧的霸主。例如，我们在第一章讲到过的开创了预训练思想的文本表示模型 ELMo，就是使用的双向 LSTM 作为网络架构。</p>
+<p>但 RNN 及 LSTM 虽然具有捕捉时序信息、适合序列生成的优点，却有两个难以弥补的缺陷：</p>
+<ol>
+<li>序列依序计算的模式能够很好地模拟时序信息，但限制了计算机并行计算的能力。由于序列需要依次输入、依序计算，图形处理器（Graphics Processing Unit，GPU）并行计算的能力受到了极大限制，导致 RNN 为基础架构的模型虽然参数量不算特别大，但计算时间成本却很高；</li>
+</ol>
+<ol>
+<li>RNN 难以捕捉长序列的相关关系。在 RNN 架构中，距离越远的输入之间的关系就越难被捕捉，同时 RNN 需要将整个序列读入内存依次计算，也限制了序列的长度。虽然 LSTM 中通过门机制对此进行了一定优化，但对于较远距离相关关系的捕捉，RNN 依旧是不如人意的。</li>
+</ol>
+<p>针对这样的问题，Vaswani 等学者参考了在 CV 领域被提出、被经常融入到 RNN 中使用的注意力机制（Attention）（注意，虽然注意力机制在 NLP 被发扬光大，但其确实是在 CV 领域被提出的），创新性地搭建了完全由注意力机制构成的神经网络——Transformer，也就是大语言模型（Large Language Model，LLM）的鼻祖及核心架构，从而让注意力机制一跃成为深度学习最核心的架构之一。</p>
+<p>那么，究竟什么是注意力机制？</p>
+<p>注意力机制最先源于计算机视觉领域，其核心思想为当我们关注一张图片，我们往往无需看清楚全部内容而仅将注意力集中在重点部分即可。而在自然语言处理领域，我们往往也可以通过将重点注意力集中在一个或几个 token，从而取得更高效高质的计算效果。</p>
+<p>注意力机制有三个核心变量：<strong>Query</strong>（查询值）、<strong>Key</strong>（键值）和 <strong>Value</strong>（真值）。我们可以通过一个案例来理解每一个变量所代表的含义。例如，当我们有一篇新闻报道，我们想要找到这个报道的时间，那么，我们的 Query 可以是类似于“时间”、“日期”一类的向量（为了便于理解，此处使用文本来表示，但其实际是稠密的向量），Key 和 Value 会是整个文本。通过对 Query 和 Key 进行运算我们可以得到一个权重，这个权重其实反映了从 Query 出发，对文本每一个 token 应该分布的注意力相对大小。通过把权重和 Value 进行运算，得到的最后结果就是从 Query 出发计算整个文本注意力得到的结果。</p>
+<p>​具体而言，注意力机制的特点是通过计算 <strong>Query</strong> 与<strong>Key</strong>的相关性为真值加权求和，从而拟合序列中每个词同其他词的相关关系。</p>
+<h3>2.1.2 深入理解注意力机制</h3>
+<p>刚刚我们说到，注意力机制有三个核心变量：查询值 Query，键值 Key 和 真值 Value。接下来我们以字典为例，逐步分析注意力机制的计算公式是如何得到的，从而帮助读者深入理解注意力机制。首先，我们有这样一个字典：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">json</span></div><pre><code>{
+    &quot;apple&quot;:10,
+    &quot;banana&quot;:5,
+    &quot;chair&quot;:2
+}</code></pre></div>
+<p>此时，字典的键就是注意力机制中的键值 Key，而字典的值就是真值 Value。字典支持我们进行精确的字符串匹配，例如，如果我们想要查找的值也就是查询值 Query 为“apple”，那么我们可以直接通过将 Query 与 Key 做匹配来得到对应的 Value。</p>
+<p>但是，如果我们想要匹配的 Query 是一个包含多个 Key 的概念呢？例如，我们想要查找“fruit”，此时，我们应该将 apple 和 banana 都匹配到，但不能匹配到 chair。因此，我们往往会选择将 Key 对应的 Value 进行组合得到最终的 Value。</p>
+<p>例如，当我们的 Query 为“fruit”，我们可以分别给三个 Key 赋予如下的权重：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">json</span></div><pre><code>{
+    &quot;apple&quot;:0.6,
+    &quot;banana&quot;:0.4,
+    &quot;chair&quot;:0
+}</code></pre></div>
+<p>那么，我们最终查询到的值应该是：</p>
+<div class="math-display" role="math" aria-label="数学公式">value = 0.6 * 10 + 0.4 * 5 + 0 * 2 = 8</div>
+<p>给不同 Key 所赋予的不同权重，就是我们所说的注意力分数，也就是为了查询到 Query，我们应该赋予给每一个 Key 多少注意力。但是，如何针对每一个 Query，计算出对应的注意力分数呢？从直观上讲，我们可以认为 Key 与 Query 相关性越高，则其所应该赋予的注意力权重就越大。但是，我们如何能够找到一个合理的、能够计算出正确的注意力分数的方法呢？</p>
+<p>在第一章中，我们有提到词向量的概念。通过合理的训练拟合，词向量能够表征语义信息，从而让语义相近的词在向量空间中距离更近，语义较远的词在向量空间中距离更远。我们往往用欧式距离来衡量词向量的相似性，但我们同样也可以用点积来进行度量：</p>
+<div class="math-display" role="math" aria-label="数学公式">v·w = ∑<sub>i</sub>v<sub>i</sub>w<sub>i</sub></div>
+<p>根据词向量的定义，语义相似的两个词对应的词向量的点积应该大于0，而语义不相似的词向量点积应该小于0。</p>
+<p>那么，我们就可以用点积来计算词之间的相似度。假设我们的 Query 为“fruit”，对应的词向量为 <span class="math" role="math" aria-label="数学公式">q</span> ；我们的 Key 对应的词向量为 <span class="math" role="math" aria-label="数学公式">k = [v<sub>apple</sub> v<sub>banana</sub> v<sub>chair</sub>]</span> ,则我们可以计算 Query 和每一个键的相似程度：</p>
+<div class="math-display" role="math" aria-label="数学公式">x = qK<sup>T</sup></div>
+<p>此处的 K 即为将所有 Key 对应的词向量堆叠形成的矩阵。基于矩阵乘法的定义，x 即为 q 与每一个 k 值的点积。现在我们得到的 x 即反映了 Query 和每一个 Key 的相似程度，我们再通过一个 Softmax 层将其转化为和为 1 的权重：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext">softmax</span>(x)<sub>i</sub> = <span class="mfrac"><span class="mnum">e<sup>xi</sup></span><span class="mden">∑<sub>j</sub>e<sup>x<sub>j</sub></sup></span></span></div>
+<p>这样，得到的向量就能够反映 Query 和每一个 Key 的相似程度，同时又相加权重为 1，也就是我们的注意力分数了。最后，我们再将得到的注意力分数和值向量做对应乘积即可。根据上述过程，我们就可以得到注意力机制计算的基本公式：</p>
+<div class="math-display" role="math" aria-label="数学公式">attention(Q,K,V) = softmax(qK<sup>T</sup>)v</div>
+<p>不过，此时的值还是一个标量，同时，我们此次只查询了一个 Query。我们可以将值转化为维度为 <span class="math" role="math" aria-label="数学公式">d<sub>v</sub></span> 的向量，同时一次性查询多个 Query，同样将多个 Query 对应的词向量堆叠在一起形成矩阵 Q，得到公式：</p>
+<div class="math-display" role="math" aria-label="数学公式">attention(Q,K,V) = softmax(QK<sup>T</sup>)V</div>
+<p>目前，我们离标准的注意力机制公式还差最后一步。在上一个公式中，如果 Q 和 K 对应的维度 <span class="math" role="math" aria-label="数学公式">d<sub>k</sub></span> 比较大，softmax 放缩时就非常容易受影响，使不同值之间的差异较大，从而影响梯度的稳定性。因此，我们要将 Q 和 K 乘积的结果做一个放缩：</p>
+<div class="math-display" role="math" aria-label="数学公式">attention(Q,K,V) = softmax(<span class="mfrac"><span class="mnum">QK<sup>T</sup></span><span class="mden"><span class="msqrt">√<span class="msqrt-arg">d<sub>k</sub></span></span></span></span>)V</div>
+<p>这也就是注意力机制的核心计算公式了。</p>
+<h3>2.1.3 注意力机制的实现</h3>
+<p>基于上文，我们可以很简单地使用 Pytorch 来实现注意力机制的代码：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>&#39;&#39;&#39;注意力计算函数&#39;&#39;&#39;
+def attention(query, key, value, dropout=None):
+    &#39;&#39;&#39;
+    args:
+    query: 查询值矩阵
+    key: 键值矩阵
+    value: 真值矩阵
+    &#39;&#39;&#39;
+    # 获取键向量的维度，键向量的维度和值向量的维度相同
+    d_k = query.size(-1) 
+    # 计算Q与K的内积并除以根号dk
+    # transpose——相当于转置
+    scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
+    # Softmax
+    p_attn = scores.softmax(dim=-1)
+    if dropout is not None:
+        p_attn = dropout(p_attn)
+        # 采样
+     # 根据计算结果对value进行加权求和
+    return torch.matmul(p_attn, value), p_attn
+</code></pre></div>
+<p>注意，在上文代码中，我们假设输入的 q、k、v 是已经经过转化的词向量矩阵，也就是公式中的 Q、K、V。我们仅需要通过上述几行代码，就可以实现核心的注意力机制计算。</p>
+<h3>2.1.4 自注意力</h3>
+<p>根据上文的分析，我们可以发现，注意力机制的本质是对两段序列的元素依次进行相似度计算，寻找出一个序列的每个元素对另一个序列的每个元素的相关度，然后基于相关度进行加权，即分配注意力。而这两段序列即是我们计算过程中 Q、K、V 的来源。</p>
+<p>但是，在我们的实际应用中，我们往往只需要计算 Query 和 Key 之间的注意力结果，很少存在额外的真值 Value。也就是说，我们其实只需要拟合两个文本序列。​在经典的 注意力机制中，Q 往往来自于一个序列，K 与 V 来自于另一个序列，都通过参数矩阵计算得到，从而可以拟合这两个序列之间的关系。例如在 Transformer 的 Decoder 结构中，Q 来自于 Decoder 的输入，K 与 V 来自于 Encoder 的输出，从而拟合了编码信息与历史信息之间的关系，便于综合这两种信息实现未来的预测。</p>
+<p>​但在 Transformer 的 Encoder 结构中，使用的是 注意力机制的变种 —— 自注意力（self-attention，自注意力）机制。所谓自注意力，即是计算本身序列中每个元素对其他元素的注意力分布，即在计算过程中，Q、K、V 都由同一个输入通过不同的参数矩阵计算得到。在 Encoder 中，Q、K、V 分别是输入对参数矩阵 <span class="math" role="math" aria-label="数学公式">W<sub>q</sub>、W<sub>k</sub>、W<sub>v</sub></span> 做积得到，从而拟合输入语句中每一个 token 对其他所有 token 的关系。</p>
+<p>通过自注意力机制，我们可以找到一段文本中每一个 token 与其他所有 token 的相关关系大小，从而建模文本之间的依赖关系。​在代码中的实现，self-attention 机制其实是通过给 Q、K、V 的输入传入同一个参数实现的：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># attention 为上文定义的注意力计算函数
+attention(x, x, x)</code></pre></div>
+<h3>2.1.5 掩码自注意力</h3>
+<p>掩码自注意力，即 Mask Self-Attention，是指使用注意力掩码的自注意力机制。掩码的作用是遮蔽一些特定位置的 token，模型在学习的过程中，会忽略掉被遮蔽的 token。</p>
+<p>使用注意力掩码的核心动机是让模型只能使用历史信息进行预测而不能看到未来信息。使用注意力机制的 Transformer 模型也是通过类似于 n-gram 的语言模型任务来学习的，也就是对一个文本序列，不断根据之前的 token 来预测下一个 token，直到将整个文本序列补全。</p>
+<p>例如，如果待学习的文本序列是 【BOS】I like you【EOS】，那么，模型会按如下顺序进行预测和学习：</p>
+<p>Step 1：输入 【BOS】，输出 I Step 2：输入 【BOS】I，输出 like Step 3：输入 【BOS】I like，输出 you Step 4：输入 【BOS】I like you，输出 【EOS】</p>
+<p>理论上来说，只要学习的语料足够多，通过上述的过程，模型可以学会任意一种文本序列的建模方式，也就是可以对任意的文本进行补全。</p>
+<p>但是，我们可以发现，上述过程是一个串行的过程，也就是需要先完成 Step 1，才能做 Step 2，接下来逐步完成整个序列的补全。我们在一开始就说过，Transformer 相对于 RNN 的核心优势之一即在于其可以并行计算，具有更高的计算效率。如果对于每一个训练语料，模型都需要串行完成上述过程才能完成学习，那么很明显没有做到并行计算，计算效率很低。</p>
+<p>针对这个问题，Transformer 就提出了掩码自注意力的方法。掩码自注意力会生成一串掩码，来遮蔽未来信息。例如，我们待学习的文本序列仍然是 【BOS】I like you【EOS】，我们使用的注意力掩码是【MASK】，那么模型的输入为：</p>
+    <BOS> 【MASK】【MASK】【MASK】【MASK】
+    <BOS>    I   【MASK】 【MASK】【MASK】
+    <BOS>    I     like  【MASK】【MASK】
+    <BOS>    I     like    you  【MASK】
+    <BOS>    I     like    you   </EOS>
+<p>在每一行输入中，模型仍然是只看到前面的 token，预测下一个 token。但是注意，上述输入不再是串行的过程，而可以一起并行地输入到模型中，模型只需要每一个样本根据未被遮蔽的 token 来预测下一个 token 即可，从而实现了并行的语言模型。</p>
+<p>观察上述的掩码，我们可以发现其实则是一个和文本序列等长的上三角矩阵。我们可以简单地通过创建一个和输入同等长度的上三角矩阵作为注意力掩码，再使用掩码来遮蔽掉输入即可。也就是说，当输入维度为 （batch_size, seq_len, hidden_size）时，我们的 Mask 矩阵维度一般为 (1, seq_len, seq_len)（通过广播实现同一个 batch 中不同样本的计算）。</p>
+<p>在具体实现中，我们通过以下代码生成 Mask 矩阵：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 创建一个上三角矩阵，用于遮蔽未来信息。
+# 先通过 full 函数创建一个 1 * seq_len * seq_len 的矩阵
+mask = torch.full((1, args.max_seq_len, args.max_seq_len), float(&quot;-inf&quot;))
+# triu 函数的功能是创建一个上三角矩阵
+mask = torch.triu(mask, diagonal=1)</code></pre></div>
+<p>生成的 Mask 矩阵会是一个上三角矩阵，上三角位置的元素均为 -inf，其他位置的元素置为0。</p>
+<p>在注意力计算时，我们会将计算得到的注意力分数与这个掩码做和，再进行 Softmax 操作：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 此处的 scores 为计算得到的注意力分数，mask 为上文生成的掩码矩阵
+scores = scores + mask[:, :seqlen, :seqlen]
+scores = F.softmax(scores.float(), dim=-1).type_as(xq)</code></pre></div>
+<p>通过做求和，上三角区域（也就是应该被遮蔽的 token 对应的位置）的注意力分数结果都变成了 <code>-inf</code>，而下三角区域的分数不变。再做 Softmax 操作，<code>-inf</code> 的值在经过 Softmax 之后会被置为 0，从而忽略了上三角区域计算的注意力分数，从而实现了注意力遮蔽。</p>
+<h3>2.1.6 多头注意力</h3>
+<p>注意力机制可以实现并行化与长期依赖关系拟合，但一次注意力计算只能拟合一种相关关系，单一的注意力机制很难全面拟合语句序列里的相关关系。因此 Transformer 使用了多头注意力机制（Multi-Head Attention），即同时对一个语料进行多次注意力计算，每次注意力计算都能拟合不同的关系，将最后的多次结果拼接起来作为最后的输出，即可更全面深入地拟合语言信息。</p>
+<p>在原论文中，作者也通过实验证实，多头注意力计算中，每个不同的注意力头能够拟合语句中的不同信息，如图2.4所示：</p>
+<div align="center">
+  <img src="@asset/happy-llm/docs/images/2-figures/1-3-d9d25dcfe3.jpg" alt="图片描述" width="90%"/>
+  <p>图2.4 多头注意力机制</p>
+</div>
+<p>​上层与下层分别是两个注意力头对同一段语句序列进行自注意力计算的结果，可以看到，对于不同的注意力头，能够拟合不同层次的相关信息。通过多个注意力头同时计算，能够更全面地拟合语句关系。</p>
+<p>事实上，所谓的多头注意力机制其实就是将原始的输入序列进行多组的自注意力处理；然后再将每一组得到的自注意力结果拼接起来，再通过一个线性层进行处理，得到最终的输出。我们用公式可以表示为：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext">MultiHead</span>(Q, K, V) = <span class="mtext">Concat</span>(<span class="mtext">head<sub>1</sub></span>, ..., <span class="mtext">head<sub>h</sub></span>)W<sup>O</sup> <br> <span class="mtext">where</span><span class="math-space"> </span><span class="mtext">head<sub>i</sub></span> = <span class="mtext">Attention</span>(QW<sup>Q</sup><sub>i</sub>, KW<sup>K</sup><sub>i</sub>, VW<sup>V</sup><sub>i</sub>)</div>
+<p>其最直观的代码实现并不复杂，即 n 个头就有 n 组3个参数矩阵，每一组进行同样的注意力计算，但由于是不同的参数矩阵从而通过反向传播实现了不同的注意力结果，然后将 n 个结果拼接起来输出即可。</p>
+<p>但上述实现时空复杂度均较高，我们可以通过矩阵运算巧妙地实现并行的多头计算，其核心逻辑在于使用三个组合矩阵来代替了n个参数矩阵的组合，也就是矩阵内积再拼接其实等同于拼接矩阵再内积。具体实现可以参考下列代码：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import torch.nn as nn
+import torch
+
+&#39;&#39;&#39;多头自注意力计算模块&#39;&#39;&#39;
+class MultiHeadAttention(nn.Module):
+
+    def __init__(self, args: ModelArgs, is_causal=False):
+        # 构造函数
+        # args: 配置对象
+        super().__init__()
+        # 隐藏层维度必须是头数的整数倍，因为后面我们会将输入拆成头数个矩阵
+        assert args.dim % args.n_heads == 0
+        # 每个头的维度，等于模型维度除以头的总数。
+        self.head_dim = args.dim // args.n_heads
+        self.n_heads = args.n_heads
+
+        # Wq, Wk, Wv 参数矩阵，每个参数矩阵为 n_embd x dim
+        # 这里通过三个组合矩阵来代替了n个参数矩阵的组合，其逻辑在于矩阵内积再拼接其实等同于拼接矩阵再内积，
+        # 不理解的读者可以自行模拟一下，每一个线性层其实相当于n个参数矩阵的拼接
+        self.wq = nn.Linear(args.n_embd, self.n_heads * self.head_dim, bias=False)
+        self.wk = nn.Linear(args.n_embd, self.n_heads * self.head_dim, bias=False)
+        self.wv = nn.Linear(args.n_embd, self.n_heads * self.head_dim, bias=False)
+        # 输出权重矩阵，维度为 dim x dim（head_dim = dim / n_heads）
+        self.wo = nn.Linear(self.n_heads * self.head_dim, args.dim, bias=False)
+        # 注意力的 dropout
+        self.attn_dropout = nn.Dropout(args.dropout)
+        # 残差连接的 dropout
+        self.resid_dropout = nn.Dropout(args.dropout)
+        self.is_causal = is_causal
+
+        # 创建一个上三角矩阵，用于遮蔽未来信息
+        # 注意，因为是多头注意力，Mask 矩阵比之前我们定义的多一个维度
+        if is_causal:
+            mask = torch.full((1, 1, args.max_seq_len, args.max_seq_len), float(&quot;-inf&quot;))
+            mask = torch.triu(mask, diagonal=1)
+            # 注册为模型的缓冲区
+            self.register_buffer(&quot;mask&quot;, mask)
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+
+        # 获取批次大小和序列长度，[batch_size, seq_len, dim]
+        bsz, seqlen, _ = q.shape
+
+        # 计算查询（Q）、键（K）、值（V）,输入通过参数矩阵层，维度为 (B, T, n_embed) x (n_embed, dim) -&gt; (B, T, dim)
+        xq, xk, xv = self.wq(q), self.wk(k), self.wv(v)
+
+        # 将 Q、K、V 拆分成多头，维度为 (B, T, n_head, dim // n_head)，然后交换维度，变成 (B, n_head, T, dim // n_head)
+        # 因为在注意力计算中我们是取了后两个维度参与计算
+        # 为什么要先按B*T*n_head*C//n_head展开再互换1、2维度而不是直接按注意力输入展开，是因为view的展开方式是直接把输入全部排开，
+        # 然后按要求构造，可以发现只有上述操作能够实现我们将每个头对应部分取出来的目标
+        xq = xq.view(bsz, seqlen, self.n_heads, self.head_dim)
+        xk = xk.view(bsz, seqlen, self.n_heads, self.head_dim)
+        xv = xv.view(bsz, seqlen, self.n_heads, self.head_dim)
+        xq = xq.transpose(1, 2)
+        xk = xk.transpose(1, 2)
+        xv = xv.transpose(1, 2)
+
+        # 注意力计算
+        # 计算 QK^T / sqrt(d_k)，维度为 (B, nh, T, hs) x (B, nh, hs, T) -&gt; (B, nh, T, T)
+        scores = torch.matmul(xq, xk.transpose(2, 3)) / math.sqrt(self.head_dim)
+        # 掩码自注意力必须有注意力掩码
+        if self.is_causal:
+            assert hasattr(self, &#39;mask&#39;)
+            # 这里截取到序列长度，因为有些序列可能比 max_seq_len 短
+            scores = scores + self.mask[:, :, :seqlen, :seqlen]
+        # 计算 softmax，维度为 (B, nh, T, T)
+        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+        # 做 Dropout
+        scores = self.attn_dropout(scores)
+        # V * Score，维度为(B, nh, T, T) x (B, nh, T, hs) -&gt; (B, nh, T, hs)
+        output = torch.matmul(scores, xv)
+
+        # 恢复时间维度并合并头。
+        # 将多头的结果拼接起来, 先交换维度为 (B, T, n_head, dim // n_head)，再拼接成 (B, T, n_head * dim // n_head)
+        # contiguous 函数用于重新开辟一块新内存存储，因为Pytorch设置先transpose再view会报错，
+        # 因为view直接基于底层存储得到，然而transpose并不会改变底层存储，因此需要额外存储
+        output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
+
+        # 最终投影回残差流。
+        output = self.wo(output)
+        output = self.resid_dropout(output)
+        return output</code></pre></div>
+</div>
+<div class="section" id="llm-happy-transformer-src1-s2"><h2>2.2 Encoder-Decoder</h2>
+<p>在上一节，我们详细介绍了 Transformer 的核心——注意力机制。在《Attention is All You Need》一文中，作者通过仅使用注意力机制而抛弃传统的 RNN、CNN 架构搭建出 Transformer 模型，从而带来了 NLP 领域的大变革。在 Transformer 中，使用注意力机制的是其两个核心组件——Encoder（编码器）和 Decoder（解码器）。事实上，后续基于 Transformer 架构而来的预训练语言模型基本都是对 Encoder-Decoder 部分进行改进来构建新的模型架构，例如只使用 Encoder 的 BERT、只使用 Decoder 的 GPT 等。</p>
+<p>在本节中，我们将以上一节所介绍的 注意力机制为基础，从 Transformer 所针对的 Seq2Seq 任务出发，解析 Transformer 的 Encoder-Decoder 结构。</p>
+<h3>2.2.1 Seq2Seq 模型</h3>
+<p>Seq2Seq，即序列到序列，是一种经典 NLP 任务。具体而言，是指模型输入的是一个自然语言序列 <span class="math" role="math" aria-label="数学公式">input = (x<sub>1</sub>, x<sub>2</sub>, x<sub>3</sub>...x<sub>n</sub>)</span> ，输出的是一个可能不等长的自然语言序列 <span class="math" role="math" aria-label="数学公式">output = (y<sub>1</sub>, y<sub>2</sub>, y<sub>3</sub>...y<sub>m</sub>)</span> 。事实上，Seq2Seq 是 NLP 最经典的任务，几乎所有的 NLP 任务都可以视为 Seq2Seq 任务。例如文本分类任务，可以视为输出长度为 1 的目标序列（如在上式中 <span class="math" role="math" aria-label="数学公式">m</span> = 1）；词性标注任务，可以视为输出与输入序列等长的目标序列（如在上式中 <span class="math" role="math" aria-label="数学公式">m</span> = <span class="math" role="math" aria-label="数学公式">n</span> ）。</p>
+<p>机器翻译任务即是一个经典的 Seq2Seq 任务，例如，我们的输入可能是“今天天气真好”，输出是“Today is a good day.”。Transformer 是一个经典的 Seq2Seq 模型，即模型的输入为文本序列，输出为另一个文本序列。事实上，Transformer 一开始正是应用在机器翻译任务上的。</p>
+<p>对于 Seq2Seq 任务，一般的思路是对自然语言序列进行编码再解码。所谓编码，就是将输入的自然语言序列通过隐藏层编码成能够表征语义的向量（或矩阵），可以简单理解为更复杂的词向量表示。而解码，就是对输入的自然语言序列编码得到的向量或矩阵通过隐藏层输出，再解码成对应的自然语言目标序列。通过编码再解码，就可以实现 Seq2Seq 任务。</p>
+<p>Transformer 中的 Encoder，就是用于上述的编码过程；Decoder 则用于上述的解码过程。Transformer 结构，如图2.5所示：</p>
+<div align="center">
+  <img src="@asset/happy-llm/docs/images/2-figures/2-0-5afeaf6674.jpg" alt="图片描述" width="90%"/>
+  <p>图2.5 编码器-解码器结构</p>
+</div>
+<p>Transformer 由 Encoder 和 Decoder 组成，每一个 Encoder（Decoder）又由 6个 Encoder（Decoder）Layer 组成。输入源序列会进入 Encoder 进行编码，到 Encoder Layer 的最顶层再将编码结果输出给 Decoder Layer 的每一层，通过 Decoder 解码后就可以得到输出目标序列了。</p>
+<p>接下来，我们将首先介绍 Encoder 和 Decoder 内部传统神经网络的经典结构——前馈神经网络（FNN）、层归一化（Layer Norm）和残差连接（Residual Connection），然后进一步分析 Encoder 和 Decoder 的内部结构。</p>
+<h3>2.2.2 前馈神经网络</h3>
+<p>前馈神经网络（Feed Forward Neural Network，下简称 FNN），也就是我们在上一节提过的每一层的神经元都和上下两层的每一个神经元完全连接的网络结构。每一个 Encoder Layer 都包含一个上文讲的注意力机制和一个前馈神经网络。前馈神经网络的实现是较为简单的：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class MLP(nn.Module):
+    &#39;&#39;&#39;前馈神经网络&#39;&#39;&#39;
+    def __init__(self, dim: int, hidden_dim: int, dropout: float):
+        super().__init__()
+        # 定义第一层线性变换，从输入维度到隐藏维度
+        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
+        # 定义第二层线性变换，从隐藏维度到输入维度
+        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
+        # 定义dropout层，用于防止过拟合
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # 前向传播函数
+        # 首先，输入x通过第一层线性变换和RELU激活函数
+        # 最后，通过第二层线性变换和dropout层
+        return self.dropout(self.w2(F.relu(self.w1(x))))
+    </code></pre></div>
+<p>注意，Transformer 的前馈神经网络是由两个线性层中间加一个 RELU 激活函数组成的，以及前馈神经网络还加入了一个 Dropout 层来防止过拟合。Dropout 层只在训练时开启，推理/测试阶段关闭，所以许多Transformer结构示意图中不会画出该层。</p>
+<h3>2.2.3 层归一化</h3>
+<p>层归一化，也就是 Layer Norm，是深度学习中经典的归一化操作。神经网络主流的归一化一般有两种，批归一化（Batch Norm）和层归一化（Layer Norm）。</p>
+<p>归一化核心是为了让不同层输入的取值范围或者分布能够比较一致。由于深度神经网络中每一层的输入都是上一层的输出，因此多层传递下，对网络中较高的层，之前的所有神经层的参数变化会导致其输入的分布发生较大的改变。也就是说，随着神经网络参数的更新，各层的输出分布是不相同的，且差异会随着网络深度的增大而增大。但是，需要预测的条件分布始终是相同的，从而也就造成了预测的误差。</p>
+<p>因此，在深度神经网络中，往往需要归一化操作，将每一层的输入都归一化成标准正态分布。批归一化是指在一个 mini-batch 上进行归一化，相当于对一个 batch 对样本拆分出来一部分，首先计算样本的均值：</p>
+<div class="math-display" role="math" aria-label="数学公式">μ<sub>j</sub> = <span class="mfrac"><span class="mnum">1</span><span class="mden">m</span></span>∑<sup>m</sup><sub>i=1</sub>Z<sub>j</sub><sup>i</sup></div>
+<p>其中， <span class="math" role="math" aria-label="数学公式">Z<sub>j</sub><sup>i</sup></span> 是样本 i 在第 j 个维度上的值，m 就是 mini-batch 的大小。</p>
+<p>再计算样本的方差：</p>
+<div class="math-display" role="math" aria-label="数学公式">σ<sup>2</sup> = <span class="mfrac"><span class="mnum">1</span><span class="mden">m</span></span>∑<sup>m</sup><sub>i=1</sub>(Z<sub>j</sub><sup>i</sup> - μ<sub>j</sub>)<sup>2</sup></div>
+<p>最后，对每个样本的值减去均值再除以标准差来将这一个 mini-batch 的样本的分布转化为标准正态分布：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="math-overline">Z<sub>j</sub></span> = <span class="mfrac"><span class="mnum">Z<sub>j</sub> - μ<sub>j</sub></span><span class="mden"><span class="msqrt">√<span class="msqrt-arg">σ<sup>2</sup> + ε</span></span></span></span></div>
+<p>此处加上 <span class="math" role="math" aria-label="数学公式">ε</span> 这一极小量是为了避免分母为0。</p>
+<p>但是，批归一化存在一些缺陷，例如：</p>
+<ul>
+<li>当显存有限，mini-batch 较小时，Batch Norm 取的样本的均值和方差不能反映全局的统计分布信息，从而导致效果变差；</li>
+<li>对于在时间维度展开的 RNN，不同句子的同一分布大概率不同，所以 Batch Norm 的归一化会失去意义；</li>
+<li>在训练时，Batch Norm 需要保存每个 step 的统计信息（均值和方差）。在测试时，由于变长句子的特性，测试集可能出现比训练集更长的句子，所以对于后面位置的 step，是没有训练的统计量使用的；</li>
+<li>应用 Batch Norm，每个 step 都需要去保存和计算 batch 统计量，耗时又耗力</li>
+</ul>
+<p>因此，出现了在深度神经网络中更常用、效果更好的层归一化（Layer Norm）。相较于 Batch Norm 在每一层统计所有样本的均值和方差，Layer Norm 在每个样本上计算其所有层的均值和方差，从而使每个样本的分布达到稳定。Layer Norm 的归一化方式其实和 Batch Norm 是完全一样的，只是统计统计量的维度不同。</p>
+<p>基于上述进行归一化的公式，我们可以简单地实现一个 Layer Norm 层：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class LayerNorm(nn.Module):
+    &#39;&#39;&#39; Layer Norm 层&#39;&#39;&#39;
+    def __init__(self, features, eps=1e-6):
+        super().__init__()
+        # 线性矩阵做映射
+        self.a_2 = nn.Parameter(torch.ones(features))
+        self.b_2 = nn.Parameter(torch.zeros(features))
+        self.eps = eps
+	
+    def forward(self, x):
+        # 在统计每个样本所有维度的值，求均值和方差
+        mean = x.mean(-1, keepdim=True) # mean: [bsz, max_len, 1]
+        std = x.std(-1, keepdim=True) # std: [bsz, max_len, 1]
+        # 注意这里也在最后一个维度发生了广播
+        return self.a_2 * (x - mean) / (std + self.eps) + self.b_2</code></pre></div>
+<p>注意，在我们上文实现的 Layer Norm 层中，有两个线性矩阵进行映射。</p>
+<h3>2.2.4 残差连接</h3>
+<p>由于 Transformer 模型结构较复杂、层数较深，​为了避免模型退化，Transformer 采用了残差连接的思想来连接每一个子层。残差连接，即下一层的输入不仅是上一层的输出，还包括上一层的输入。残差连接允许最底层信息直接传到最高层，让高层专注于残差的学习。</p>
+<p>​例如，在 Encoder 中，在第一个子层，输入会先进行层归一化（Layer Norm），然后进入多头自注意力层，其输出会与原输入相加。在第二个子层也是一样。即：</p>
+<div class="math-display" role="math" aria-label="数学公式">x = x + MultiHeadSelfAttention(LayerNorm(x))</div>
+<div class="math-display" role="math" aria-label="数学公式">output = x + FNN(LayerNorm(x))</div>
+<p>我们在代码实现中，通过在层的 forward 计算中加上原值来实现残差连接：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 注意力计算
+h = x + self.attention.forward(self.attention_norm(x))
+# 经过前馈神经网络
+out = h + self.feed_forward.forward(self.fnn_norm(h))</code></pre></div>
+<p>在上文代码中，self.attention_norm 和 self.fnn_norm 都是 LayerNorm 层，self.attn 是注意力层，而 self.feed_forward 是前馈神经网络。</p>
+<h3>2.2.5 Encoder</h3>
+<p>在实现上述组件之后，我们可以搭建起 Transformer 的 Encoder。Encoder 由 N 个 Encoder Layer 组成，每一个 Encoder Layer 包括一个注意力层和一个前馈神经网络。因此，我们可以首先实现一个 Encoder Layer：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class EncoderLayer(nn.Module):
+  &#39;&#39;&#39;Encoder层&#39;&#39;&#39;
+    def __init__(self, args):
+        super().__init__()
+        # 一个 Layer 中有两个 LayerNorm，分别在 Attention 之前和 MLP 之前
+        self.attention_norm = LayerNorm(args.n_embd)
+        # Encoder 不需要掩码，传入 is_causal=False
+        self.attention = MultiHeadAttention(args, is_causal=False)
+        self.fnn_norm = LayerNorm(args.n_embd)
+        self.feed_forward = MLP(args.dim, args.dim, args.dropout)
+
+    def forward(self, x):
+        # Layer Norm
+        norm_x = self.attention_norm(x)
+        # 自注意力
+        h = x + self.attention.forward(norm_x, norm_x, norm_x)
+        # 经过前馈神经网络
+        out = h + self.feed_forward.forward(self.fnn_norm(h))
+        return out</code></pre></div>
+<p>然后我们搭建一个 Encoder，由 N 个 Encoder Layer 组成，在最后会加入一个 Layer Norm 实现规范化：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class Encoder(nn.Module):
+    &#39;&#39;&#39;Encoder 块&#39;&#39;&#39;
+    def __init__(self, args):
+        super(Encoder, self).__init__() 
+        # 一个 Encoder 由 N 个 Encoder Layer 组成
+        self.layers = nn.ModuleList([EncoderLayer(args) for _ in range(args.n_layer)])
+        self.norm = LayerNorm(args.n_embd)
+
+    def forward(self, x):
+        &quot;分别通过 N 层 Encoder Layer&quot;
+        for layer in self.layers:
+            x = layer(x)
+        return self.norm(x)</code></pre></div>
+<p>通过 Encoder 的输出，就是输入编码之后的结果。</p>
+<h3>2.2.6 Decoder</h3>
+<p>类似的，我们也可以先搭建 Decoder Layer，再将 N 个 Decoder Layer 组装为 Decoder。但是和 Encoder 不同的是，Decoder 由两个注意力层和一个前馈神经网络组成。第一个注意力层是一个掩码自注意力层，即使用 Mask 的注意力计算，保证每一个 token 只能使用该 token 之前的注意力分数；第二个注意力层是一个多头注意力层，该层将使用第一个注意力层的输出作为 query，使用 Encoder 的输出作为 key 和 value，来计算注意力分数。最后，再经过前馈神经网络：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class DecoderLayer(nn.Module):
+  &#39;&#39;&#39;解码层&#39;&#39;&#39;
+    def __init__(self, args):
+        super().__init__()
+        # 一个 Layer 中有三个 LayerNorm，分别在 Mask Attention 之前、Self Attention 之前和 MLP 之前
+        self.attention_norm_1 = LayerNorm(args.n_embd)
+        # Decoder 的第一个部分是 Mask Attention，传入 is_causal=True
+        self.mask_attention = MultiHeadAttention(args, is_causal=True)
+        self.attention_norm_2 = LayerNorm(args.n_embd)
+        # Decoder 的第二个部分是 类似于 Encoder 的 Attention，传入 is_causal=False
+        self.attention = MultiHeadAttention(args, is_causal=False)
+        self.ffn_norm = LayerNorm(args.n_embd)
+        # 第三个部分是 MLP
+        self.feed_forward = MLP(args.dim, args.dim, args.dropout)
+
+    def forward(self, x, enc_out):
+        # Layer Norm
+        norm_x = self.attention_norm_1(x)
+        # 掩码自注意力
+        x = x + self.mask_attention.forward(norm_x, norm_x, norm_x)
+        # 多头注意力
+        norm_x = self.attention_norm_2(x)
+        h = x + self.attention.forward(norm_x, enc_out, enc_out)
+        # 经过前馈神经网络
+        out = h + self.feed_forward.forward(self.ffn_norm(h))
+        return out</code></pre></div>
+<p>然后同样的，我们搭建一个 Decoder 块：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class Decoder(nn.Module):
+    &#39;&#39;&#39;解码器&#39;&#39;&#39;
+    def __init__(self, args):
+        super(Decoder, self).__init__() 
+        # 一个 Decoder 由 N 个 Decoder Layer 组成
+        self.layers = nn.ModuleList([DecoderLayer(args) for _ in range(args.n_layer)])
+        self.norm = LayerNorm(args.n_embd)
+
+    def forward(self, x, enc_out):
+        &quot;Pass the input (and mask) through each layer in turn.&quot;
+        for layer in self.layers:
+            x = layer(x, enc_out)
+        return self.norm(x)</code></pre></div>
+<p>完成上述 Encoder、Decoder 的搭建，就完成了 Transformer 的核心部分，接下来将 Encoder、Decoder 拼接起来再加入 Embedding 层就可以搭建出完整的 Transformer 模型啦。</p>
+</div>
+<div class="section" id="llm-happy-transformer-src1-s3"><h2>2.3 搭建一个 Transformer</h2>
+<p>在前两章，我们分别深入剖析了 Attention 机制和 Transformer 的核心——Encoder、Decoder 结构，接下来，我们就可以基于上一章实现的组件，搭建起一个完整的 Transformer 模型。</p>
+<h3>2.3.1 Embedding 层</h3>
+<p>正如我们在第一章所讲过的，在 NLP 任务中，我们往往需要将自然语言的输入转化为机器可以处理的向量。在深度学习中，承担这个任务的组件就是 Embedding 层。</p>
+<p>Embedding 层其实是一个存储固定大小的词典的嵌入向量查找表。也就是说，在输入神经网络之前，我们往往会先让自然语言输入通过分词器 tokenizer，分词器的作用是把自然语言输入切分成 token 并转化成一个固定的 index。例如，如果我们将词表大小设为 4，输入“我喜欢你”，那么，分词器可以将输入转化成：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>input: 我
+output: 0
+
+input: 喜欢
+output: 1
+
+input：你
+output: 2</code></pre></div>
+<p>当然，在实际情况下，tokenizer 的工作会比这更复杂。例如，分词有多种不同的方式，可以切分成词、切分成子词、切分成字符等，而词表大小则往往高达数万数十万。此处我们不赘述 tokenizer 的详细情况，在后文会详细介绍大模型的 tokenizer 是如何运行和训练的。</p>
+<p>因此，Embedding 层的输入往往是一个形状为 （batch_size，seq_len，1）的矩阵，第一个维度是一次批处理的数量，第二个维度是自然语言序列的长度，第三个维度则是 token 经过 tokenizer 转化成的 index 值。例如，对上述输入，Embedding 层的输入会是：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>[[[0],[1],[2]]]</code></pre></div>
+<p>其 batch_size 为1，seq_len 为3，转化出来的 index 如上。</p>
+<p>而 Embedding 内部其实是一个可训练的（Vocab_size，embedding_dim）的权重矩阵，词表里的每一个值，都对应一行维度为 embedding_dim 的向量。对于输入的值，会对应到这个词向量，然后拼接成（batch_size，seq_len，embedding_dim）的矩阵输出。</p>
+<p>上述实现并不复杂，我们可以直接使用 torch 中的 Embedding 层：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim)</code></pre></div>
+<h3>2.3.2 位置编码</h3>
+<p>注意力机制可以实现良好的并行计算，但同时，其注意力计算的方式也导致序列中相对位置的丢失。在 RNN、LSTM 中，输入序列会沿着语句本身的顺序被依次递归处理，因此输入序列的顺序提供了极其重要的信息，这也和自然语言的本身特性非常吻合。</p>
+<p>但从上文对注意力机制的分析我们可以发现，在注意力机制的计算过程中，对于序列中的每一个 token，其他各个位置对其来说都是平等的，即“我喜欢你”和“你喜欢我”在注意力机制看来是完全相同的，但无疑这是注意力机制存在的一个巨大问题。因此，为使用序列顺序信息，保留序列中的相对位置信息，Transformer 采用了位置编码机制，该机制也在之后被多种模型沿用。</p>
+<p>​位置编码，即根据序列中 token 的相对位置对其进行编码，再将位置编码加入词向量编码中。位置编码的方式有很多，Transformer 使用了正余弦函数来进行位置编码（绝对位置编码Sinusoidal），其编码方式为：</p>
+<div class="math-display" role="math" aria-label="数学公式">PE(pos, 2i) = sin(pos/10000<sup>2i/d<sub>model</sub></sup>)<br> PE(pos, 2i+1) = cos(pos/10000<sup>2i/d<sub>model</sub></sup>)</div>
+<p>上式中，pos 为 token 在句子中的位置，2i 和 2i+1 则指示了位置编码向量的维度索引是奇数还是偶数，从上式中我们可以看出对于奇数维度和偶数维度，Transformer 采用了不同的函数进行编码。</p>
+<p>我们以一个简单的例子来说明位置编码的计算过程：假如我们输入的是一个长度为 4 的句子&quot;I like to code&quot;，我们可以得到下面的词向量矩阵 <span class="math" role="math" aria-label="数学公式"><span class="mtext">x</span></span> ，其中每一行代表的就是一个词向量， <span class="math" role="math" aria-label="数学公式"><span class="mtext">x</span><sub>0</sub>=[0.1,0.2,0.3,0.4]</span> 对应的就是“I”的词向量，它的pos就是为0，以此类推，第二行代表的是“like”的词向量，它的pos就是1：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext">x</span> = <span class="math-environment math-bmatrix"><span class="math-delim">[</span><table class="math-matrix"><tbody><tr><td>0.1</td><td>0.2</td><td>0.3</td><td>0.4</td></tr><tr><td>0.2</td><td>0.3</td><td>0.4</td><td>0.5</td></tr><tr><td>0.3</td><td>0.4</td><td>0.5</td><td>0.6</td></tr><tr><td>0.4</td><td>0.5</td><td>0.6</td><td>0.7</td></tr></tbody></table><span class="math-delim">]</span></span></div>
+<p>​则经过位置编码后的词向量为：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext">x</span><sub>PE</sub> = <span class="math-environment math-bmatrix"><span class="math-delim">[</span><table class="math-matrix"><tbody><tr><td>0.1</td><td>0.2</td><td>0.3</td><td>0.4</td></tr><tr><td>0.2</td><td>0.3</td><td>0.4</td><td>0.5</td></tr><tr><td>0.3</td><td>0.4</td><td>0.5</td><td>0.6</td></tr><tr><td>0.4</td><td>0.5</td><td>0.6</td><td>0.7</td></tr></tbody></table><span class="math-delim">]</span></span> + <span class="math-environment math-bmatrix"><span class="math-delim">[</span><table class="math-matrix"><tbody><tr><td>sin(<span class="mfrac"><span class="mnum">0</span><span class="mden">10000<sup>0</sup></span></span>)</td><td>cos(<span class="mfrac"><span class="mnum">0</span><span class="mden">10000<sup>0</sup></span></span>)</td><td>sin(<span class="mfrac"><span class="mnum">0</span><span class="mden">10000<sup>2/4</sup></span></span>)</td><td>cos(<span class="mfrac"><span class="mnum">0</span><span class="mden">10000<sup>2/4</sup></span></span>)</td></tr><tr><td>sin(<span class="mfrac"><span class="mnum">1</span><span class="mden">10000<sup>0</sup></span></span>)</td><td>cos(<span class="mfrac"><span class="mnum">1</span><span class="mden">10000<sup>0</sup></span></span>)</td><td>sin(<span class="mfrac"><span class="mnum">1</span><span class="mden">10000<sup>2/4</sup></span></span>)</td><td>cos(<span class="mfrac"><span class="mnum">1</span><span class="mden">10000<sup>2/4</sup></span></span>)</td></tr><tr><td>sin(<span class="mfrac"><span class="mnum">2</span><span class="mden">10000<sup>0</sup></span></span>)</td><td>cos(<span class="mfrac"><span class="mnum">2</span><span class="mden">10000<sup>0</sup></span></span>)</td><td>sin(<span class="mfrac"><span class="mnum">2</span><span class="mden">10000<sup>2/4</sup></span></span>)</td><td>cos(<span class="mfrac"><span class="mnum">2</span><span class="mden">10000<sup>2/4</sup></span></span>)</td></tr><tr><td>sin(<span class="mfrac"><span class="mnum">3</span><span class="mden">10000<sup>0</sup></span></span>)</td><td>cos(<span class="mfrac"><span class="mnum">3</span><span class="mden">10000<sup>0</sup></span></span>)</td><td>sin(<span class="mfrac"><span class="mnum">3</span><span class="mden">10000<sup>2/4</sup></span></span>)</td><td>cos(<span class="mfrac"><span class="mnum">3</span><span class="mden">10000<sup>2/4</sup></span></span>)</td></tr></tbody></table><span class="math-delim">]</span></span> = <span class="math-environment math-bmatrix"><span class="math-delim">[</span><table class="math-matrix"><tbody><tr><td>0.1</td><td>1.2</td><td>0.3</td><td>1.4</td></tr><tr><td>1.041</td><td>0.84</td><td>0.41</td><td>1.49</td></tr><tr><td>1.209</td><td>-0.016</td><td>0.52</td><td>1.59</td></tr><tr><td>0.541</td><td>-0.489</td><td>0.895</td><td>1.655</td></tr></tbody></table><span class="math-delim">]</span></span></div>
+<p>我们可以使用如下的代码来获取上述例子的位置编码：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import numpy as np
+import matplotlib.pyplot as plt
+def PositionEncoding(seq_len, d_model, n=10000):
+    P = np.zeros((seq_len, d_model))
+    for k in range(seq_len):
+        for i in np.arange(int(d_model/2)):
+            denominator = np.power(n, 2*i/d_model)
+            P[k, 2*i] = np.sin(k/denominator)
+            P[k, 2*i+1] = np.cos(k/denominator)
+    return P
+
+P = PositionEncoding(seq_len=4, d_model=4, n=100)
+print(P)</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>[[ 0.          1.          0.          1.        ]
+ [ 0.84147098  0.54030231  0.09983342  0.99500417]
+ [ 0.90929743 -0.41614684  0.19866933  0.98006658]
+ [ 0.14112001 -0.9899925   0.29552021  0.95533649]]</code></pre></div>
+<p>这样的位置编码主要有两个好处：</p>
+<ol>
+<li>使 PE 能够适应比训练集里面所有句子更长的句子，假设训练集里面最长的句子是有 20 个单词，突然来了一个长度为 21 的句子，则使用公式计算的方法可以计算出第 21 位的 Embedding。</li>
+<li>可以让模型容易地计算出相对位置，对于固定长度的间距 k，PE(pos+k) 可以用 PE(pos) 计算得到。因为 Sin(A+B) = Sin(A)Cos(B) + Cos(A)Sin(B), Cos(A+B) = Cos(A)Cos(B) - Sin(A)Sin(B)。</li>
+</ol>
+<p>我们也可以通过严谨的数学推导证明该编码方式的优越性。原始的 Transformer Embedding 可以表示为：</p>
+<div class="math-display" role="math" aria-label="数学公式">f(⋯,<span class="mtext bf">x</span><sub>m</sub>,⋯,<span class="mtext bf">x</span><sub>n</sub>,⋯)=f(⋯,<span class="mtext bf">x</span><sub>n</sub>,⋯,<span class="mtext bf">x</span><sub>m</sub>,⋯)</div>
+<p>很明显，这样的函数是不具有不对称性的，也就是无法表征相对位置信息。我们想要得到这样一种编码方式：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="math-overline">f</span>(⋯,<span class="mtext bf">x</span><sub>m</sub>,⋯,<span class="mtext bf">x</span><sub>n</sub>,⋯)=f(⋯,<span class="mtext bf">x</span><sub>m</sub> + <span class="mtext bf">p</span><sub>m</sub>,⋯,<span class="mtext bf">x</span><sub>n</sub> + <span class="mtext bf">p</span><sub>n</sub>,⋯)</div>
+<p>这里加上的 <span class="math" role="math" aria-label="数学公式">p<sub>m</sub></span>， <span class="math" role="math" aria-label="数学公式">p<sub>n</sub></span> 就是位置编码。接下来我们将 <span class="math" role="math" aria-label="数学公式">f(...,x<sub>m</sub>+p<sub>m</sub>,...,x<sub>n</sub>+p<sub>n</sub>)</span> 在 m,n 两个位置上做泰勒展开：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="math-overline">f</span>≈ f + <span class="mtext bf">p</span><sub>m</sub><sup>⊤</sup> <span class="mfrac"><span class="mnum">∂ f</span><span class="mden">∂ <span class="mtext bf">x</span><sub>m</sub></span></span> + <span class="mtext bf">p</span><sub>n</sub><sup>⊤</sup> <span class="mfrac"><span class="mnum">∂ f</span><span class="mden">∂ <span class="mtext bf">x</span><sub>n</sub></span></span> + <span class="mfrac"><span class="mnum">1</span><span class="mden">2</span></span><span class="mtext bf">p</span><sub>m</sub><sup>⊤</sup> <span class="mfrac"><span class="mnum">∂<sup>2</sup> f</span><span class="mden">∂ <span class="mtext bf">x</span><sub>m</sub><sup>2</sup></span></span><span class="mtext bf">p</span><sub>m</sub> + <span class="mfrac"><span class="mnum">1</span><span class="mden">2</span></span><span class="mtext bf">p</span><sub>n</sub><sup>⊤</sup> <span class="mfrac"><span class="mnum">∂<sup>2</sup> f</span><span class="mden">∂ <span class="mtext bf">x</span><sub>n</sub><sup>2</sup></span></span><span class="mtext bf">p</span><sub>n</sub> + <span class="math-brace"><span class="mtext bf">p</span><sub>m</sub><sup>⊤</sup> <span class="mfrac"><span class="mnum">∂<sup>2</sup> f</span><span class="mden">∂ <span class="mtext bf">x</span><sub>m</sub> ∂ <span class="mtext bf">x</span><sub>n</sub></span></span><span class="mtext bf">p</span><sub>n</sub></span><sub><span class="mtext bf">p</span><sub>m</sub><sup>⊤</sup> <span class="mtext bf"><span class="mcal">H</span></span> <span class="mtext bf">p</span><sub>n</sub></sub></div>
+<p>可以看到第1项与位置无关，2～5项仅依赖单一位置，第6项（f 分别对 m、n 求偏导）与两个位置有关，所以我们希望第六项（ <span class="math" role="math" aria-label="数学公式">p<sub>m</sub><sup>T</sup>Hp<sub>n</sub></span> ）表达相对位置信息，即求一个函数 g 使得:</p>
+<div class="math-display" role="math" aria-label="数学公式">p<sub>m</sub><sup>T</sup>Hp<sub>n</sub> = g(m-n)</div>
+<p>我们假设 <span class="math" role="math" aria-label="数学公式">H</span> 是一个单位矩阵，则：</p>
+<div class="math-display" role="math" aria-label="数学公式">p<sub>m</sub><sup>T</sup>Hp<sub>n</sub> = p<sub>m</sub><sup>T</sup>p<sub>n</sub> = ⟨<span class="mtext bf">p</span><sub>m</sub>, <span class="mtext bf">p</span><sub>n</sub>⟩ = g(m-n)</div>
+<p>通过将向量 [x,y] 视为复数 x+yi，基于复数的运算法则构建方程:</p>
+<div class="math-display" role="math" aria-label="数学公式">⟨<span class="mtext bf">p</span><sub>m</sub>, <span class="mtext bf">p</span><sub>n</sub>⟩ = <span class="mtext">Re</span>[<span class="mtext bf">p</span><sub>m</sub> <span class="mtext bf">p</span><sub>n</sub><sup>*</sup>]</div>
+<p>再假设存在复数 <span class="math" role="math" aria-label="数学公式">q<sub>m-n</sub></span> 使得：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext bf">p</span><sub>m</sub> <span class="mtext bf">p</span><sub>n</sub><sup>*</sup> = <span class="mtext bf">q</span><sub>m-n</sub></div>
+<p>使用复数的指数形式求解这个方程，得到二维情形下位置编码的解：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext bf">p</span><sub>m</sub> = e<sup><span class="mtext">i</span>mθ</sup><span class="math-space"> </span>⇔<span class="math-space"> </span> <span class="mtext bf">p</span><sub>m</sub>=<span class="math-environment math-pmatrix"><span class="math-delim">(</span><table class="math-matrix"><tbody><tr><td>cos mθ</td></tr><tr><td>sin mθ</td></tr></tbody></table><span class="math-delim">)</span></span></div>
+<p>由于内积满足线性叠加性，所以更高维的偶数维位置编码，我们可以表示为多个二维位置编码的组合：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext bf">p</span><sub>m</sub> = <span class="math-environment math-pmatrix"><span class="math-delim">(</span><table class="math-matrix"><tbody><tr><td>e<sup><span class="mtext">i</span>mθ<sub>0</sub></sup></td></tr><tr><td>e<sup><span class="mtext">i</span>mθ<sub>1</sub></sup></td></tr><tr><td>⋮</td></tr><tr><td>e<sup><span class="mtext">i</span>mθ<sub>d/2-1</sub></sup></td></tr></tbody></table><span class="math-delim">)</span></span><span class="math-space"> </span>⇔<span class="math-space"> </span> <span class="mtext bf">p</span><sub>m</sub>=<span class="math-environment math-pmatrix"><span class="math-delim">(</span><table class="math-matrix"><tbody><tr><td>cos mθ<sub>0</sub></td></tr><tr><td>sin mθ<sub>0</sub></td></tr><tr><td>cos mθ<sub>1</sub></td></tr><tr><td>sin mθ<sub>1</sub></td></tr><tr><td>⋮</td></tr><tr><td>cos mθ<sub>d/2-1</sub></td></tr><tr><td>sin mθ<sub>d/2-1</sub></td></tr></tbody></table><span class="math-delim">)</span></span></div>
+<p>再取 <span class="math" role="math" aria-label="数学公式">θ<sub>i</sub> = 10000<sup>-2i/d</sup></span>（该形式可以使得随着|m−n|的增大，⟨pm,pn⟩有着趋于零的趋势，这一点可以通过对位置编码做积分来证明，而 base 取为 10000 是实验结果），就得到了上文的编码方式。</p>
+<p>当 <span class="math" role="math" aria-label="数学公式">H</span> 不是一个单位矩阵时，因为模型的 Embedding 层所形成的 d 维向量之间任意两个维度的相关性比较小，满足一定的解耦性，我们可以将其视作对角矩阵，那么使用上述编码：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext bf">p</span><sub>m</sub><sup>⊤</sup> <span class="mtext bf"><span class="mcal">H</span></span> <span class="mtext bf">p</span><sub>n</sub>=∑<sub>i=1</sub><sup>d/2</sup> <span class="mtext bf"><span class="mcal">H</span></span><sub>2i,2i</sub> cos mθ<sub>i</sub> cos nθ<sub>i</sub> + <span class="mtext bf"><span class="mcal">H</span></span><sub>2i+1,2i+1</sub> sin mθ<sub>i</sub> sin nθ<sub>i</sub></div>
+<p>通过积化和差：</p>
+<div class="math-display" role="math" aria-label="数学公式">∑<sub>i=1</sub><sup>d/2</sup> <span class="mfrac"><span class="mnum">1</span><span class="mden">2</span></span>(<span class="mtext bf"><span class="mcal">H</span></span><sub>2i,2i</sub> + <span class="mtext bf"><span class="mcal">H</span></span><sub>2i+1,2i+1</sub>) cos (m-n)θ<sub>i</sub> + <span class="mfrac"><span class="mnum">1</span><span class="mden">2</span></span>(<span class="mtext bf"><span class="mcal">H</span></span><sub>2i,2i</sub> - <span class="mtext bf"><span class="mcal">H</span></span><sub>2i+1,2i+1</sub>) cos (m+n)θ<sub>i</sub></div>
+<p>说明该编码仍然可以表示相对位置。</p>
+<p>上述​编码结果，如图2.6所示：</p>
+<div align="center">
+  <img src="@asset/happy-llm/docs/images/2-figures/3-0-45f57f6782.png" alt="图片描述" width="90%"/>
+  <p>图2.6 编码结果</p>
+</div>
+<p>基于上述原理，我们实现一个​位置编码层：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>
+class PositionalEncoding(nn.Module):
+    &#39;&#39;&#39;位置编码模块&#39;&#39;&#39;
+
+    def __init__(self, args):
+        super(PositionalEncoding, self).__init__()
+        # Dropout 层
+        # self.dropout = nn.Dropout(p=args.dropout)
+
+        # block size 是序列的最大长度
+        pe = torch.zeros(args.block_size, args.n_embd)
+        position = torch.arange(0, args.block_size).unsqueeze(1)
+        # 计算 theta
+        div_term = torch.exp(
+            torch.arange(0, args.n_embd, 2) * -(math.log(10000.0) / args.n_embd)
+        )
+        # 分别计算 sin、cos 结果
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer(&quot;pe&quot;, pe)
+
+    def forward(self, x):
+        # 将位置编码加到 Embedding 结果上
+        x = x + self.pe[:, : x.size(1)].requires_grad_(False)
+        return x</code></pre></div>
+<h3>2.3.3 一个完整的 Transformer</h3>
+<p>上述所有组件，再按照下图的 Tranfromer 结构拼接起来就是一个完整的 Transformer 模型了，如图2.7所示：</p>
+<div align="center">
+  <img src="@asset/happy-llm/docs/images/2-figures/3-1-d104129b00.png" alt="图片描述" width="80%"/>
+  <p>图2.7 Transformer 模型结构</p>
+</div>
+<p>但需要注意的是，上图是原论文《Attention is all you need》配图，LayerNorm 层放在了 Attention 层后面，也就是“Post-Norm”结构，但在其发布的源代码中，LayerNorm 层是放在 Attention 层前面的，也就是“Pre Norm”结构。考虑到目前 LLM 一般采用“Pre-Norm”结构（可以使 loss 更稳定），本文在实现时采用“Pre-Norm”结构。</p>
+<p>如图，经过 tokenizer 映射后的输出先经过 Embedding 层和 Positional Embedding 层编码，然后进入上一节讲过的 N 个 Encoder 和 N 个 Decoder（在 Transformer 原模型中，N 取为6），最后经过一个线性层和一个 Softmax 层就得到了最终输出。</p>
+<p>基于之前所实现过的组件，我们实现完整的 Transformer 模型：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class Transformer(nn.Module):
+   &#39;&#39;&#39;整体模型&#39;&#39;&#39;
+    def __init__(self, args):
+        super().__init__()
+        # 必须输入词表大小和 block size
+        assert args.vocab_size is not None
+        assert args.block_size is not None
+        self.args = args
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(args.vocab_size, args.n_embd),
+            wpe = PositionalEncoding(args),
+            drop = nn.Dropout(args.dropout),
+            encoder = Encoder(args),
+            decoder = Decoder(args),
+        ))
+        # 最后的线性层，输入是 n_embd，输出是词表大小
+        self.lm_head = nn.Linear(args.n_embd, args.vocab_size, bias=False)
+
+        # 初始化所有的权重
+        self.apply(self._init_weights)
+
+        # 查看所有参数的数量
+        print(&quot;number of parameters: %.2fM&quot; % (self.get_num_params()/1e6,))
+
+    &#39;&#39;&#39;统计所有参数的数量&#39;&#39;&#39;
+    def get_num_params(self, non_embedding=False):
+        # non_embedding: 是否统计 embedding 的参数
+        n_params = sum(p.numel() for p in self.parameters())
+        # 如果不统计 embedding 的参数，就减去
+        if non_embedding:
+            n_params -= self.transformer.wte.weight.numel()
+        return n_params
+
+    &#39;&#39;&#39;初始化权重&#39;&#39;&#39;
+    def _init_weights(self, module):
+        # 线性层和 Embedding 层初始化为正则分布
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    
+    &#39;&#39;&#39;前向计算函数&#39;&#39;&#39;
+    def forward(self, idx, targets=None):
+        # 输入为 idx，维度为 (batch size, sequence length, 1)；targets 为目标序列，用于计算 loss
+        device = idx.device
+        b, t = idx.size()
+        assert t &lt;= self.args.block_size, f&quot;不能计算该序列，该序列长度为 {t}, 最大序列长度只有 {self.args.block_size}&quot;
+
+        # 通过 self.transformer
+        # 首先将输入 idx 通过 Embedding 层，得到维度为 (batch size, sequence length, n_embd)
+        print(&quot;idx&quot;,idx.size())
+        # 通过 Embedding 层
+        tok_emb = self.transformer.wte(idx)
+        print(&quot;tok_emb&quot;,tok_emb.size())
+        # 然后通过位置编码
+        pos_emb = self.transformer.wpe(tok_emb) 
+        # 再进行 Dropout
+        x = self.transformer.drop(pos_emb)
+        # 然后通过 Encoder
+        print(&quot;x after wpe:&quot;,x.size())
+        enc_out = self.transformer.encoder(x)
+        print(&quot;enc_out:&quot;,enc_out.size())
+        # 再通过 Decoder
+        x = self.transformer.decoder(x, enc_out)
+        print(&quot;x after decoder:&quot;,x.size())
+
+        if targets is not None:
+            # 训练阶段，如果我们给了 targets，就计算 loss
+            # 先通过最后的 Linear 层，得到维度为 (batch size, sequence length, vocab size)
+            logits = self.lm_head(x)
+            # 再跟 targets 计算交叉熵
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        else:
+            # 推理阶段，我们只需要 logits，loss 为 None
+            # 取 -1 是只取序列中的最后一个作为输出
+            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            loss = None
+
+        return logits, loss</code></pre></div>
+<p>注意，上述代码除去搭建了整个 Transformer 结构外，我们还额外实现了三个函数：</p>
+<ul>
+<li>get_num_params：用于统计模型的参数量</li>
+<li>_init_weights：用于对模型所有参数进行随机初始化</li>
+<li>forward：前向计算函数</li>
+</ul>
+<p>另外，在前向计算函数中，我们对模型使用 pytorch 的交叉熵函数来计算损失，对于不同的损失函数，读者可以查阅 Pytorch 的官方文档，此处就不再赘述了。</p>
+<p>经过上述步骤，我们就可以从零“手搓”一个完整的、可计算的 Transformer 模型。限于本书主要聚焦在 LLM，在本章，我们就不再详细讲述如何训练 Transformer 模型了；在后文中，我们将类似地从零“手搓”一个 LLaMA 模型，并手把手带大家训练一个属于自己的 Tiny LLaMA。</p>
+<p><strong>参考文献</strong></p>
+<p>[1] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, Illia Polosukhin. (2023). <em>Attention Is All You Need.</em> arXiv preprint arXiv:1706.03762.</p>
+<p>[2] Jay Mody 的文章 “An Intuition for Attention”. 来源：https://jaykmody.com/blog/attention-intuition/</p>
+</div></div>
+<div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/transformer-architecture/readme.md</div><p>当本节内容作为第二章 Transformer架构中2.2章节Encoder-Decoder的补充，结合Pytorch的API源码，从Transformer的整体设计上来解释Transformer的各个模块。</p>
+<div class="section" id="llm-happy-transformer-src2-s1"><h2>从经典架构开始：Encoder-Decoder结构</h2>
+<p>让我们先从经典架构图理解Transformer的整体设计思路。Transformer分为两个主要部分：左侧的编码器（Encoder）和右侧的解码器（Decoder）。那么这两块结构的输入和输出分别是什么？</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-1-800a2b3456.png" alt="alt text" width="90%">
+    <p>1.jpg</p>
+</div>
+<p>Encoder的职责是接受完整的源序列输入，将其转换为一个富含语义信息的表示序列。想象一下，如果我们要做机器翻译，Encoder就像是一个深度理解原文的专家，它需要充分理解整个句子的含义、语法结构和上下文关系。</p>
+<p>Decoder则承担着更复杂的任务：它需要接受目标序列和编码器输出的表示序列，然后输出词汇/字符的概率分布。这就像是一个翻译专家，既要理解原文的含义（通过Encoder的输出），又要根据已经翻译的部分来决定下一个词应该是什么。</p>
+</div>
+<div class="section" id="llm-happy-transformer-src2-s2"><h2>Positional Encoding：位置编码设计</h2>
+<p>但这里有一个关键问题需要解决：Transformer本身对位置信息不敏感。比如&quot;我爱你&quot;和&quot;你爱我&quot;这两个句子，在没有位置信息的情况下，模型无法感知到这是语义完全不同的句子。这就像是一个人失去了对词语顺序的感知能力，显然无法正确理解语言。</p>
+<p>因此，我们需要一个带有位置信息的向量，将其添加到每个input embedding上，来对不同位置得到不同的表征。这个模块就是图中的<strong>Positional Encoding</strong>。</p>
+<h3>位置编码的设计原则</h3>
+<p>在设计编码模块时，有<strong>三个重要的前提假设</strong>，这些假设直接影响了最终的实现方案：</p>
+<p><strong>1. 确定性原则</strong>：每个位置的编码应该是确定的数字，不同序列中相同位置的编码应该相同。</p>
+<p>为什么这个原则如此重要？让我们考虑一个反例：如果用等分的设计方法，将一个序列从0~1之间做均匀划分，那么序列长度不一样时，每个位置上的编码也就不一样。当序列长度为5时，位置编码可能是0、0.2、0.4、0.6、0.8，但如果序列长度为10，就变成了0、0.1、0.2...。同样对于第二个位置上的字符，在第一个序列中是0.2，在第二个序列中又是0.1，这样的编码就失去了确定性。</p>
+<p><strong>2. 相对关系一致性</strong>：不同句子中，对于任意两个位置之间的相对距离，相对关系应该保持一致。</p>
+<p>这个目的是为了学习通用的语言关系，比如：&quot;修饰词在被修饰词前1个位置&quot;是通用模式。以下面的长短句举例：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">markdown</span></div><pre><code>- 长句子（10个词）
+  位置: 0  1  2  3  4  5  6  7  8  9
+  词汇: I  am learning about transformers today in class now
+
+- 短句子（6个词）
+  位置: 0  1  2  3  4  5
+  词汇: I  like deep learning models</code></pre></div>
+<p>在长句子中，位置1和位置4之间的编码关系，应该与短句子中位置2和位置5之间的编码关系完全相同，因为模型需要学会的是通用的相对位置关系。</p>
+<p><strong>3. 泛化能力</strong>：位置序列应该能推广到没见过的更长序列。</p>
+<p>第三个假设希望位置编码可以推广到更长的测试句子。假如训练集中序列长度都是10以内的，但测试集中可能会有长度为15的句子，我们希望即使测试集中句子长度更长，在训练中没有见过，我们也能通过这样的position encoding推广过去。</p>
+<h3>三角函数编码</h3>
+<p>基于这些假设，Transformer采用了sin和cos的组合来表征绝对位置信息：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">markdown</span></div><pre><code>- 向量维度为偶数：PE(pos, 2i) = sin(pos / 10000^(2i/d_model))
+- 向量维度为奇数：PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))</code></pre></div>
+<p>通过sin和cos的组合来表征绝对位置的好处是：<code>pe(pos+k)</code>可以写成<code>pe(k)</code>的线性组合（利用三角函数公式<code>sin(A + B) = sin(A)cos(B) + cos(A)sin(B)</code>）。这样做的意义是：即使测试集中出现了pos+k这种未见过的位置，我们也可以把它写成训练集中见过的位置的线性组合，而不用担心测试集中遇到更长的句子无法推广。</p>
+<h3>位置信息的传递机制</h3>
+<p>但位置编码是在最底层添加，会不会在深层网络中丢失？这个担心是多余的。通过<strong>残差连接</strong>，位置信息能够充分传递到上层网络。</p>
+<p>假设有一个N层的神经网络，输入为x₀（包含位置编码），那么：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">markdown</span></div><pre><code>- 第1层: x₁ = x₀ + F₁(x₀)
+- 第2层: x₂ = x₁ + F₂(x₁) = x₀ + F₁(x₀) + F₂(x₁)
+- 第3层: x₃ = x₂ + F₃(x₂) = x₀ + F₁(x₀) + F₂(x₁) + F₃(x₂)
+- ...
+- 第N层: xₙ = x₀ + Σᵢ₌₁ⁿ Fᵢ(xᵢ₋₁)</code></pre></div>
+<p>可以看到，初始的位置信息x₀始终存在于每一层的输出中，这确保了位置信息不会随着网络层数的加深而消失。</p>
+</div>
+<div class="section" id="llm-happy-transformer-src2-s3"><h2>从PyTorch源码API来理解transformer的架构设计</h2>
+<p>通过查看PyTorch的源码，来了解Encoder和Decoder中的架构实现。源码位于<code>/pytorch/torch/nn/modules/transformer.py</code>，此次借助的版本是v2.5.1。</p>
+<h3>顶层Transformer类的设计</h3>
+<p>首先，PyTorch定义了一个顶层的<code>Transformer</code>类，我们可以通过<code>torch.nn.Transformer</code>来调用它：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 使用示例
+transformer_model = nn.Transformer(d_model=512, nhead=8, num_encoder_layers=6)</code></pre></div>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-2-630919011a.png" alt="alt text" width="90%">
+    <p>2.jpg</p>
+</div>
+<p>在<code>Transformer</code>的<code><strong>init</strong></code>函数中，主要有5个核心参数：</p>
+<ol>
+<li><strong>d_model</strong>：整个Transformer的特征维度，在原论文中设置的是512。这个维度需要足够大以承载丰富的语义信息，但太大会导致计算复杂度过高。</li>
+</ol>
+<ol>
+<li><strong>nhead</strong>：Multi-head attention的头数目。多头设计的目的是让模型可以捕捉到更多位置与位置之间的关系；</li>
+</ol>
+<ol>
+<li><strong>num_encoder_layers</strong>：编码器encoder的block数目，encoder的每个block包含多头自注意力机制和前馈神经网络，这里默认block是6个；</li>
+</ol>
+<ol>
+<li><strong>num_decoder_layers</strong>：decoder解码器中block数目，decoder的每个block包含多头自注意力机制、交叉注意力机制以及前馈神经网络；</li>
+</ol>
+<ol>
+<li><strong>dim_feedforward</strong>：前馈神经网络层中间的特征维度，默认是2048。Multihead attention输出时，会<strong>首先</strong>映射到2048这个大的特征空间，然后再把它映射回来到512这样的空间。必须要保证输出的维度仍然是512，这样就可以进行残差连接；</li>
+</ol>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-3-de379c98b4.png" alt="alt text" width="90%">
+    <p>3.jpg</p>
+</div>
+<h3>模块化设计</h3>
+<p>init函数的作用是实例化模块，第一个要实例化的模块就是encoder。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-4-d0abaa4905.png" alt="alt text" width="90%">
+    <p>4.jpg</p>
+</div>
+<p>encoder通过TransformerEncoder的class去实现实例，在这个class中需要传入encoder_layer，在TransformerEncoderLayer的class中实现了Multihead self attention的调用、残差连接、层归一化、全连接层网络，主要是这些来构成一个encoder_layer。</p>
+<p>对于decode部分也是一样，传入decodeLayer参数，这个layer包含了自注意力机制、交叉注意力机制以及前馈神经网络。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-5-35453d4fa8.png" alt="alt text" width="90%">
+    <p>5.jpg</p>
+</div>
+<p>总体上Transformer源码，就是由四个class所构成：</p>
+<ul>
+<li><strong>TransformerEncoderLayer</strong>：每一个编码层的实现</li>
+<li><strong>TransformerEncoder</strong>：负责把这些编码层串起来</li>
+<li><strong>TransformerDecoderLayer</strong>：每一个解码层的实现</li>
+<li><strong>TransformerDecoder</strong>：把这些解码层串起来</li>
+</ul>
+<p>这种模块化的设计体现了软件工程的最佳实践：单一职责原则和组合优于继承的思想。</p>
+<h3>Forward函数：编排计算流程</h3>
+<p>在<code>forward</code>函数中，Transformer的计算流程非常清晰：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-6-83e58c3fa3.png" alt="alt text" width="90%">
+    <p>6.jpg</p>
+</div>
+<p>首先encoder输入是source句子以及padding_mask，encoder中的注意力机制不需要掩码，因此mask及is_causal参数不需要传入掩码。但需要对样本长度做掩盖，即<strong>padding_mask</strong>，这个mask表示每一个样本的长度。当我们做训练时，序列长度是不一样的，有些短的样本，在后面的一些位置上就是无效的，通过在softmax中把无效位置上的值转成负无穷，这样经过归一化后概率就变成0，使得在这些位置上，这些没有值的位置变得无效。</p>
+<p>decode输入第一个是target，也就是目标句子。第二个是memory，表示encoder输出，因为memory会输送到交叉注意力中。第三个是target mask，这个target mask是一个考虑因果的mask，在数学上是一个上三角矩阵。</p>
+<h3>因果掩码mask</h3>
+<p>每次预测时，decoder都会有一个输入句子，即：output embedding。但这个output embedding不能全部给它，如果全部给它的话，那它就变成了identity映射，相当于从x到x的关系我给你了，那预测出来的答案肯定是从x到x。</p>
+<p>我们需要保证output每次只根据当前要预测的单词的左边的所有单词，去预测这个单词。这个单词的本身和其他的右边的单词都不要输送到Output Embedding。这样的操作需要通过mask来实现，随着预测的字符往右进行，我们给到这个decoder中的output会越来越多，所以它就是一个上三角的矩阵。</p>
+<p>第四个memory mask，和source sentence的长度有关，在batch训练中source sentence每一个样本都不太一样，memory mask就是每一个输入源序列这个样本的一个长度。</p>
+<h3>Transformer框架</h3>
+<p>这就是Transformer class总体上的构成框架，init函数去实例化encoder和decoder。在forward函数中基于source、target、source mask、target mask，分别入参到encoder和decoder中，最终得到output，即要预测字符的概率。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-7-ed6afb599c.png" alt="alt text" width="90%">
+    <p>7.jpg</p>
+</div>
+<p>Transformer本质上是一个自回归的解码过程，不是并行的预测输出，而是每次只会预测一个，输出一个，然后不断的进行解码去预测出整体的target sentence。</p>
+</div>
+<div class="section" id="llm-happy-transformer-src2-s4"><h2>Encoder编码器层</h2>
+<p>接下来我们分别来看下init函数中的4个class，首先是<strong>单个编码器</strong>的实现：在<code>TransformerEncoderLayer</code>的<code><strong>init</strong></code>函数中，需要实例化四个关键组件：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-8-9857077a3c.png" alt="alt text" width="90%">
+    <p>8.jpg</p>
+</div>
+<p>先是init函数中的参数，和transformer中传入的一致，d_model是整个Transformer的特征维度512。nhead是Multi-head attention中多头自注意力机制中头的数目。</p>
+<h3>多头注意力的设计</h3>
+<p>为什么是多头？目的是让<strong>模型可以捕捉到更多的位置与位置之间的关系</strong>。多头会分为多组的query、key和value，每一组会单独地去计算attention的上下文的向量，最后把这个向量拼起来，再通过FFN得到最终的一个向量。</p>
+<p>这样做的话，对embedding的特征向量的维度会降低，比如说原来的特征向量维度是512，如果我们分为8个头，这时向量每一个头它向量的维度就会变成64（这里不是通过压缩，而是线性变换重组）。每个头独立计算注意力后，会得到8个64维的输出向量。然后通过拼接操作（concatenation），将这8个64维向量首尾相接，重新组合成一个512维的向量。最后再通过一个输出线性变换层，得到最终的512维输出。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-9-56e6a54199.png" alt="alt text" width="90%">
+    <p>9.jpg</p>
+</div>
+<h3>前馈神经网络</h3>
+<p>dimension feed forward是前馈神经网络FFN的维度，因为需要先从512到2048，再从2048到512，所以设定了两个全连接层。前馈神经网络它是对每个单独位置进行一个建模，并且不同位置的参数是共享的。类比1×1的pointwise卷积，对图像中每个像素位置的特征向量独立进行变换。参数共享就是为序列中的每个位置都设计相同的参数，目的是希望模型学会&quot;如何处理特征&quot;的通用能力，而不是&quot;如何处理第x个位置的特征&quot;的特定能力。</p>
+<p>FFN实际上做的是embedding相同位置不同维度间的融合，在每个位置内部对该位置的不同特征维度进行融合，注意力机制负责位置间的信息交流。</p>
+<h3>Encoder编码器层的组件实例化</h3>
+<p>init函数中需要去实例化一些实例：</p>
+<ol>
+<li>首先是Multi-head attention，本节着重整个框架；</li>
+<li>实例FFN前馈神经网络中的两个Linear层，第一个Linear比较大，第二个Linear是重新这个投射到d_model的尺度；</li>
+<li>实例layer norm，在self attention之后会经过层归一化，以及在前馈神经网络之后也会经过一个层归一；</li>
+<li>实例两个dropout，dropout是为了使得这个网络具备集成学习的特点，即使我们在训练多个模提高泛化能力；</li>
+</ol>
+<h3>Encoder编码器前向传播forward: 编排计算流程</h3>
+<p>forward函数中，encoder层的调用很简单。Transformer encoder layer的第一部分：通过self attention block得到一个表征(self._sa_block)，然后再加一个这个残差连接(就是和x加起来)，最后再经过一个层归一化。self attention的输入是序列x和pendding-mask，这里的序列x既充当了query，又充当了key和value。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-10-9baacb58b4.png" alt="alt text" width="90%">
+    <p>10.jpg</p>
+</div>
+<p>第二部分是<strong>feed forward block</strong>，把第一部分输出经过每个位置独立的一个全连接层，再进行一个残差连接，输送到层归一化中就得到x。这个就是Transformer encoder中的每个layer的输出。</p>
+<p>原始论文的设计是层归一化在后，即else的设计。</p>
+<h3>Encoder编码器的串联</h3>
+<p><code>TransformerEncoder</code> class的作用是将多个编码器层串联起来：将上一层的输出作为下一层的输入，经过多层处理得到最终的编码器输出。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-11-84d4db3166.png" alt="alt text" width="90%">
+    <p>11.jpg</p>
+</div>
+<p>init主要是传入两个参数，一个是encoder_layer，表示TransformerEncoderLayer class的一个实例。第二个参数是num_layers，表示transformer encoder有多少层，层的含义就是block。encoder中自注意力机制+前馈神经网络这两块是一个block，也就是一层。</p>
+</div>
+<div class="section" id="llm-happy-transformer-src2-s5"><h2>Decoder解码器</h2>
+<p>解码器的实现比编码器更复杂，因为它包含三个子模块，需要处理更多的交互。</p>
+<p>在<code>TransformerDecoderLayer</code>中，我们需要实例化三套组件（<strong>自注意力+交叉注意力+前馈神经网络</strong>）：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-12-92c70fa6cb.png" alt="alt text" width="90%">
+    <p>12.jpg</p>
+</div>
+<p>在init参数中，第一个是d_model，表示transformer模型特征大小，默认512。第二个参数是nhead，是Transformer decoder的多头自注意力机制的头数。第三个参数是dimension feed forward，表示decoder中FFN前馈神经网络的维度。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-13-54ee37e7b6.png" alt="alt text" width="90%">
+    <p>13.jpg</p>
+</div>
+<h3>Decoder解码器两种注意力机制的区别</h3>
+<p>init参数中，decoder和encoder不同的地方，就是需要实例化两个Multihead attention。</p>
+<p>第一个Multi-head attention，是<strong>自注意力机制</strong>，它是对decoder这个输入序列的，即：target sentence embedding作为输入序列的自身表征。</p>
+<p>第二个Multi-head attention是<strong>交叉注意力机制</strong>，我们想知道decoder multihead attention的输出和encoder输出状态的一个关联性，用该注意力机制跨越了encoder和decoder两个不同序列，不是decoder内部的自我关注，而是让decoder去关注encoder的信息。于是我们通过用decoder MHA（多头注意力）的一个输出作为query，然后用encoder的输出作为key和value来去算出一个上下文表征。</p>
+<p>同样Decoder要实现两个Linear层，第一个Linear层是比较大的，把我们交叉自注意力机制的输出，投射到一个更高维的空间，就是2048。然后再把它投射到低维的空间，就是从2048降成512。由于Decoder有三个模块（自注意力+交叉注意力+前馈神经网络），所以这里要实现3个norm和3个dropout。</p>
+<h3>Decoder解码器forward：编排流程</h3>
+<p>解码器的<code>forward</code>函数体现了三个模块的协同工作：</p>
+<ol>
+<li>第一个模块会把target sentence，也就是序列x和target mask输入到self._sa_block中，对target句子做自注意力机制的计算，结果放入到残差网络中，并且经过层归一化得到输出。</li>
+</ol>
+<ol>
+<li>第二个模块依赖于第一个模块输出的x，再和encoder输出的memory做交叉注意力的计算，得到新的表征后，经过残差网络和归一化的norm输出；</li>
+</ol>
+<ol>
+<li>把第二个模块的输出输送到FFN前馈神经网络，再次进行残差网络和归一化的norm，得到decoder的输出；</li>
+</ol>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-14-40b4c4defd.png" alt="alt text" width="90%">
+    <p>14.jpg</p>
+</div>
+<p>可以看下_sa_block和_mha_block各自的调用，它们都是调用的是Multihead attention，只不过它们的query、key、value是不一样的。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-15-a6ec8f6861.png" alt="alt text" width="90%">
+    <p>15.jpg</p>
+</div>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-16-8c0e9ae746.png" alt="alt text" width="90%">
+    <p>16.jpg</p>
+</div>
+<p>self attention中query、key、value都是目标序列，自身对自身的求相关性的计算。但在交叉注意力机制中，query是decoder的一个输出，key和value是encoder的输出（始终是memory）。</p>
+<p>通过多个TransformerDecoderLayer，构成了TransformerDecoder，和TransformerEncoder实现类似，这里不重复赘述。</p>
+</div>
+<div class="section" id="llm-happy-transformer-src2-s6"><h2>注意力机制的核心计算</h2>
+<p>最后看下注意力机制的核心计算，PyTorch的实际实现更加复杂和优化，但核心思想可以用论文版本来理解：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-17-9d6d86adb8.png" alt="alt text" width="90%">
+    <p>17.jpg</p>
+</div>
+<h3>注意力机制的直观理解</h3>
+<p>attention函数就是将一个query和一个由key和value形成的一对元素，建立一个连接，最终得到一个输出。比如：我们去百度搜索一个词条，这个词条就是query，然后百度的数据库里有很多词条信息，每个信息自身都有个key，value就是该词条的具体内容。我们通过这个query，百度就会给我们返回一个搜索结果。这个结果就可以理解为一个注意力机制--基于query和key+value计算出来的一个上下文。</p>
+<p>注意力机制的计算结果是Value的一个加权求和的结果，权重是基于Query和Key的相似度计算出来的。先算Query和每个Key的相似度，基于这个相似度进行Softmax归一化得到权重，再把这个权重与每个Key所对应的Value进行加权求和。</p>
+<h3>Scaled Dot-Product Attention</h3>
+<p>在Transformer模型中，用的是&quot;Scaled Dot-Product Attention&quot;，这里有个scaled，可以看到公式中就是QK，会除以一个根号d_k，这个目的就是为了使得Softmax的输入分布会更加稳定一点，也就是使得它的方差会更小一点。</p>
+<p>这个Attention由三部分构成，分别是Q、K、V，它们都是三个向量。首先我们会把query和key进行一个矩阵相乘，如果我们单个样本来看就是向量内积，批量来看就是矩阵相乘。</p>
+<p>内积过后再除以一个根号d_K，把每个位置上的这个内积放到一起去做一个归一化。这样就可以得到每个位置上的一个概率的表示，因为Softmax它出来的结果就是它总和为1，然后每一个值都是在0到1之间，得到这样一个概率，然后我们把概率和每个位置上value进行一个加权求和，最终能得到attention的一个输出，这就是scaled dot product attention的计算逻辑。</p>
+<p>论文中讲的Multi-head self attention其实就是有很多个这样的自注意力机制同时计算，算完之后我们把每一个得到的结果给拼起来，得到了Multi-head self attention最终的输出。</p>
+<h3>注意力计算的代码实现</h3>
+<p>attention代码如下，这里我们用的是论文实现的简单版本。输入由query、key和value构成。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/transformer-architecture/images/trans-img-18-68a1b95a7f.png" alt="alt text" width="90%">
+    <p>18.jpg</p>
+</div>
+<p>首先会把这个q跟k的转置进行一个矩阵相乘，那这样的话就能得到一个一✖️t的向量，把这个向量做一个mask。这里的mask就是把等于0的位置，填充一个非常非常小的一个数，负无穷的数，因为负无穷的数经过Softmax这个归一化之后，它就会变成0的概率，目的是希望那些不重要的位置上的概率赋为0。这里的mask，这里只有一个mask，所以你可以理解为那它这里是一个自注意力机制的一个实现，如果有两个mask，那就是交叉注意力机制的实现。</p>
+<p>得到这个p attention就概率分布之后，再把这个p attention跟value进行一个加权求和，得到最终自注意力机制的输出，这是单个自注意力机制的一个计算逻辑，如果是多头的话，最终把单个的输出拼起来就好。</p>
+<p>在Transformer模型中，不同的注意力机制有着不同的QKV来源和映射方式：</p>
+<ol>
+<li><strong>encoder层的query key和value</strong>：在编码器中都是由word embedding加上position encoding后，通过三个独立的线性映射得到QKV；</li>
+</ol>
+<ol>
+<li><strong>在decoder中self attention层</strong>：同样也是通过target sentence embedding+position encoding，通过三个独立的线性映射得到QKV；</li>
+</ol>
+<ol>
+<li><strong>在交叉attention中</strong>：query是由decoder的输出经过一个线性映射得到的，key和value是编码器的输出memory分别经过两个映射得到；</li>
+</ol>
+<p><strong>参考资料：</strong></p>
+<ol>
+<li><a href="https://datawhalechina.github.io/happy-llm/#/" target="_blank" rel="noreferrer">DataWhale HapplyLLM</a></li>
+<li><a href="https://www.bilibili.com/video/BV1o44y1Y7cp/?vd_source=a957a54256d2af7f2a1778751c3855cb&amp;spm_id_from=333.788.videopod.sections" target="_blank" rel="noreferrer">deep_thought</a></li>
+<li><a href="https://nlp.seas.harvard.edu/2018/04/03/attention.html" target="_blank" rel="noreferrer">HandleNLP</a></li>
+</ol>
+</div></div><div class="footer">Happy-LLM 融合内容 · 建议结合左侧路径和术语卡交叉阅读</div></div></section>

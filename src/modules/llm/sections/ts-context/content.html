@@ -1,0 +1,164 @@
+<section class="llm-mod llm-m-tp llm-m-ts-context" id="llm-ts-context"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#0d9488;--hero-b:#1d4ed8;">
+  <h1>🧵 上下文工程技术栈详解</h1>
+  <p>第 2 章技术点的完整展开：KV Cache、Prefix Cache、提示注入防御与 Agent 上下文设计</p>
+</div>
+
+<div class="section" id="llm-ts-context-s1">
+  <h2>Chat Template 与 Tokenization 边界</h2>
+  <p>API 接受的 message 数组（<code>system</code> / <code>user</code> / <code>assistant</code> / <code>tool</code>）在模型实际处理之前，必须被 tokenizer 拼接成一条扁平的 token 序列。这个过程由 <strong>chat template</strong> 控制。</p>
+  <p>不同模型的模板完全不同，常见的有：</p>
+  <ul>
+    <li><strong>ChatML（OpenAI 风格，Qwen 系列）</strong>：用 <code>&lt;|im_start|&gt;role</code> 和 <code>&lt;|im_end|&gt;</code> 标记。</li>
+    <li><strong>Llama 3</strong>：用 <code>&lt;|start_header_id|&gt;role&lt;|end_header_id|&gt;</code> 和 <code>&lt;|eot_id|&gt;</code>。</li>
+    <li><strong>Zephyr / Phi-3 风格</strong>：用 <code>&lt;|system|&gt;</code> / <code>&lt;|user|&gt;</code> / <code>&lt;|assistant|&gt;</code> + <code>&lt;|end|&gt;</code>——注意这与 ChatML 不同，混淆后微调特殊 token 不匹配。</li>
+  </ul>
+  <p>实践中应始终用 <code>tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)</code> 而不是手拼字符串。微调时如果模板与推理时不一致，模型输出会混乱——这是"模型跑不起来"中最难诊断的一类问题。</p>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    Messages[messages 数组<br/>system user assistant] --> CT[apply_chat_template]
+    CT --> Flat[扁平 token 序列]
+    Flat --> Model[模型]
+    Mismatch[模板不一致<br/>微调 vs 推理] -->|特殊 token 错位| Bad[输出混乱]
+</pre></div>
+</div>
+
+<div class="section" id="llm-ts-context-s2">
+  <h2>KV Cache 与 Prefix Cache：两个层级</h2>
+  <p>这两个层级经常被混淆，但它们是独立的机制：</p>
+  <ul>
+    <li><strong>KV Cache</strong>：单次生成内部，已生成的 token 的 K/V 向量被缓存，避免每步重算整个历史序列。这是所有自回归生成模型的标准实现，对 API 用户透明。</li>
+    <li><strong>Prefix Cache（跨请求复用）</strong>：服务端把多个请求共享的前缀的 KV Cache 保留在显存中，后续命中相同前缀的请求直接复用，跳过 Prefill 阶段对该部分的计算。Anthropic 的 prompt caching、vLLM 的 automatic prefix caching 都是这一机制。</li>
+  </ul>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    subgraph "KV Cache 单次生成内"
+        P[Prefill<br/>计算所有输入 token 的 KV] --> D[Decode<br/>每步只算新 token<br/>复用历史 KV]
+    end
+    subgraph "Prefix Cache 跨请求"
+        Req1[请求1<br/>相同系统提示] --> Cache[服务端缓存<br/>该前缀的 KV]
+        Req2[请求2<br/>相同系统提示] --> Cache
+        Cache -->|命中| Skip[跳过前缀 Prefill<br/>节省 50-90 TTFT]
+    end
+</pre></div>
+  <h3>为什么改前缀会导致缓存完全失效</h3>
+  <p>自注意力是因果的——位置 i 的 K/V 向量在「已看到前 i 个 token」的条件下计算。前缀变了，后续每个位置的因果上下文都变了，K/V 不再正确，必须全部重算。这不是实现上的缺陷，而是注意力机制的数学特性。</p>
+  <p><strong>工程约束</strong>：系统提示词里不要放时间戳、session ID、随机数；把稳定内容（角色定义、工具列表、知识片段）放前面，把会变的内容（用户最新消息、工具结果）放后面。一旦前缀相同，后续只要追加而不是重写，缓存就一直有效。</p>
+</div>
+
+<div class="section" id="llm-ts-context-s3">
+  <h2>消息四角色与工具调用两跳</h2>
+  <p>API 的四种角色各有其位置和语义：</p>
+  <ul>
+    <li><strong>system</strong>：设定行为、身份、约束，只能有一条（或在 Claude API 中可出现在 user 前的单独字段），模型对它有最高信任度。</li>
+    <li><strong>user</strong>：人类输入，或 Agent 框架注入的指令。</li>
+    <li><strong>assistant</strong>：模型的上一轮输出，提供"到目前为止我说了什么"的上下文。</li>
+    <li><strong>tool</strong>（或 <code>tool_result</code>）：工具执行的返回值，<strong>必须紧跟对应的 tool_use</strong>——顺序不能错，否则模型无法关联响应与调用。</li>
+  </ul>
+  <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+    participant U as User
+    participant M as 模型
+    participant T as 工具
+    U->>M: user 消息
+    M->>T: tool_use 调用工具
+    T->>M: tool_result 返回结果
+    M->>U: assistant 最终回复
+</pre></div>
+  <p>工具调用是两跳：第一跳模型发出 <code>tool_use</code>（包含 tool 名和参数），应用层执行实际调用，第二跳把结果以 <code>tool_result</code> 消息回填。每个 <code>tool_result</code> 要带上 <code>tool_use_id</code> 对应关系——一次对话可以并行调用多个工具，回填时用 ID 配对。</p>
+</div>
+
+<div class="section" id="llm-ts-context-s4">
+  <h2>System Prompt 工程</h2>
+  <p>系统提示词不是越长越好。关键是<strong>流程驱动</strong>而非规则堆砌——描述模型应该走什么流程，而不是列一长串「不能做什么」。</p>
+  <h3>结构化提示的四个区</h3>
+  <ul>
+    <li><strong>角色区</strong>：简短说明模型是谁、服务什么场景、口吻。</li>
+    <li><strong>流程区</strong>：按步骤描述应对各类请求的处理路径，比「不要这样做」更有效。</li>
+    <li><strong>约束区</strong>：真正的硬限制，简短列举，避免重复。</li>
+    <li><strong>Few-shot 区（可选）</strong>：示例对话，适合有固定格式输出的场景；对话式场景少用或不用——示例会消耗大量 token，且命中率低。</li>
+  </ul>
+  <h3>工具定义的描述即文档</h3>
+  <p>工具的 description 字段是给模型看的 API 文档，不是给开发者看的注释。写法原则：</p>
+  <ul>
+    <li>说清楚<strong>什么时候调用</strong>（触发条件），而不只是描述功能。</li>
+    <li>参数命名要自解释（<code>user_query</code> 好过 <code>q</code>），类型用 enum 收窄取值空间。</li>
+    <li>说明返回值的结构——模型需要知道怎么读结果。</li>
+    <li>返回值结构要稳定：每次调用结果格式不一，模型会出错。</li>
+  </ul>
+</div>
+
+<div class="section" id="llm-ts-context-s5">
+  <h2>提示注入与上下文安全</h2>
+  <p>提示注入是把「指令」藏进「数据」里，让模型误把攻击者的指令当作正规操作执行。</p>
+  <h3>两种形式</h3>
+  <ul>
+    <li><strong>直接注入</strong>：用户在输入框里直接写「忽略上面的指令，改做……」</li>
+    <li><strong>间接注入</strong>：攻击指令藏在工具返回值、检索到的网页、读取的文件里——Agent 执行了工具，把攻击指令回填进上下文，模型「读」到它后就可能被劫持。</li>
+  </ul>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    User[用户请求] --> Agent[Agent 执行搜索工具]
+    Agent --> Web[获取网页内容]
+    Web --> Inject[网页含隐藏指令<br/>忽略之前说的<br/>转账给攻击者]
+    Inject --> Model[模型读到后执行了?]
+    Model --> Defense[防御层<br/>标注来源 + 权限门控]
+</pre></div>
+  <h3>防御分层（没有银弹，需要叠加）</h3>
+  <ul>
+    <li><strong>输入侧</strong>：在工具返回值前标注来源和信任级别（「以下内容来自不可信的网页」），指令与数据在结构上分离。</li>
+    <li><strong>执行侧</strong>：危险动作（发邮件、转账、删文件）放在人类确认闸门之后；权限最小化，工具只有它需要的权限。</li>
+    <li><strong>输出侧</strong>：对敏感操作的执行结果做二次验证；引入审计日志。</li>
+    <li><strong>不可靠的防御</strong>：「纯靠提示词」告诉模型不要执行外部指令——在强攻击面前失效率高。没有结构性隔离的提示词防御只是安慰剂。</li>
+  </ul>
+</div>
+
+<div class="section" id="llm-ts-context-s6">
+  <h2>Agent Skills 与动态提示词</h2>
+  <p>Agent 需要应对多种场景，把所有场景的知识都塞进系统提示会导致上下文膨胀、前缀不稳定（破坏 Prefix Cache）、以及注意力稀释（模型在长提示中容易忽略中间内容）。</p>
+  <p>Skill（技能单元）是解法：把领域能力做成可组合的、按需加载的片段。每个 Skill 是一个独立的文档（通常在 CLAUDE.md 或类似机制里），包含触发条件、步骤流程、注意事项。</p>
+  <h3>渐进式披露</h3>
+  <p>先给模型「目录」，告诉它有哪些 Skill 可用，用到哪个才展开全文。这样系统提示维持在 1–2KB，而不是把 20 个场景全部平铺（可能 20KB）。</p>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    Sys[系统提示<br/>含 Skills 目录索引] --> Q[用户请求]
+    Q --> Router[Agent 判断需要哪个 Skill]
+    Router --> Load[按需加载对应 Skill 全文]
+    Load --> Context[注入当前上下文窗口]
+    Context --> Exec[执行]
+</pre></div>
+  <p><strong>Skill 与工具的区别</strong>：工具是可执行的函数（API 调用），Skill 是如何使用工具的知识（说明文档）。一个 Skill 可能包含「何时用工具 A 而非工具 B」「参数应该怎么填」等决策逻辑。</p>
+</div>
+
+<div class="section" id="llm-ts-context-s7">
+  <h2>Agent 状态栏与缓存代价</h2>
+  <p>在 Agent 轨迹里注入结构化元信息（剩余预算、当前子目标、待办清单）可以显著提升任务追踪能力，尤其在长任务里防止模型「忘记」正在做什么。</p>
+  <h3>两种实现与各自的缓存代价</h3>
+  <ul>
+    <li><strong>每轮重写</strong>：把状态块放在系统提示末尾，每轮更新。优点是状态始终最新；缺点是<strong>每次都打断 Prefix Cache</strong>——系统提示变了，KV Cache 全部失效，相当于每轮都重算整个前缀。</li>
+    <li><strong>追加式</strong>：把状态更新作为新消息追加（user 或 tool_result 角色）。前缀不变，Prefix Cache 命中；代价是上下文逐渐变长，旧状态冗余。</li>
+  </ul>
+  <p><strong>工程取舍</strong>：短任务（5–10 步）用重写方便；长任务或高频调用场景应优先追加，避免每轮支付 Prefill 重算代价。</p>
+</div>
+
+<div class="section" id="llm-ts-context-s8">
+  <h2>上下文压缩策略</h2>
+  <p>上下文超出窗口不只是「放不下」的问题。「中间迷失」效应表明，即使在窗口范围内，模型对放在中间的信息注意力也明显下降。压缩的目标不只是缩短长度，而是保留结构性锚点。</p>
+  <h3>分层压缩</h3>
+  <ul>
+    <li><strong>原文</strong>：最近几轮对话、关键工具结果——保留原文。</li>
+    <li><strong>摘要层</strong>：较早的对话轮次压缩成「已达成的结论 + 待处理的问题」摘要。</li>
+    <li><strong>索引层</strong>：非常早期的内容只保留可按需检索的索引（文档 ID、章节标题），需要时再拉取原文。</li>
+  </ul>
+  <h3>压缩与 KV Cache 的关系</h3>
+  <p>压缩是一次性投资：执行一次摘要需要重算当前上下文（KV Cache 失效），但后续每一轮的输入更短，KV Cache 规模下降，长期更经济。适合每 20–30 轮执行一次，而非每轮都压缩（那会抵消收益）。</p>
+  <h3>隔离优于压缩</h3>
+  <p>子任务分发给子 Agent 执行，子 Agent 只有自己那个子任务的上下文，不带整个主对话历史。信息通过结构化的结果对象回传，而不是把整段对话贴进来。这在上下文管理上是最彻底的解法，代价是需要设计好子任务的输入/输出协议。</p>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    Main[主 Agent<br/>完整历史] --> Sub[子 Agent<br/>只有子任务上下文]
+    Sub --> Result[结构化结果]
+    Result --> Main
+</pre></div>
+</div>
+</div></section>

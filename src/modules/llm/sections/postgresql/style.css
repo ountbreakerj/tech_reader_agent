@@ -1,0 +1,101 @@
+
+.llm-m-postgresql .module-wrapper *, .llm-m-postgresql .module-wrapper *::before, .llm-m-postgresql .module-wrapper *::after { box-sizing: border-box; margin: 0; padding: 0; }
+.llm-m-postgresql h1 { font-size: 1.875rem; text-align: left; margin: 0 0 0.75rem;  font-weight: 700; letter-spacing: -0.025em; line-height: 1.3; }
+.llm-m-postgresql h1 + .subtitle { text-align: left;  font-size: 1.1rem; margin-bottom: 2rem; line-height: 1.6; }
+.llm-m-postgresql h2 { font-size: 1.5rem;  margin: 2.5rem 0 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--lc-border); display: block; font-weight: 700; letter-spacing: -0.015em; line-height: 1.4; }
+.llm-m-postgresql h3 { font-size: 1.2rem;  margin: 2rem 0 0.5rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.4; }
+.llm-m-postgresql h4 { font-size: 1.05rem;  margin: 1.5rem 0 0.5rem; font-weight: 600; }
+.llm-m-postgresql p { margin: 0.75rem 0;  line-height: 1.75; }
+.llm-m-postgresql strong { font-weight: 600; }
+.llm-m-postgresql a { text-decoration: none; transition: color 0.15s ease; }
+.llm-m-postgresql a:hover { text-decoration: underline; }
+.llm-m-postgresql ul, .llm-m-postgresql ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+.llm-m-postgresql li { margin: 0.25rem 0;  line-height: 1.75; }
+.llm-m-postgresql .hero { border-radius: 16px; padding: 2rem;
+      margin: 2rem 0; text-align: left;
+      border: 1px solid var(--lc-border); }
+.llm-m-postgresql .hero h4 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.llm-m-postgresql .section { border-radius: 16px; padding: 2rem 2.5rem;
+      margin: 2rem 0;  border: 1px solid var(--lc-border);
+      transition: opacity 0.5s ease, transform 0.5s ease; }
+.llm-m-postgresql .section.visible { opacity: 1; }
+.llm-m-postgresql .callout { border-radius: 12px; padding: 1rem 1.25rem; margin: 1.25rem 0;
+      position: relative; padding-left: 2.75rem; font-size: 0.93rem;
+      border: 1px solid; }
+.llm-m-postgresql .callout::before { position: absolute; left: 0.85rem; top: 1rem; font-size: 1.1rem; }
+.llm-m-postgresql .callout-tip::before { content: '💡'; }
+.llm-m-postgresql .callout-warn::before { content: '⚠️'; }
+.llm-m-postgresql .callout-analogy::before { content: '🎯'; }
+.llm-m-postgresql .callout-key::before { content: '🔑'; }
+.llm-m-postgresql .callout-info::before { content: '📖'; }
+.llm-m-postgresql .callout-practice { border-width: 2px; }
+.llm-m-postgresql .callout-practice::before { content: '✏️'; }
+.llm-m-postgresql .practice-header { display: flex; align-items: center; gap: 0.5rem;
+      font-size: 1rem; font-weight: 700; 
+      margin-bottom: 0.75rem; letter-spacing: -0.01em; }
+.llm-m-postgresql .practice-header .badge { display: inline-flex; align-items: center; gap: 0.25rem;
+       
+      font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.5rem;
+      border-radius: 9999px; letter-spacing: 0.03em; }
+.llm-m-postgresql .practice- .practice-body p { margin: 0.4rem 0; font-size: 0.93rem; }
+.llm-m-postgresql .practice-hint { margin-top: 0.75rem; padding: 0.6rem 0.9rem;
+       border-radius: 8px;
+      font-size: 0.85rem;  border: 1px dashed #86efac; }
+.llm-m-postgresql .code-block-wrapper { position: relative; margin: 1rem 0; border-radius: 12px;
+      overflow: visible; border: 1px solid #313244; }
+.llm-m-postgresql .code-header { display: flex; align-items: center; justify-content: space-between;
+       padding: 0.5rem 1rem; border-bottom: 1px solid #313244; }
+.llm-m-postgresql .code-lang { font-size: 0.75rem;  font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      font-family: 'JetBrains Mono', monospace; }
+.llm-m-postgresql .copy-btn { display: flex; align-items: center; gap: 0.4rem;
+       border: 1px solid #45475a; border-radius: 6px;
+       font-size: 0.75rem; padding: 0.25rem 0.65rem;
+      cursor: pointer; transition: all 0.15s ease; font-family: inherit; }
+.llm-m-postgresql pre { border-radius: 0;
+      padding: 1.15rem 1.25rem; overflow-x: auto; margin: 0;
+      font-size: 0.87rem; line-height: 1.65;
+      font-family: 'JetBrains Mono', monospace; }
+.llm-m-postgresql pre code { font-family: inherit; }
+.llm-m-postgresql p code, .llm-m-postgresql li code, .llm-m-postgresql td code { padding: 0.15rem 0.35rem; border-radius: 4px;
+      font-size: 0.88em;  font-family: 'JetBrains Mono', monospace;
+      border: 1px solid var(--lc-border); }
+.llm-m-postgresql .cmt { font-style: italic; }
+.llm-m-postgresql table { width: 100%; border-collapse: collapse; margin: 1.25rem 0;
+      font-size: 0.92rem; border-radius: 12px; overflow: visible;
+      border: 1px solid var(--lc-border); }
+.llm-m-postgresql th { padding: 0.6rem 1rem;
+      text-align: left; font-weight: 600; border-bottom: 1px solid var(--lc-border); }
+.llm-m-postgresql td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--lc-border-light); }
+.llm-m-postgresql tr:last-child td { border-bottom: none; }
+.llm-m-postgresql .diagram { border: 1px solid var(--lc-border); border-radius: 16px;
+      padding: 1.5rem; margin: 1.5rem 0; text-align: center; overflow-x: auto; }
+.llm-m-postgresql .diagram .caption { font-size: 0.85rem;  margin-top: 0.8rem; font-style: italic; }
+.llm-m-postgresql .step { display: flex; align-items: flex-start; gap: 1rem;
+      margin: 0.75rem 0; padding: 0.85rem 1.15rem;
+       border-radius: 12px;
+      border: 1px solid var(--lc-border); }
+.llm-m-postgresql .step-num { width: 1.75rem; height: 1.75rem; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; flex-shrink: 0; font-size: 0.8rem; }
+.llm-m-postgresql .step-content { flex: 1; }
+.llm-m-postgresql .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.25rem 0; }
+.llm-m-postgresql .compare-card { border-radius: 12px; padding: 1.25rem;
+      border: 1px solid var(--lc-border); }
+.llm-m-postgresql .compare-card h4 { margin: 0 0 0.75rem; text-align: center; }
+.llm-m-postgresql .footer { text-align: center;  font-size: 0.85rem;
+      margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--lc-border); }
+@media (max-width: 600px) {
+.llm-m-postgresql h1 { font-size: 1.5rem; }
+.llm-m-postgresql .compare { grid-template-columns: 1fr; }
+.llm-m-postgresql pre { font-size: 0.8rem; padding: 1rem; }
+.llm-m-postgresql .section { padding: 1.25rem; border-radius: 12px; }
+.llm-m-postgresql .hero { padding: 1.25rem; border-radius: 12px; }
+.llm-m-postgresql .step { padding: 0.75rem 1rem; }
+}
+.llm-m-postgresql .hero-banner { border-radius: var(--radius-md);
+      padding: 2.5rem; margin: 2rem 0; text-align: center; }
+.llm-m-postgresql .hero-banner h1 { font-size: 2rem; margin-bottom: 0.75rem; }
+.llm-m-postgresql .hero-banner p { font-size: 1.05rem; }
+.llm-m-postgresql .vs-table { border-radius: var(--radius-md); padding: 1.5rem; margin: 1.5rem 0; }
+.llm-m-postgresql .vs-table h4 { margin-top: 0; text-align: center; color: var(--lc-text); }

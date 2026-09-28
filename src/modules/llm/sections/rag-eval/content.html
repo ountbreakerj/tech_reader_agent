@@ -1,0 +1,674 @@
+<section class="llm-mod llm-m-rag-eval" id="llm-rag-eval"><div class="module-wrapper">
+<h1>RAG评估体系</h1>
+<p>构建RAG系统后，如何知道它好不好？本章系统介绍RAG评估的方法论、工具和实践。</p>
+
+<!-- ========== 1. RAG评估概述 ========== -->
+<h2>1. RAG评估概述</h2>
+
+<h3>为什么评估很重要</h3>
+<p>RAG系统涉及检索和生成两个阶段，任何一阶段出现问题都会导致最终回答质量下降。没有评估，就无法：</p>
+<ul>
+    <li>量化系统表现，无法做出数据驱动的优化决策</li>
+    <li>比较不同检索策略（向量检索 vs BM25 vs 混合检索）的优劣</li>
+    <li>监控线上系统的质量退化（数据更新、模型升级后）</li>
+    <li>满足合规要求（金融、医疗等领域需要可审计的评估记录）</li>
+</ul>
+
+<h3>离线评估 vs 在线评估</h3>
+<table>
+    <tr><th>维度</th><th>离线评估</th><th>在线评估</th></tr>
+    <tr><td>数据来源</td><td>人工标注的测试集</td><td>真实用户交互数据</td></tr>
+    <tr><td>评估时机</td><td>开发/迭代阶段</td><td>生产运行时</td></tr>
+    <tr><td>成本</td><td>标注成本较高</td><td>需要埋点和反馈机制</td></tr>
+    <tr><td>优势</td><td>可控、可重复</td><td>反映真实场景</td></tr>
+    <tr><td>工具</td><td>RAGAS、DeepEval</td><td>A/B测试、用户反馈</td></tr>
+</table>
+
+<h3>评估维度</h3>
+<p>RAG评估通常从三个层面展开：</p>
+<ul>
+    <li><strong>检索质量</strong>：检索到的文档是否相关、是否全面</li>
+    <li><strong>生成质量</strong>：LLM是否忠于检索到的上下文、回答是否流畅</li>
+    <li><strong>端到端质量</strong>：整体回答是否正确、有无幻觉</li>
+</ul>
+
+<!-- ========== 2. RAGAS框架 ========== -->
+<h2>2. RAGAS框架</h2>
+
+<p>RAGAS（Retrieval Augmented Generation Assessment）是最流行的RAG评估框架，提供自动化的多维度评估。</p>
+
+<h3>安装</h3>
+<pre><code>pip install ragas
+pip install langchain langchain-openai  # 可选，用于构建评估链</code></pre>
+
+<h3>核心指标详解</h3>
+
+<div class="metric-card">
+    <h4>Faithfulness（忠实度）</h4>
+    <p>衡量生成的答案是否忠实于检索到的上下文。将答案拆分为若干独立陈述，逐一检查是否能从上下文中推导出来。</p>
+    <p><strong>公式：</strong> <code>Faithfulness = 支持的陈述数 / 总陈述数</code></p>
+    <p><span class="tag">关键</span> 分数越低说明幻觉越严重</p>
+</div>
+
+<div class="metric-card">
+    <h4>Answer Relevancy（答案相关性）</h4>
+    <p>衡量生成的答案是否真正回答了用户的问题。通过让LLM反向生成问题，再计算原始问题与生成问题的相似度。</p>
+    <p><strong>公式：</strong> <code>Relevancy = mean(cos_sim(original_q, generated_q_i))</code></p>
+</div>
+
+<div class="metric-card">
+    <h4>Context Precision（上下文精确度）</h4>
+    <p>衡量相关文档在检索结果中的排名位置。相关文档排在前面则分数高。</p>
+    <p><strong>公式：</strong> <code>Precision@K = 排名K处的精确度加权和</code></p>
+</div>
+
+<div class="metric-card">
+    <h4>Context Recall（上下文召回率）</h4>
+    <p>衡量是否召回了所有与答案相关的参考文档。需要 ground truth 答案作为参考。</p>
+    <p><strong>公式：</strong> <code>Recall = 被检索到的GT句子数 / GT总句子数</code></p>
+</div>
+
+<h3>代码示例</h3>
+<pre><code>from ragas import evaluate
+from ragas.metrics import (
+    faithfulness,
+    answer_relevancy,
+    context_precision,
+    context_recall,
+)
+from datasets import Dataset
+
+# 准备评估数据集
+eval_data = {
+    "question": [
+        "什么是向量数据库？",
+        "RAG和微调有什么区别？",
+    ],
+    "answer": [
+        "向量数据库是专门存储和检索高维向量的数据库系统。",
+        "RAG通过检索外部知识增强生成，微调直接修改模型参数。",
+    ],
+    "contexts": [
+        ["向量数据库（Vector Database）是专门为存储、索引和查询高维向量嵌入而设计的数据库。"
+         "常见的向量数据库包括 Pinecone、Milvus、Weaviate 等。"],
+        ["RAG在推理时检索相关文档注入prompt，不改变模型权重。"
+         "微调通过在特定数据上训练来修改模型参数。两者可结合使用。"],
+    ],
+    "ground_truth": [
+        "向量数据库是专门存储和检索高维向量的数据库系统，常用于AI应用。",
+        "RAG检索外部知识增强生成而不修改参数；微调修改模型参数以适应特定任务。",
+    ],
+}
+
+dataset = Dataset.from_dict(eval_data)
+
+# 运行评估
+results = evaluate(
+    dataset=dataset,
+    metrics=[
+        faithfulness,
+        answer_relevancy,
+        context_precision,
+        context_recall,
+    ],
+)
+
+print(results)
+# 输出类似：
+# {'faithfulness': 0.92, 'answer_relevancy': 0.88,
+#  'context_precision': 0.85, 'context_recall': 0.78}
+
+# 转为DataFrame查看详情
+df = results.to_pandas()
+print(df[["question", "faithfulness", "answer_relevancy"]].to_string())</code></pre>
+
+<div class="callout">
+    <strong>提示</strong>
+    RAGAS需要配置LLM（默认OpenAI）来执行评估。可通过 <code>evaluate()</code> 的 <code>llm</code> 参数自定义评估用的大模型。
+</div>
+
+<!-- ========== 3. 检索评估指标 ========== -->
+<h2>3. 检索评估指标</h2>
+
+<p>检索阶段的评估关注"找回来的文档是否正确、是否全面"。以下是常用指标：</p>
+
+<h3>Recall@K</h3>
+<p>在前K个检索结果中，命中了多少相关文档。</p>
+<pre><code>def recall_at_k(retrieved_ids: list, relevant_ids: set, k: int) -> float:
+    """计算 Recall@K"""
+    retrieved_top_k = set(retrieved_ids[:k])
+    hits = retrieved_top_k & relevant_ids
+    return len(hits) / len(relevant_ids) if relevant_ids else 0.0
+
+# 示例
+relevant = {"doc_1", "doc_3", "doc_5"}
+retrieved = ["doc_1", "doc_2", "doc_3", "doc_4", "doc_5"]
+
+print(f"Recall@3: {recall_at_k(retrieved, relevant, 3):.2f}")  # 0.67
+print(f"Recall@5: {recall_at_k(retrieved, relevant, 5):.2f}")  # 1.00</code></pre>
+
+<h3>Precision@K</h3>
+<p>在前K个检索结果中，有多少是相关文档。</p>
+<pre><code>def precision_at_k(retrieved_ids: list, relevant_ids: set, k: int) -> float:
+    """计算 Precision@K"""
+    retrieved_top_k = retrieved_ids[:k]
+    hits = sum(1 for doc in retrieved_top_k if doc in relevant_ids)
+    return hits / k
+
+print(f"Precision@3: {precision_at_k(retrieved, relevant, 3):.2f}")  # 0.67
+print(f"Precision@5: {precision_at_k(retrieved, relevant, 5):.2f}")  # 0.60</code></pre>
+
+<h3>MRR（Mean Reciprocal Rank）</h3>
+<p>第一个相关文档排名的倒数的均值，衡量"找到第一个正确答案的速度"。</p>
+<pre><code>def mrr(queries_results: list[list[str]], queries_relevant: list[set]) -> float:
+    """计算 Mean Reciprocal Rank"""
+    rr_sum = 0.0
+    for retrieved, relevant in zip(queries_results, queries_relevant):
+        for rank, doc_id in enumerate(retrieved, start=1):
+            if doc_id in relevant:
+                rr_sum += 1.0 / rank
+                break
+    return rr_sum / len(queries_results)
+
+# 示例
+queries_results = [
+    ["doc_2", "doc_1", "doc_3"],  # 第一个相关文档在第2位
+    ["doc_5", "doc_6", "doc_7"],  # 第一个相关文档在第1位
+]
+queries_relevant = [{"doc_1"}, {"doc_5", "doc_7"}]
+
+print(f"MRR: {mrr(queries_results, queries_relevant):.2f}")  # (0.5 + 1.0) / 2 = 0.75</code></pre>
+
+<h3>NDCG（Normalized Discounted Cumulative Gain）</h3>
+<pre><code>import numpy as np
+
+def dcg_at_k(scores: list[float], k: int) -> float:
+    """计算 DCG@K"""
+    scores = np.array(scores[:k])
+    positions = np.arange(1, len(scores) + 1)
+    return float(np.sum(scores / np.log2(positions + 1)))
+
+def ndcg_at_k(retrieved_scores: list[float], ideal_scores: list[float], k: int) -> float:
+    """计算 NDCG@K"""
+    dcg = dcg_at_k(retrieved_scores, k)
+    idcg = dcg_at_k(sorted(ideal_scores, reverse=True), k)
+    return dcg / idcg if idcg > 0 else 0.0
+
+# 检索结果的相关性分数（由标注人员给出）
+retrieved_scores = [3, 2, 0, 0, 1]  # 实际排序的相关性
+ideal_scores     = [3, 2, 1, 0, 0]  # 理想排序
+
+print(f"NDCG@3: {ndcg_at_k(retrieved_scores, ideal_scores, 3):.4f}")
+print(f"NDCG@5: {ndcg_at_k(retrieved_scores, ideal_scores, 5):.4f}")</code></pre>
+
+<h3>Hit Rate</h3>
+<p>至少命中一个相关文档的查询占比。</p>
+<pre><code>def hit_rate(queries_results: list[list[str]], queries_relevant: list[set], k: int) -> float:
+    """计算 Hit Rate@K"""
+    hits = 0
+    for retrieved, relevant in zip(queries_results, queries_relevant):
+        if any(doc in relevant for doc in retrieved[:k]):
+            hits += 1
+    return hits / len(queries_results)</code></pre>
+
+<!-- ========== 4. 生成评估指标 ========== -->
+<h2>4. 生成评估指标</h2>
+
+<h3>LLM-as-Judge</h3>
+<p>使用强大的LLM（如GPT-4o、GPT-5.5）作为裁判，对生成的答案进行多维度评分。这是目前最主流的自动化评估方式。</p>
+
+<pre><code>from openai import OpenAI
+
+client = OpenAI()
+
+def llm_judge(question: str, answer: str, context: str) -> dict:
+    """使用 LLM 作为裁判评估答案质量"""
+    prompt = f"""你是一个严格的评估专家。请根据以下信息对回答进行评分。
+
+## 用户问题
+{question}
+
+## 检索到的上下文
+{context}
+
+## 系统回答
+{answer}
+
+请从以下维度评分（1-5分），并给出理由：
+1. 准确性：回答中的事实是否正确
+2. 完整性：是否覆盖了问题的所有方面
+3. 忠实性：是否基于提供的上下文回答
+4. 流畅性：语言是否自然流畅
+
+请以JSON格式输出：
+{{"accuracy": {{"score": N, "reason": "..."}}, "completeness": {{"score": N, "reason": "..."}}, "faithfulness": {{"score": N, "reason": "..."}}, "fluency": {{"score": N, "reason": "..."}}}}"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    return response.choices[0].message.content
+
+# 使用示例
+result = llm_judge(
+    question="RAG系统有哪些优化方法？",
+    answer="RAG系统的优化方法包括：优化chunk大小、使用混合检索、添加重排序模型等。",
+    context="RAG优化方法包括文档分块策略优化（调整chunk_size和overlap）、"
+            "混合检索（结合BM25和向量检索）、查询重写（HyDE）、"
+            "重排序（使用Cross-Encoder对检索结果重排）等。"
+)
+print(result)</code></pre>
+
+<h3>人工评估设计</h3>
+<p>自动化指标无法完全替代人工评估。设计人工评估时注意：</p>
+<ul>
+    <li><strong>评估标准明确</strong>：制定详细的评分rubric（如1-5分每个等级的定义）</li>
+    <li><strong>多人交叉评估</strong>：至少2人独立评分，计算Cohen's Kappa一致性</li>
+    <li><strong>覆盖边界情况</strong>：包含无答案问题、模糊问题、多跳推理等场景</li>
+    <li><strong>盲评</strong>：评估者不知道答案来自哪个系统版本</li>
+</ul>
+
+<h3>G-Eval</h3>
+<p>G-Eval利用LLM生成评估步骤，再按步骤打分，比直接评分更稳定。</p>
+<pre><code>def g_eval(question: str, answer: str, criteria: str = "coherence") -> float:
+    """G-Eval: 让LLM先生成评估步骤，再打分"""
+    # Step 1: 生成评估步骤
+    step_prompt = f"""你是一个评估专家。请为以下评估标准生成详细的评估步骤。
+
+评估标准：{criteria}
+用户问题：{question}
+待评估回答：{answer}
+
+输出3-5个具体的评估步骤。"""
+
+    steps_response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": step_prompt}],
+        temperature=0,
+    )
+    eval_steps = steps_response.choices[0].message.content
+
+    # Step 2: 按步骤评估并打分
+    score_prompt = f"""请按照以下评估步骤，对回答进行1-5分的评分。
+
+评估步骤：
+{eval_steps}
+
+用户问题：{question}
+待评估回答：{answer}
+
+请只输出一个1-5的整数分数。"""
+
+    score_response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": score_prompt}],
+        temperature=0,
+        max_tokens=10,
+    )
+    score = int(score_response.choices[0].message.content.strip())
+    return score</code></pre>
+
+<!-- ========== 5. 端到端评估 ========== -->
+<h2>5. 端到端评估</h2>
+
+<h3>整体回答正确性</h3>
+<p>端到端评估不拆分检索和生成，直接评估最终回答是否正确。</p>
+
+<pre><code>def evaluate_e2e_correctness(question: str, answer: str, ground_truth: str) -> dict:
+    """端到端正确性评估"""
+    prompt = f"""比较系统回答和标准答案，判断回答是否正确。
+
+问题：{question}
+标准答案：{ground_truth}
+系统回答：{answer}
+
+评判标准：
+- 完全正确（correct）：核心信息全部正确
+- 部分正确（partially_correct）：部分信息正确，有遗漏
+- 不正确（incorrect）：核心信息错误
+
+请以JSON输出：{{"verdict": "correct/partially_correct/incorrect", "reason": "..."}}"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    return response.choices[0].message.content</code></pre>
+
+<h3>幻觉检测</h3>
+<p>检测回答中是否存在无法从上下文推导出的信息（即幻觉）。</p>
+
+<pre><code>def detect_hallucination(answer: str, context: str) -> dict:
+    """检测回答中的幻觉"""
+    prompt = f"""请仔细分析以下回答，找出其中无法从上下文中推导出的信息。
+
+上下文：
+{context}
+
+回答：
+{answer}
+
+对回答中的每条陈述，判断：
+- grounded：能从上下文直接推导
+- not_grounded：无法从上下文推导（即幻觉）
+
+请以JSON输出每条陈述的判断。"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    return response.choices[0].message.content</code></pre>
+
+<h3>Groundedness评分</h3>
+<p>Groundedness量化回答中基于上下文的内容占比，与Faithfulness类似但更关注信息来源的可追溯性。</p>
+
+<pre><code>def groundedness_score(answer: str, context: str) -> float:
+    """计算 Groundedness 评分"""
+    prompt = f"""将以下回答拆分为独立的原子事实陈述。
+然后判断每条陈述是否能从上下文中找到支持。
+
+上下文：{context}
+回答：{answer}
+
+输出JSON：
+{{"statements": [{{"text": "...", "supported": true/false}}], "score": 0.0-1.0}}"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+    result = response.choices[0].message.content
+    return result</code></pre>
+
+<!-- ========== 6. A/B测试框架 ========== -->
+<h2>6. A/B测试框架</h2>
+
+<h3>在线评估架构</h3>
+<p>A/B测试将用户随机分流到不同版本的RAG系统，通过统计分析比较效果。</p>
+
+<pre><code># A/B测试分流示意架构
+#
+# 用户请求 --> 路由层 (按 user_id hash 分流)
+#              |
+#              +--> 50% --> RAG v1 (baseline)
+#              |            返回 answer_v1
+#              |
+#              +--> 50% --> RAG v2 (实验组)
+#                           返回 answer_v2
+#
+# 两个版本的回答都记录到评估数据库：
+# {
+#   "user_id": "xxx",
+#   "query": "...",
+#   "answer_v1": "...",
+#   "answer_v2": "...",
+#   "chosen": "v1" or "v2",   # 用户选择
+#   "feedback": "thumbs_up" / "thumbs_down",
+#   "latency_v1": 1.2,
+#   "latency_v2": 0.8
+# }</code></pre>
+
+<h3>用户反馈收集</h3>
+<pre><code># FastAPI 后端反馈接口
+from fastapi import FastAPI
+from pydantic import BaseModel
+from datetime import datetime
+
+app = FastAPI()
+
+class FeedbackRequest(BaseModel):
+    query_id: str
+    user_id: str
+    feedback: str  # "thumbs_up" or "thumbs_down"
+    comment: str = ""
+    rag_version: str
+
+@app.post("/api/feedback")
+async def collect_feedback(req: FeedbackRequest):
+    """收集用户反馈"""
+    record = {
+        "query_id": req.query_id,
+        "user_id": req.user_id,
+        "feedback": req.feedback,
+        "comment": req.comment,
+        "rag_version": req.rag_version,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    # 存入数据库
+    await db.feedback.insert_one(record)
+    return {"status": "ok"}</code></pre>
+
+<h3>统计显著性检验</h3>
+<pre><code>from scipy import stats
+import numpy as np
+
+def ab_test_significance(
+    v1_scores: list[int],
+    v2_scores: list[int],
+    alpha: float = 0.05,
+) -> dict:
+    """A/B 测试统计显著性检验
+
+    Args:
+        v1_scores: 对照组评分 (0/1 for binary, or 1-5 for Likert)
+        v2_scores: 实验组评分
+        alpha: 显著性水平
+    """
+    # 卡方检验（适用于二元反馈：thumbs up/down）
+    v1_up = sum(v1_scores)
+    v1_down = len(v1_scores) - v1_up
+    v2_up = sum(v2_scores)
+    v2_down = len(v2_scores) - v2_up
+
+    contingency_table = np.array([[v1_up, v1_down],
+                                   [v2_up, v2_down]])
+    chi2, p_value, dof, expected = stats.chi2_contingency(contingency_table)
+
+    # 效果量（Cohen's h）
+    p1 = v1_up / len(v1_scores)
+    p2 = v2_up / len(v2_scores)
+    cohens_h = 2 * np.arcsin(np.sqrt(p2)) - 2 * np.arcsin(np.sqrt(p1))
+
+    return {
+        "v1_satisfaction": round(p1, 3),
+        "v2_satisfaction": round(p2, 3),
+        "chi2": round(chi2, 4),
+        "p_value": round(p_value, 6),
+        "significant": p_value < alpha,
+        "cohens_h": round(cohens_h, 4),
+        "winner": "v2" if p2 > p1 and p_value < alpha else
+                  "v1" if p1 > p2 and p_value < alpha else "no_difference",
+    }
+
+# 示例：收集了1000个反馈
+np.random.seed(42)
+v1_feedback = np.random.binomial(1, 0.72, 500)   # 72% 满意率
+v2_feedback = np.random.binomial(1, 0.78, 500)   # 78% 满意率
+
+result = ab_test_significance(v1_feedback.tolist(), v2_feedback.tolist())
+print(f"V1 满意率: {result['v1_satisfaction']}")
+print(f"V2 满意率: {result['v2_satisfaction']}")
+print(f"P-value: {result['p_value']}")
+print(f"是否有显著差异: {result['significant']}")
+print(f"优胜版本: {result['winner']}")</code></pre>
+
+<!-- ========== 7. 评估Pipeline代码 ========== -->
+<h2>7. 评估Pipeline代码</h2>
+
+<h3>完整RAG评估Pipeline</h3>
+<pre><code>from dataclasses import dataclass, field
+from typing import Callable
+import json
+import time
+
+@dataclass
+class EvalSample:
+    """单条评估样本"""
+    question: str
+    ground_truth: str
+    contexts: list[str] = field(default_factory=list)
+    answer: str = ""
+    metrics: dict = field(default_factory=dict)
+
+class RAGEvalPipeline:
+    """RAG 评估 Pipeline"""
+
+    def __init__(self, rag_fn: Callable[[str], dict]):
+        """
+        Args:
+            rag_fn: RAG系统函数，输入question，返回
+                    {"answer": str, "contexts": list[str]}
+        """
+        self.rag_fn = rag_fn
+
+    def run_rag(self, samples: list[EvalSample]) -> list[EvalSample]:
+        """步骤1: 批量运行RAG系统获取回答"""
+        for sample in samples:
+            start = time.time()
+            result = self.rag_fn(sample.question)
+            latency = time.time() - start
+            sample.answer = result["answer"]
+            sample.contexts = result.get("contexts", [])
+            sample.metrics["latency"] = latency
+        return samples
+
+    def evaluate_retrieval(self, samples: list[EvalSample], k: int = 5) -> list[EvalSample]:
+        """步骤2: 评估检索质量"""
+        for sample in samples:
+            # 模拟评估：实际应使用标注的相关文档ID
+            sample.metrics["context_count"] = len(sample.contexts)
+            sample.metrics["avg_context_length"] = (
+                sum(len(c) for c in sample.contexts) / len(sample.contexts)
+                if sample.contexts else 0
+            )
+        return samples
+
+    def evaluate_generation(self, samples: list[EvalSample]) -> list[EvalSample]:
+        """步骤3: 评估生成质量（使用LLM-as-Judge）"""
+        for sample in samples:
+            score = llm_judge(
+                question=sample.question,
+                answer=sample.answer,
+                context="\n".join(sample.contexts),
+            )
+            sample.metrics["generation_score"] = score
+        return samples
+
+    def generate_report(self, samples: list[EvalSample]) -> str:
+        """步骤4: 生成评估报告"""
+        report = {
+            "total_samples": len(samples),
+            "avg_latency": sum(s.metrics.get("latency", 0) for s in samples) / len(samples),
+            "avg_contexts": sum(s.metrics.get("context_count", 0) for s in samples) / len(samples),
+            "details": [
+                {
+                    "question": s.question,
+                    "answer_preview": s.answer[:100],
+                    "metrics": s.metrics,
+                }
+                for s in samples
+            ],
+        }
+        return json.dumps(report, ensure_ascii=False, indent=2)
+
+    def run(self, samples: list[EvalSample]) -> str:
+        """运行完整评估流程"""
+        print("步骤 1/4: 运行 RAG 系统...")
+        self.run_rag(samples)
+
+        print("步骤 2/4: 评估检索质量...")
+        self.evaluate_retrieval(samples)
+
+        print("步骤 3/4: 评估生成质量...")
+        self.evaluate_generation(samples)
+
+        print("步骤 4/4: 生成报告...")
+        report = self.generate_report(samples)
+
+        return report</code></pre>
+
+<h3>批量评估与报告生成</h3>
+<pre><code># 构建测试集
+test_samples = [
+    EvalSample(
+        question="什么是RAG？",
+        ground_truth="RAG（检索增强生成）是一种结合信息检索和文本生成的技术架构。",
+    ),
+    EvalSample(
+        question="向量数据库有哪些选择？",
+        ground_truth="常见的向量数据库包括 Pinecone、Milvus、Weaviate、Qdrant、ChromaDB 等。",
+    ),
+    EvalSample(
+        question="如何优化RAG系统的检索质量？",
+        ground_truth="可通过混合检索、查询重写、重排序、优化分块策略等方法提升检索质量。",
+    ),
+]
+
+# 定义你的RAG系统
+def my_rag_system(question: str) -> dict:
+    # 这里替换为你的实际RAG调用
+    docs = retriever.invoke(question)
+    answer = llm_chain.invoke({"question": question, "context": docs})
+    return {
+        "answer": answer,
+        "contexts": [doc.page_content for doc in docs],
+    }
+
+# 运行评估
+pipeline = RAGEvalPipeline(rag_fn=my_rag_system)
+report = pipeline.run(test_samples)
+
+# 保存报告
+with open("rag_eval_report.json", "w", encoding="utf-8") as f:
+    f.write(report)
+
+print("评估报告已保存到 rag_eval_report.json")</code></pre>
+
+<div class="callout callout-warn">
+    <strong>注意</strong>
+    评估测试集的质量直接决定评估结果的可信度。建议：至少50个测试样本覆盖主要场景；定期更新测试集防止过拟合；包含困难样本（edge cases）。
+</div>
+
+<!-- ========== 8. 动手练习 ========== -->
+<h2>8. 动手练习</h2>
+
+<div class="exercise">
+    <h3>练习1：构建评估测试集</h3>
+    <p>为你之前构建的RAG系统创建一个包含20条问答对的评估测试集，要求：</p>
+    <ul>
+        <li>覆盖简单问题、复杂问题、多跳推理问题</li>
+        <li>包含至少2个"无法回答"的问题（测试系统是否会编造答案）</li>
+        <li>每条数据包含 question、ground_truth、expected_contexts</li>
+    </ul>
+</div>
+
+<div class="exercise">
+    <h3>练习2：实现完整评估Pipeline</h3>
+    <p>基于本章代码，完成以下任务：</p>
+    <ul>
+        <li>使用RAGAS框架对你的RAG系统评估4个核心指标</li>
+        <li>实现Recall@K和Precision@K指标，比较K=3和K=5的差异</li>
+        <li>使用LLM-as-Judge评估生成质量，对比GPT-4o和本地小模型作为裁判的评分差异</li>
+    </ul>
+</div>
+
+<div class="exercise">
+    <h3>练习3：A/B测试模拟</h3>
+    <p>模拟一个A/B测试场景：</p>
+    <ul>
+        <li>实现两个版本的RAG系统（如使用不同chunk_size：256 vs 512）</li>
+        <li>生成1000条模拟用户反馈</li>
+        <li>使用本章的统计检验函数判断差异是否显著</li>
+        <li>计算需要多少样本量才能检测到5%的提升（统计功效分析）</li>
+    </ul>
+</div>
+</div></section>

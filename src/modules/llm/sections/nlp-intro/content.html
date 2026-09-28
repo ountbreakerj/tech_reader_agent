@@ -1,0 +1,232 @@
+<section class="llm-mod llm-m-nlp-intro" id="llm-nlp-intro"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>📝 模块0：NLP概述与文本预处理</h1>
+  <p>从原始文本到可计算数据的第一步</p>
+</div><div class="section" id="llm-nlp-intro-s1">
+    <h2>什么是NLP</h2>
+    
+    <p>自然语言处理（Natural Language Processing, NLP）是人工智能的核心分支，致力于让计算机理解、生成和处理人类语言。</p>
+
+    <h3>NLP发展历程</h3>
+    <p>NLP经历了四个主要发展阶段：</p>
+    <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>规则方法时代（1950s-1990s）</strong><br>基于语法规则和专家知识，如正则表达式、模板匹配</div>
+  </div><div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>统计方法时代（1990s-2010s）</strong><br>基于概率统计，如朴素贝叶斯、HMM、最大熵模型</div>
+  </div><div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>深度学习时代（2013-2018）</strong><br>Word2Vec、RNN、LSTM、注意力机制</div>
+  </div><div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>大模型时代（2018-至今）</strong><br>BERT、GPT、LLaMA、Qwen等预训练大模型</div>
+  </div>
+    <h3>NLP典型应用</h3>
+    <table>
+    <tr><th>任务</th><th>描述</th><th>代表产品</th><th>关键技术</th></tr>
+    <tr><td>机器翻译</td><td>自动翻译不同语言</td><td>Google翻译、DeepL</td><td>Seq2Seq、Transformer</td></tr>
+<tr><td>情感分析</td><td>判断文本情感倾向</td><td>舆情监控系统</td><td>BERT分类、Prompt</td></tr>
+<tr><td>命名实体识别</td><td>识别人名/地名/机构名</td><td>知识图谱构建</td><td>BiLSTM-CRF、BERT-NER</td></tr>
+<tr><td>问答系统</td><td>回答用户自然语言问题</td><td>ChatGPT、Kimi</td><td>RAG、大模型推理</td></tr>
+<tr><td>文本摘要</td><td>生成文本的简洁概括</td><td>新闻摘要工具</td><td>抽取式/生成式</td></tr>
+
+  </table>
+  </div><div class="section" id="llm-nlp-intro-s2">
+    <h2>中文分词</h2>
+    
+    <p>中文分词是中文NLP的第一步。与英文不同，中文没有天然的空格分隔符，需要专门的分词算法。</p>
+
+    <h3>jieba 分词三种模式</h3>
+    <table>
+    <tr><th>模式</th><th>函数</th><th>特点</th><th>适用场景</th></tr>
+    <tr><td>精确模式</td><td><code>jieba.lcut()</code></td><td>最精确的切分，无冗余</td><td>文本分析（推荐）</td></tr>
+<tr><td>全模式</td><td><code>jieba.lcut(cut_all=True)</code></td><td>所有可能的词语都切出来</td><td>搜索引擎召回</td></tr>
+<tr><td>搜索引擎模式</td><td><code>jieba.lcut_for_search()</code></td><td>在精确模式基础上再切分长词</td><td>搜索引擎索引</td></tr>
+
+  </table>
+    <h3>代码示例</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import jieba
+
+# 精确模式（默认，最常用）
+text = "自然语言处理是人工智能的重要方向"
+words = jieba.lcut(text)
+print("精确模式：", words)
+
+# 全模式（扫描所有可能的词语）
+words_all = jieba.lcut(text, cut_all=True)
+print("全模式：", words_all)
+
+# 搜索引擎模式
+words_search = jieba.lcut_for_search(text)
+print("搜索引擎模式：", words_search)
+
+# 添加自定义词典
+jieba.add_word("大语言模型", freq=10000, tag="n")
+jieba.add_word("RAG", freq=8000, tag="n")</code></pre>
+  </div>
+    <h3>Subword分词：现代NLP的主流方案</h3>
+    <p>传统分词基于词典，无法处理未登录词（OOV）。现代NLP使用<strong>子词分词（Subword Tokenization）</strong>：</p>
+    <table>
+    <tr><th>方法</th><th>原理</th><th>代表模型</th><th>特点</th></tr>
+    <tr><td>BPE</td><td>基于频率合并字节对</td><td>GPT系列、LLaMA</td><td>无需预分词，处理任意文本</td></tr>
+<tr><td>WordPiece</td><td>基于似然合并子词</td><td>BERT</td><td>类似BPE，使用##标记续接</td></tr>
+<tr><td>SentencePiece</td><td>语言无关的分词器</td><td>T5、Qwen</td><td>直接处理原始文本，不需预分词</td></tr>
+
+  </table>
+    <h3>Subword分词代码示例</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from tokenizers import Tokenizer, models, trainers, pre_tokenizers
+
+# 训练一个 BPE tokenizer
+tokenizer = Tokenizer(models.BPE())
+tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+trainer = trainers.BpeTrainer(vocab_size=30000, min_frequency=2)
+tokenizer.train(["corpus.txt"], trainer)
+
+# 使用 tokenizer
+output = tokenizer.encode("自然语言处理是人工智能的重要方向")
+print("Tokens:", output.tokens)
+print("Token IDs:", output.ids)</code></pre>
+  </div>
+    <div class="callout callout-key">
+    <p>🔑 <strong>关键认知：</strong>现代LLM不使用jieba分词，而是使用BPE/SentencePiece等子词分词器。jieba仍适用于传统NLP任务（如关键词提取、简单分类）。</p>
+  </div>
+  </div><div class="section" id="llm-nlp-intro-s3">
+    <h2>命名实体识别与词性标注</h2>
+    
+    <p><strong>命名实体识别（NER）</strong>：从文本中识别出具有特定意义的实体。</p>
+    <p><strong>词性标注（POS）</strong>：为每个词语标注其语法类别。</p>
+
+    <h3>jieba 词性标注对照表</h3>
+    <table>
+    <tr><th>标签</th><th>含义</th><th>示例</th></tr>
+    <tr><td>n</td><td>名词</td><td>自然语言、模型</td></tr>
+<tr><td>v</td><td>动词</td><td>处理、训练</td></tr>
+<tr><td>a</td><td>形容词</td><td>重要的、强大的</td></tr>
+<tr><td>nr</td><td>人名</td><td>张三、李四</td></tr>
+<tr><td>ns</td><td>地名</td><td>北京、硅谷</td></tr>
+<tr><td>nt</td><td>机构名</td><td>谷歌、百度</td></tr>
+
+  </table>
+    <h3>代码示例</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import jieba.posseg as pseg
+
+text = "2024年谷歌发布了Gemini大模型"
+words = pseg.lcut(text)
+
+# 提取命名实体
+entities = {"nr": [], "ns": [], "nt": []}
+for word, flag in words:
+    if flag in entities:
+        entities[flag].append(word)
+
+print(f"人名: {entities['nr']}")
+print(f"机构: {entities['nt']}")
+
+# 词性标注结果
+for word, flag in words:
+    if len(word.strip()) &gt; 0:
+        print(f"  {word:10s} -&gt; {flag}")</code></pre>
+  </div>
+    <div class="callout callout-warn">
+    <p>⚠️ jieba的NER精度有限（约85%），生产环境建议使用 <strong>spaCy</strong>、<strong>HanLP</strong> 或基于BERT的NER模型。</p>
+  </div>
+  </div><div class="section" id="llm-nlp-intro-s4">
+    <h2>文本数据增强</h2>
+    
+    <p>数据增强通过对原始文本进行变换来扩充训练数据集。</p>
+
+    <h3>常用增强方法</h3>
+    <table>
+    <tr><th>方法</th><th>原理</th><th>难度</th><th>效果</th></tr>
+    <tr><td>同义词替换</td><td>将词语替换为同义词</td><td>低</td><td>中</td></tr>
+<tr><td>随机删除</td><td>以概率p删除词语</td><td>低</td><td>中</td></tr>
+<tr><td>回译法</td><td>翻译成外语再翻回来</td><td>中</td><td>高</td></tr>
+<tr><td>LLM增强</td><td>用大模型生成新样本</td><td>高</td><td>很高</td></tr>
+
+  </table>
+    <h3>代码示例</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import random
+import jieba
+
+def synonym_replace(text, n=1):
+    """同义词替换"""
+    synonyms = {
+        "模型": ["架构", "系统"],
+        "训练": ["学习", "优化"],
+    }
+    words = list(jieba.cut(text))
+    for _ in range(n):
+        for i, w in enumerate(words):
+            if w in synonyms:
+                words[i] = random.choice(synonyms[w])
+                break
+    return "".join(words)
+
+def random_delete(text, p=0.1):
+    """随机删除"""
+    words = list(jieba.cut(text))
+    return "".join(w for w in words if random.random() &gt; p)
+
+text = "自然语言处理是人工智能的重要方向"
+print("原始:", text)
+print("同义替换:", synonym_replace(text))
+print("随机删除:", random_delete(text))</code></pre>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 数据增强比例建议控制在原始数据的1-3倍，过多增强会引入噪声。</p>
+  </div>
+  </div><div class="section" id="llm-nlp-intro-s5">
+    <h2>实践：中文文本预处理流水线</h2>
+    
+    <p>将分词、停用词过滤、词性标注、词频分析串联起来，构建完整的<strong>中文文本预处理流水线</strong>。</p>
+    <h3>完整流水线代码</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import jieba.posseg as pseg
+from collections import Counter
+
+texts = [
+    "自然语言处理是人工智能的重要方向",
+    "BERT和GPT推动了NLP的快速发展",
+    "大语言模型通过预训练获得了强大的能力",
+    "文本数据增强可以缓解数据不足的问题",
+]
+
+stopwords = set(["的", "了", "在", "是", "我", "和", "就", "不"])
+all_words = []
+for text in texts:
+    for word, pos in pseg.lcut(text):
+        if len(word.strip()) &gt; 0 and word not in stopwords:
+            if pos.startswith(("n", "v", "a")):
+                all_words.append(word)
+
+counter = Counter(all_words)
+print("词频排名 Top 10：")
+for rank, (word, count) in enumerate(counter.most_common(10), 1):
+    bar = "█" * count
+    print(f"  {rank}. {word:8s} {count:3d} {bar}")</code></pre>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 生产环境建议：1) 使用完整停用词表；2) 根据任务选择词性策略；3) 使用并行分词加速大规模处理。</p>
+  </div>
+  </div>
+</div></section>

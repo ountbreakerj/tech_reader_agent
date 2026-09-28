@@ -1,0 +1,433 @@
+<section class="llm-mod llm-m-deployment" id="llm-deployment"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#16a34a;">
+  <h1>🚀 部署与推理</h1>
+  <p>掌握模型部署的各种方法</p>
+</div>
+
+<div class="section" id="llm-deployment-s1">
+  <h2>模型导出</h2>
+
+  <h3>PyTorch模型保存</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> torch
+<span class="kw">from</span> transformers <span class="kw">import</span> AutoModelForCausalLM, AutoTokenizer
+
+<span class="cmt"># 方法1：保存完整模型</span>
+model.save_pretrained(<span class="str">"./my_model"</span>)
+tokenizer.save_pretrained(<span class="str">"./my_model"</span>)
+
+<span class="cmt"># 方法2：保存LoRA权重（更小）</span>
+model.<span class="fn">save_pretrained</span>(<span class="str">"./lora_weights"</span>)
+
+<span class="cmt"># 加载模型</span>
+model = AutoModelForCausalLM.<span class="fn">from_pretrained</span>(<span class="str">"./my_model"</span>)
+tokenizer = AutoTokenizer.<span class="fn">from_pretrained</span>(<span class="str">"./my_model"</span>)</code></pre>
+  </div>
+
+  <h3>ONNX导出</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">import</span> torch
+
+<span class="cmt"># 导出为ONNX格式</span>
+dummy_input = tokenizer(<span class="str">"Hello"</span>, return_tensors=<span class="str">"pt"</span>)
+
+torch.onnx.export(
+    model,
+    (dummy_input[<span class="str">"input_ids"</span>], dummy_input[<span class="str">"attention_mask"</span>]),
+    <span class="str">"model.onnx"</span>,
+    input_names=[<span class="str">"input_ids"</span>, <span class="str">"attention_mask"</span>],
+    output_names=[<span class="str">"logits"</span>],
+    dynamic_axes={
+        <span class="str">"input_ids"</span>: {<span class="num">0</span>: <span class="str">"batch_size"</span>, <span class="num">1</span>: <span class="str">"sequence_length"</span>},
+    }
+)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-deployment-s2">
+  <h2>推理优化</h2>
+
+  <h3>量化技术</h3>
+
+  <table>
+    <tr><th>量化方法</th><th>精度</th><th>显存减少</th><th>速度提升</th><th>质量损失</th></tr>
+    <tr><td><strong>INT8</strong></td><td>8-bit</td><td>50%</td><td>1.5x</td><td>轻微</td></tr>
+    <tr><td><strong>INT4 (GPTQ)</strong></td><td>4-bit</td><td>75%</td><td>2x</td><td>小</td></tr>
+    <tr><td><strong>AWQ</strong></td><td>4-bit</td><td>75%</td><td>2.5x</td><td>很小</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> transformers <span class="kw">import</span> AutoModelForCausalLM, BitsAndBytesConfig
+
+<span class="cmt"># 4-bit量化加载</span>
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=<span class="kw">True</span>,
+    bnb_4bit_quant_type=<span class="str">"nf4"</span>,
+    bnb_4bit_compute_dtype=torch.bfloat16
+)
+
+model = AutoModelForCausalLM.<span class="fn">from_pretrained</span>(
+    <span class="str">"meta-llama/Llama-3.1-8B-Instruct"</span>,
+    quantization_config=bnb_config,
+    device_map=<span class="str">"auto"</span>
+)</code></pre>
+  </div>
+
+  <h3>高效推理框架</h3>
+
+  <table>
+    <tr><th>框架</th><th>特点</th><th>适用场景</th><th>版本</th></tr>
+    <tr><td><strong>vLLM</strong></td><td>PagedAttention，高并发</td><td>生产环境（推荐）</td><td>v0.23</td></tr>
+    <tr><td><strong>SGLang</strong></td><td>RadixAttention，结构化输出</td><td>生产环境，复杂输出格式</td><td>v0.5.10</td></tr>
+    <tr><td><strong>TensorRT-LLM</strong></td><td>NVIDIA优化，极致性能</td><td>NVIDIA GPU上的最佳性能</td><td>v1.2.1</td></tr>
+    <tr><td><strong>llama.cpp</strong></td><td>CPU推理，GGUF格式</td><td>边缘设备，本地部署</td><td>持续更新</td></tr>
+    <tr><td><strong>TGI</strong></td><td>HuggingFace官方</td><td>快速部署</td><td>v3.x</td></tr>
+  </table>
+</div>
+
+<div class="section" id="llm-deployment-s2b">
+  <h2>推理核心概念</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 理解这些概念对于选择和优化推理方案至关重要。</strong>
+  </div>
+
+  <h3>连续批处理（Continuous Batching）</h3>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>传统批处理像公交车——必须等所有人到齐才发车。连续批处理像地铁——每到一站都有人上下车，不用等所有人一起。vLLM的核心创新就在于此。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">文本</span></div>
+    <pre><code><span class="cmt"># 连续批处理 vs 静态批处理</span>
+
+<span class="num">静态批处理</span>（传统方式）：
+  - 一个batch中所有请求必须同时完成
+  - 短请求完成后空等长请求，GPU空闲浪费
+  - 吞吐量低
+
+<span class="num">连续批处理</span>（vLLM/SGLang核心）：
+  - 某个请求完成后立即插入新请求
+  - GPU始终保持忙碌，无空闲等待
+  - 吞吐量提升2-10倍</code></pre>
+  </div>
+
+  <h3>PagedAttention与KV Cache优化</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">文本</span></div>
+    <pre><code><span class="cmt"># KV Cache是推理时最大的显存消耗者</span>
+
+<span class="num">问题</span>：每个请求需要缓存所有已生成token的Key和Value
+  - 长上下文请求（如32K tokens）会占用大量显存
+  - 传统方式为每个请求预分配最大长度的显存，造成浪费
+
+<span class="num">PagedAttention</span>（vLLM的解决方案）：
+  - 借鉴操作系统虚拟内存的分页思想
+  - 将KV Cache分成固定大小的"页"
+  - 按需分配，不需要连续内存
+  - 显存利用率从约20-40%提升到>95%
+
+<span class="num">RadixAttention</span>（SGLang的方案）：
+  - 使用Radix Tree（基数树）管理KV Cache
+  - 自动复用相同前缀的KV Cache
+  - 特别适合多轮对话和few-shot场景</code></pre>
+  </div>
+
+  <h3>推测解码（Speculative Decoding）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">文本</span></div>
+    <pre><code><span class="cmt"># 推测解码：用小模型加速大模型推理</span>
+
+<span class="num">原理</span>：
+  1. 小模型（Draft Model，如1B）快速生成N个候选token
+  2. 大模型（Target Model，如70B）一次性验证这N个token
+  3. 接受正确前缀，拒绝后面的错误token
+  4. 输出质量与大模型完全一致，但速度快2-3倍
+
+<span class="num">适用场景</span>：
+  - 延迟敏感的应用（如实时聊天）
+  - 有合适的小模型可作为Draft Model
+  - GPU算力充足，大模型推理是瓶颈
+
+<span class="num">vLLM使用</span>：
+  vllm serve your-model --speculative-model draft-model --num-speculative-tokens 5</code></pre>
+  </div>
+
+  <h3>结构化输出（Structured Output）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">文本</span></div>
+    <pre><code><span class="cmt"># 结构化输出 / 引导生成（Guided Generation）</span>
+
+<span class="num">应用场景</span>：
+  - Function Calling：让模型输出符合API函数签名的JSON
+  - JSON Mode：强制模型输出合法JSON
+  - 自定义Schema：按指定格式生成数据
+
+<span class="num">实现方式</span>：
+  - 在解码阶段用有限状态机（FSM）约束token选择
+  - SGLang原生支持JSON Schema约束
+  - vLLM通过guided_decoding参数支持
+
+<span class="cmt"># SGLang示例：</span>
+<span class="cmt"># response = client.chat.completions.create(</span>
+<span class="cmt">#     model="your-model",</span>
+<span class="cmt">#     messages=[...],</span>
+<span class="cmt">#     response_format={"type": "json_schema", "schema": {...}}</span>
+<span class="cmt"># )</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-deployment-s3">
+  <h2>服务化部署</h2>
+
+  <h3>FastAPI服务</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> fastapi <span class="kw">import</span> FastAPI
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel
+<span class="kw">from</span> transformers <span class="kw">import</span> AutoModelForCausalLM, AutoTokenizer
+<span class="kw">import</span> torch
+
+app = FastAPI()
+
+<span class="cmt"># 加载模型</span>
+model_name = <span class="str">"./my_model"</span>
+tokenizer = AutoTokenizer.<span class="fn">from_pretrained</span>(model_name)
+model = AutoModelForCausalLM.<span class="fn">from_pretrained</span>(model_name).to(<span class="str">"cuda"</span>)
+
+<span class="kw">class</span> <span class="cls">GenerateRequest</span>(BaseModel):
+    prompt: <span class="cls">str</span>
+    max_length: <span class="cls">int</span> = <span class="num">512</span>
+    temperature: <span class="cls">float</span> = <span class="num">0.7</span>
+
+<span class="dec">@app.post</span>(<span class="str">"/generate"</span>)
+<span class="kw">def</span> <span class="fn">generate</span>(request: GenerateRequest):
+    <span class="cmt"># 注意：同步推理函数用def，不要用async def</span>
+    <span class="cmt"># torch推理是同步阻塞操作，用async会阻塞事件循环</span>
+    inputs = tokenizer(request.prompt, return_tensors=<span class="str">"pt"</span>).to(<span class="str">"cuda"</span>)
+
+    <span class="kw">with</span> torch.no_grad():
+        outputs = model.<span class="fn">generate</span>(
+            **inputs,
+            max_length=request.max_length,
+            temperature=request.temperature,
+            do_sample=<span class="kw">True</span>
+        )
+
+    response = tokenizer.decode(outputs[<span class="num">0</span>], skip_special_tokens=<span class="kw">True</span>)
+    <span class="kw">return</span> {<span class="str">"response"</span>: response}
+
+<span class="cmt"># 如果确实需要async，使用run_in_executor避免阻塞事件循环：</span>
+<span class="cmt"># @app.post("/generate")</span>
+<span class="cmt"># async def generate(request: GenerateRequest):</span>
+<span class="cmt">#     loop = asyncio.get_event_loop()</span>
+<span class="cmt">#     result = await loop.run_in_executor(None, sync_generate, request)</span>
+<span class="cmt">#     return result</span>
+
+<span class="cmt"># 运行：uvicorn main:app --host 0.0.0.0 --port 8000</span></code></pre>
+  </div>
+
+  <h3>vLLM部署（推荐）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Bash</span></div>
+    <pre><code><span class="cmt"># 安装vLLM（v0.23）</span>
+pip install vllm
+
+<span class="cmt"># 启动vLLM服务（现代语法，替代已废弃的python -m vllm.entrypoints）</span>
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+    --tensor-parallel-size 1 \
+    --max-model-len 4096
+
+<span class="cmt"># 客户端调用（兼容OpenAI API格式）</span>
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "meta-llama/Llama-3.1-8B-Instruct", "prompt": "Hello"}'</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-deployment-s3b">
+  <h2>SGLang部署</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 SGLang（v0.5.10）：</strong>2025-2026年快速崛起的推理框架，与vLLM形成双雄竞争。其RadixAttention技术在多轮对话和结构化输出场景下表现优异。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Bash</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 安装SGLang</span>
+pip install sglang[all]
+
+<span class="cmt"># 启动SGLang服务</span>
+python -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --port 30000 \
+    --tp 1
+
+<span class="cmt"># 客户端调用（兼容OpenAI API）</span>
+curl http://localhost:30000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.1-8B-Instruct",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 vLLM vs SGLang选择建议：</strong>
+    <ul>
+      <li><strong>通用推理服务</strong>：两者都很好，vLLM社区更大</li>
+      <li><strong>多轮对话/Agent</strong>：SGLang的RadixAttention有天然优势</li>
+      <li><strong>结构化输出</strong>：SGLang原生支持更好</li>
+      <li><strong>大规模部署</strong>：两者都支持TP/PP分布式，看具体硬件兼容性</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-deployment-s3c">
+  <h2>TensorRT-LLM部署</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 TensorRT-LLM（v1.2.1）：</strong>NVIDIA官方的LLM推理优化引擎。通过算子融合、量化优化、自定义CUDA内核等技术，在NVIDIA GPU上实现极致推理性能。适合对延迟和吞吐量有严格要求的生产环境。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Bash</span></div>
+    <pre><code><span class="cmt"># 安装TensorRT-LLM</span>
+pip install tensorrt-llm
+
+<span class="cmt"># 转换模型（HuggingFace → TensorRT-LLM格式）</span>
+python convert_checkpoint.py \
+    --model_dir ./your-hf-model \
+    --output_dir ./trt-llm-ckpt \
+    --dtype float16
+
+<span class="cmt"># 构建TensorRT引擎</span>
+trtllm-build \
+    --checkpoint_dir ./trt-llm-ckpt \
+    --output_dir ./trt-engine \
+    --gemm_plugin float16 \
+    --max_batch_size 8 \
+    --max_input_len 2048 \
+    --max_seq_len 4096
+
+<span class="cmt"># 运行推理</span>
+python run.py \
+    --engine_dir ./trt-engine \
+    --max_output_len 256 \
+    --input_text "Hello, how are you?"</code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 注意事项：</strong>TensorRT-LLM需要为特定的模型架构和GPU型号构建引擎，不具有跨平台通用性。适合固定模型、固定硬件的大规模部署场景。
+  </div>
+</div>
+
+<div class="section" id="llm-deployment-s3d">
+  <h2>本地部署：GGUF + Ollama</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 GGUF格式：</strong>llama.cpp项目定义的模型格式，专为高效CPU/GPU混合推理设计。支持多种量化方案（Q4_K_M、Q5_K_M、Q8_0等），是本地部署LLM的事实标准格式。Ollama让本地部署变得极其简单。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Bash</span>
+      
+    </div>
+    <pre><code><span class="cmt"># Ollama：最简单的本地LLM部署方案</span>
+<span class="cmt"># 1. 安装Ollama：https://ollama.com</span>
+
+<span class="cmt"># 2. 一行命令运行模型</span>
+ollama run llama3.1:8b
+
+<span class="cmt"># 3. Ollama也提供API服务（默认端口11434）</span>
+curl http://localhost:11434/api/generate \
+  -d '{"model": "llama3.1:8b", "prompt": "Hello"}'
+
+<span class="cmt"># 常见量化级别：</span>
+<span class="cmt"># Q4_K_M  → 4-bit量化，显存约4-5GB（7B模型），推荐日常使用</span>
+<span class="cmt"># Q5_K_M  → 5-bit量化，显存约5-6GB，质量更好</span>
+<span class="cmt"># Q8_0    → 8-bit量化，显存约8-9GB，几乎无质量损失</span>
+
+<span class="cmt"># llama.cpp直接使用GGUF：</span>
+<span class="cmt"># ./llama-cli -m model.gguf -p "Hello" -n 128</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 Ollama适用场景：</strong>
+    <ul>
+      <li>本地开发和测试（无需GPU服务器）</li>
+      <li>隐私敏感场景（数据不离开本机）</li>
+      <li>快速原型验证</li>
+      <li>在Apple Silicon（M系列芯片）上运行效果尤佳</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-deployment-s3e">
+  <h2>多LoRA服务</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 多LoRA服务：</strong>一个基座模型同时服务多个LoRA适配器。比如一个7B基座模型同时服务"法律助手""医疗助手""编程助手"三个不同LoRA，共享基座权重，大幅降低部署成本。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Bash</span></div>
+    <pre><code><span class="cmt"># vLLM多LoRA服务</span>
+vllm serve meta-llama/Llama-3.1-8B-Instruct \
+    --enable-lora \
+    --lora-modules legal_lora=./lora_legal medical_lora=./lora_medical \
+    --max-lora-rank 16
+
+<span class="cmt"># 请求时指定LoRA适配器</span>
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "legal_lora",
+    "prompt": "解释合同法中的要约与承诺",
+    "max_tokens": 256
+  }'
+
+<span class="cmt"># SGLang同样支持多LoRA</span>
+python -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --lora-paths legal=./lora_legal medical=./lora_medical \
+    --enable-lora</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 多LoRA的优势：</strong>基座模型的显存只需加载一次（约14GB for 7B FP16），每个LoRA适配器仅额外占用几十MB。一个GPU即可服务多个专业领域模型，显著降低部署成本。
+  </div>
+</div>
+
+<div class="section" id="llm-deployment-s4">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：部署推理服务</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>将微调后的模型部署为API服务。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 使用vLLM或SGLang部署模型，体验连续批处理的性能优势</p>
+      <p>② 实现文本生成API（兼容OpenAI格式）</p>
+      <p>③ 尝试使用Ollama在本地部署GGUF量化模型</p>
+      <p>④ 记录推理延迟和吞吐量（tokens/sec）</p>
+      <p>⑤ （进阶）配置多LoRA服务，对比不同LoRA适配器的输出</p>
+    </div>
+  </div>
+</div>
+</div></section>

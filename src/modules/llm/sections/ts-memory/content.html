@@ -1,0 +1,144 @@
+<section class="llm-mod llm-m-tp llm-m-ts-memory" id="llm-ts-memory"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#7c3aed;--hero-b:#0d9488;">
+  <h1>🧠 记忆与检索技术栈详解</h1>
+  <p>第 3 章技术点的完整展开：Agent 记忆系统、分块策略、混合检索与向量索引</p>
+</div>
+
+<div class="section" id="llm-ts-memory-s1">
+  <h2>记忆的层次结构</h2>
+  <p>认知科学里的记忆分类直接对应 Agent 系统的实现选择：</p>
+  <ul>
+    <li><strong>工作记忆</strong>：当前上下文窗口，容量有限、读写极快、关闭即失。实现：直接放进 messages 数组。</li>
+    <li><strong>情景记忆</strong>：「发生过什么」——历史对话、任务执行轨迹、用户行为序列。实现：向量数据库 + 时间戳索引，按相关性或时间检索。</li>
+    <li><strong>语义记忆</strong>：「稳定的事实和知识」——用户偏好、领域知识、已学的规律。实现：结构化存储（键值、图谱），按内容检索。</li>
+    <li><strong>程序性记忆</strong>：「怎么做」——成功执行过的任务流程、有效的提示词模板。实现：代码片段、Skill 文档、工具配置。</li>
+  </ul>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    WM[工作记忆<br/>当前上下文<br/>容量有限] --> EM[情景记忆<br/>发生过什么<br/>向量检索]
+    WM --> SM[语义记忆<br/>稳定事实<br/>结构化查询]
+    WM --> PM[程序性记忆<br/>怎么做<br/>代码和流程]
+    EM --> Forget[遗忘整理<br/>时效衰减]
+    SM --> Update[知识更新<br/>冲突消解]
+</pre></div>
+  <p>实践中这四层并不是非此即彼：一条「用户不喜欢中文标点后加空格」的记忆，既是语义记忆（稳定偏好），又可能以自然语言条目存在于情景记忆（某次对话里说过的），还可能以代码检查规则存在于程序性记忆。</p>
+</div>
+
+<div class="section" id="llm-ts-memory-s2">
+  <h2>用户记忆的四种存储格式</h2>
+  <p>每种格式都有不同的可读性、可查询性和可组合性：</p>
+  <table>
+    <thead><tr><th>格式</th><th>示例</th><th>优点</th><th>缺点</th></tr></thead>
+    <tbody>
+      <tr><td><strong>自然语言条目</strong></td><td>「用户偏好简洁的回复，不喜欢多余解释」</td><td>可读性强，人容易理解</td><td>难以精确匹配，语义模糊</td></tr>
+      <tr><td><strong>结构化键值</strong></td><td><code>{"language": "zh", "reply_style": "concise"}</code></td><td>精确匹配，程序易处理</td><td>表达能力有限，需要预定义字段</td></tr>
+      <tr><td><strong>三元组/图</strong></td><td><code>(用户, 偏好, 简洁回复)</code></td><td>可做关系推理，支持复杂查询</td><td>构建成本高，需要知识图谱基础设施</td></tr>
+      <tr><td><strong>可执行代码</strong></td><td>一段校验函数或格式化规则</td><td>可组合、可测试、可复用</td><td>需要沙箱执行，不直接可读</td></tr>
+    </tbody>
+  </table>
+  <p>多数 Agent 实现混合使用：键值存简单偏好，自然语言存复杂倾向，代码存可自动执行的规则（如「所有代码必须通过 flake8」）。三元组/图谱对小团队来说维护成本往往超过收益，除非检索关系本身就是业务需求。</p>
+</div>
+
+<div class="section" id="llm-ts-memory-s3">
+  <h2>记忆的写入、整理与遗忘</h2>
+  <p>记忆系统的质量很大程度上取决于「写什么」和「怎么整理」，而不只是「存在哪里」。</p>
+  <h3>何时写入</h3>
+  <ul>
+    <li>会话结束时批量提取（成本低，但延迟高）</li>
+    <li>用户显式请求（「记住我不想要……」）</li>
+    <li>模型在线检测到稳定偏好（需要置信度阈值，防止噪声写入）</li>
+  </ul>
+  <h3>去重与冲突消解</h3>
+  <p>同一事实被多次写入是最常见的记忆质量问题。去重可以用嵌入相似度检测（余弦相似度 > 0.92 视为重复），冲突（新旧记忆互相矛盾）应优先保留新的，同时保留旧记忆带时间戳供审计。</p>
+  <h3>时效衰减与遗忘</h3>
+  <p>用户偏好会变。实践中给每条记忆加访问频率和最后更新时间，超过 90 天未访问的记忆降权或提示用户确认是否仍然有效。不要无限累积——记忆太多会导致检索噪声，召回出一堆过时偏好比不检索还差。</p>
+</div>
+
+<div class="section" id="llm-ts-memory-s4">
+  <h2>文档分块策略</h2>
+  <p>分块是 RAG 质量的第一道闸门。块太大，精排困难且浪费 token；块太小，丢失跨句语义。</p>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    Doc[原始文档] --> S1[固定窗口<br/>按字符数切割]
+    Doc --> S2[递归分割<br/>按段落句子切割]
+    Doc --> S3[语义分块<br/>按嵌入相似度边界切割]
+    Doc --> S4[结构感知<br/>Markdown标题 代码AST]
+    S1 --> Small[512 tokens 经验值<br/>重叠 64-128 tokens]
+    S2 --> Better[保持语义完整<br/>多数场景首选]
+    S3 --> Best[质量最高<br/>成本较高]
+    S4 --> Code[代码库场景<br/>按函数类切割]
+</pre></div>
+  <h3>父子块（small-to-big）</h3>
+  <p>检索时用小块（128–256 tokens）精确匹配，但把完整的父块（512–1024 tokens）注入模型上下文。这样既利用了小块检索精度高的特点，又给模型提供了足够的上下文。实现：建立小块 → 父块的 ID 映射，检索完成后按父块 ID 去重并拉取父块全文。</p>
+  <p><strong>经验值</strong>：Markdown 文档用递归分割（`RecursiveCharacterTextSplitter`），chunk_size=512，chunk_overlap=64；代码文件用语言感知分割器（`LanguageTextSplitter`），按函数和类边界切割。</p>
+</div>
+
+<div class="section" id="llm-ts-memory-s5">
+  <h2>稠密嵌入与稀疏检索</h2>
+  <h3>稠密嵌入（Bi-encoder）</h3>
+  <p>把文档和查询分别映射到同一向量空间，用余弦相似度或内积度量相关性。特点：理解语义同义词（「汽车」和「轿车」相似度高），但对关键词的精确匹配弱。主流模型维度 768–4096，存储成本随维度线性增长。</p>
+  <p>领域适配：通用嵌入模型在垂直领域（法律、医疗、代码）表现往往不如领域微调版本。微调方法：对比学习（正样本对 + 难负样本），通常只需几千条标注对就有明显提升。</p>
+  <h3>稀疏检索（BM25）</h3>
+  <p>BM25 的公式：<code>Score(q, d) = Σ IDF(tᵢ) × TF(tᵢ, d) × (k+1) / (TF(tᵢ, d) + k × (1 - b + b × |d|/avgdl))</code></p>
+  <p>三个关键设计：IDF 让稀有词权重更高；TF 饱和（分母里的 TF 抑制词频过高的效果，k 典型取 1.2–1.5）；长度归一化（b 典型取 0.75，防止长文档因词频次数多而虚高）。</p>
+  <p>BM25 在专有名词、代码片段、错误码、型号上往往打败稠密向量，因为这些词语义嵌入后接近常见词，但精确匹配才有意义。</p>
+</div>
+
+<div class="section" id="llm-ts-memory-s6">
+  <h2>混合检索与 RRF 融合</h2>
+  <p>混合检索同时跑稠密检索和稀疏检索，然后融合两路结果。融合方法：</p>
+  <ul>
+    <li><strong>线性加权</strong>：<code>score = α × dense + (1-α) × sparse</code>。问题：两路分数的尺度不同，归一化方式影响很大，调参成本高。</li>
+    <li><strong>RRF（倒排排名融合）</strong>：<code>RRF(d) = Σ 1/(k + rankᵢ(d))</code>，其中 k=60 是典型取值。只用排名不用分数，彻底规避了尺度不统一的问题。实验表明 k=60 在多数场景下表现稳定，无需调参。</li>
+  </ul>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    Q[用户查询] --> D[稠密检索<br/>向量相似度]
+    Q --> S[稀疏检索<br/>BM25关键词]
+    D --> RRF[RRF 融合<br/>score = 1 div k + rank]
+    S --> RRF
+    RRF --> TopK[取 Top-K 结果<br/>送入精排或直接用]
+</pre></div>
+  <p>RRF 的另一个优点：对各路召回结果的数量不敏感，哪路多哪路少都可以融合，不需要对齐。这使它成为多路检索系统的默认首选。</p>
+</div>
+
+<div class="section" id="llm-ts-memory-s7">
+  <h2>重排序与向量索引</h2>
+  <h3>重排序（Reranking）</h3>
+  <p>召回-精排两阶段：先用 bi-encoder 快速召回 Top-50 或 Top-100，再用 cross-encoder 精排取 Top-5 送给模型。</p>
+  <ul>
+    <li><strong>Cross-encoder</strong>：把查询和文档拼接输入同一个模型，得到相关性分数。精度最高，但每对都要独立前向传播，不能预计算，只适合对少量候选精排。</li>
+    <li><strong>ColBERT MaxSim</strong>：Late interaction 方案——查询和文档分别编码成 token-level 向量矩阵，相关性是查询每个 token 对文档所有 token 最大相似度之和。精度接近 cross-encoder，但文档向量可预计算，检索速度快 10–100 倍。</li>
+  </ul>
+  <h3>向量索引</h3>
+  <p><strong>HNSW（层次可导航小世界）</strong>是最主流的近似最近邻索引：</p>
+  <ul>
+    <li><code>M</code>：每个节点的最大邻居数，典型值 16–64，越大精度越高但内存越多。</li>
+    <li><code>efConstruction</code>：构建时的搜索宽度，典型值 100–200，越大构建质量越高但越慢。</li>
+    <li><code>efSearch</code>：查询时的搜索宽度，典型值 50–100，越大召回率越高但延迟增加。</li>
+  </ul>
+  <p><strong>ScaNN</strong>（Google）的核心是<strong>各向异性向量量化（anisotropic vector quantization）</strong>：按对内积估计影响的方向性分配量化误差，即在对结果影响大的方向保留更高精度，在影响小的方向可以更粗糙。这与常规的各向同性量化（均匀分配误差）有本质区别，在高内积场景下精度更高。</p>
+</div>
+
+<div class="section" id="llm-ts-memory-s8">
+  <h2>Agentic RAG 与上下文感知检索</h2>
+  <h3>把检索变成工具</h3>
+  <p>固定 RAG Pipeline 的问题：检索发生在推理之前，模型不能根据思考过程决定「要不要检索」「检索什么」。Agentic RAG 把检索做成工具，模型可以多次调用、改写查询、验证结果质量。</p>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    Q[用户问题] --> M[模型推理]
+    M -->|决定检索| Tool[检索工具]
+    Tool --> R[检索结果]
+    R --> M
+    M -->|结果不满意<br/>改写查询| Tool
+    M -->|结果充分| Ans[生成最终回复]
+</pre></div>
+  <h3>上下文感知检索</h3>
+  <p>直接用用户最新一句话检索，往往因为历史上下文丢失而失效（「它的参数怎么配」里的「它」是什么？）。改进方案：</p>
+  <ul>
+    <li><strong>查询改写</strong>：用模型把当前查询 + 对话历史浓缩成一个独立的检索查询。</li>
+    <li><strong>HyDE（假设文档嵌入）</strong>：让模型先生成一个「假设性答案」，用答案的嵌入去检索。因为答案在语义空间里更接近文档，召回率往往高于直接检索问题。</li>
+    <li><strong>Contextual Retrieval</strong>：在建索引时，给每个 chunk 加上「这段内容在全文中的定位说明」后再嵌入。这样 chunk 的嵌入向量携带了全局上下文，孤立片段的召回质量大幅提升。</li>
+  </ul>
+</div>
+</div></section>

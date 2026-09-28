@@ -1,0 +1,49 @@
+
+.llm-m-rag-eval .module-wrapper * { margin: 0; padding: 0; box-sizing: border-box; }
+.llm-m-rag-eval h1 { font-size: 2rem; margin-bottom: 0.5rem;  border-bottom: 3px solid #3b82f6; padding-bottom: 0.5rem; }
+.llm-m-rag-eval h2 { font-size: 1.5rem; margin-top: 2.5rem; margin-bottom: 1rem; }
+.llm-m-rag-eval h3 { font-size: 1.2rem; margin-top: 1.5rem; margin-bottom: 0.75rem; }
+.llm-m-rag-eval p { margin-bottom: 1rem; }
+.llm-m-rag-eval a { text-decoration: none; }
+.llm-m-rag-eval a:hover { text-decoration: underline; }
+.llm-m-rag-eval ul, .llm-m-rag-eval ol { margin-left: 1.5rem; margin-bottom: 1rem; }
+.llm-m-rag-eval li { margin-bottom: 0.4rem; }
+.llm-m-rag-eval table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+.llm-m-rag-eval th, .llm-m-rag-eval td { border: 1px solid var(--lc-border); padding: 0.6rem 0.8rem; text-align: left; }
+.llm-m-rag-eval th { font-weight: 600; }
+.llm-m-rag-eval code { font-family: 'Fira Code', 'Consolas', monospace;
+            
+            
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.88em; }
+.llm-m-rag-eval pre { padding: 1.2rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1rem 0;
+            font-size: 0.88rem;
+            line-height: 1.6; }
+.llm-m-rag-eval pre code { padding: 0; }
+.llm-m-rag-eval .callout { border-left: 4px solid #3b82f6;
+            padding: 1rem 1.2rem;
+            margin: 1.2rem 0;
+            border-radius: 0 6px 6px 0; }
+.llm-m-rag-eval .callout-warn { border-left-color: #f59e0b; }
+.llm-m-rag-eval .callout-success { border-left-color: #10b981; }
+.llm-m-rag-eval .callout strong { display: block; margin-bottom: 0.3rem; }
+.llm-m-rag-eval .metric-card { border: 1px solid var(--lc-border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 0.8rem 0; }
+.llm-m-rag-eval .metric-card h4 { margin-bottom: 0.3rem; }
+.llm-m-rag-eval .tag { display: inline-block;
+            
+            
+            padding: 0.15rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            margin-right: 0.3rem; }
+.llm-m-rag-eval .exercise { border: 2px solid #22c55e;
+            border-radius: 8px;
+            padding: 1.2rem;
+            margin: 1.2rem 0; }

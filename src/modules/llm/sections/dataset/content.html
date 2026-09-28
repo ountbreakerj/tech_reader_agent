@@ -1,0 +1,409 @@
+<section class="llm-mod llm-m-dataset" id="llm-dataset"><div class="module-wrapper">
+<!-- 侧边栏导航 -->
+
+
+
+
+
+<!-- 主内容区 -->
+
+
+
+<!-- Hero Banner -->
+<div class="hero-banner">
+  <h1>📦 数据集构建</h1>
+  <p>掌握数据集的组织、管理和优化方法</p>
+</div>
+
+<!-- ==================== SECTION 1 ==================== -->
+<div class="section" id="llm-dataset-s1">
+  <h2>数据集划分</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>数据集划分就像考试——训练集是平时做的练习题，验证集是模拟考试，测试集是真正的高考。练习题要足够多才能学好，模拟考试用来检验学习效果，高考才是最终评判。
+  </div>
+
+  <h3>划分原则</h3>
+
+  <table>
+    <tr><th>数据集</th><th>用途</th><th>比例</th><th>关键点</th></tr>
+    <tr><td><strong>训练集</strong></td><td>训练模型参数</td><td>70-80%</td><td>数据量最大</td></tr>
+    <tr><td><strong>验证集</strong></td><td>调整超参数、早停</td><td>10-15%</td><td>不参与训练</td></tr>
+    <tr><td><strong>测试集</strong></td><td>最终评估</td><td>10-15%</td><td>完全隔离</td></tr>
+  </table>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ LLM训练的划分差异：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li><strong>预训练阶段</strong>：通常不做严格的train/test划分——数据全部用于训练，评估通过下游benchmark完成</li>
+      <li><strong>指令微调阶段</strong>：常用 <strong>95/5</strong> 或 <strong>98/2</strong> 的比例（而非80/10/10），因为高质量指令数据稀缺，需要尽量多用于训练</li>
+      <li><strong>以上80/10/10比例</strong>更适用于传统的NLP分类/回归任务</li>
+    </ul>
+  </div>
+
+  <h3>划分代码</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> sklearn.model_selection <span class="kw">import</span> train_test_split
+<span class="kw">import</span> json
+
+<span class="cmt"># 加载数据</span>
+<span class="kw">with</span> <span class="fn">open</span>(<span class="str">"data.jsonl"</span>, <span class="str">'r'</span>, encoding=<span class="str">'utf-8'</span>) <span class="kw">as</span> f:
+    data = [json.loads(line) <span class="kw">for</span> line <span class="kw">in</span> f]
+
+<span class="cmt"># 第一次划分：训练集+临时集（80% + 20%）</span>
+train_data, temp_data = <span class="fn">train_test_split</span>(
+    data,
+    test_size=<span class="num">0.2</span>,
+    random_state=<span class="num">42</span>,
+    shuffle=<span class="kw">True</span>
+)
+
+<span class="cmt"># 第二次划分：验证集+测试集（各10%）</span>
+val_data, test_data = <span class="fn">train_test_split</span>(
+    temp_data,
+    test_size=<span class="num">0.5</span>,
+    random_state=<span class="num">42</span>
+)
+
+<span class="fn">print</span>(<span class="str">f"训练集: <span class="var">{len(train_data)}</span> 条"</span>)
+<span class="fn">print</span>(<span class="str">f"验证集: <span class="var">{len(val_data)}</span> 条"</span>)
+<span class="fn">print</span>(<span class="str">f"测试集: <span class="var">{len(test_data)}</span> 条"</span>)
+
+<span class="cmt"># 保存划分后的数据</span>
+<span class="kw">for</span> name, dataset <span class="kw">in</span> [(<span class="str">"train"</span>, train_data), (<span class="str">"val"</span>, val_data), (<span class="str">"test"</span>, test_data)]:
+    <span class="kw">with</span> <span class="fn">open</span>(<span class="str">f"<span class="var">{name}</span>.jsonl"</span>, <span class="str">'w'</span>, encoding=<span class="str">'utf-8'</span>) <span class="kw">as</span> f:
+        <span class="kw">for</span> item <span class="kw">in</span> dataset:
+            f.write(json.dumps(item, ensure_ascii=<span class="kw">False</span>) + <span class="str">'\n'</span>)</code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 避免数据泄漏：</strong>划分时要确保训练集和测试集没有重叠，否则会高估模型性能。
+  </div>
+</div>
+
+<!-- ==================== SECTION 2 ==================== -->
+<div class="section" id="llm-dataset-s2">
+  <h2>HuggingFace Datasets</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 什么是HuggingFace Datasets：</strong>一个强大的数据集处理库，支持流式处理、内存映射、并行处理，可以高效处理大规模数据集。
+  </div>
+
+  <h3>基础用法</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> datasets <span class="kw">import</span> Dataset, DatasetDict
+
+<span class="cmt"># 从Python字典创建数据集</span>
+data = {
+    <span class="str">"text"</span>: [<span class="str">"文本1"</span>, <span class="str">"文本2"</span>, <span class="str">"文本3"</span>, <span class="str">"文本4"</span>],
+    <span class="str">"label"</span>: [<span class="num">0</span>, <span class="num">1</span>, <span class="num">1</span>, <span class="num">0</span>]
+}
+dataset = Dataset.<span class="fn">from_dict</span>(data)
+
+<span class="cmt"># 查看数据集信息</span>
+<span class="fn">print</span>(dataset)
+<span class="fn">print</span>(dataset[<span class="num">0</span>])  <span class="cmt"># 访问单条数据</span>
+<span class="fn">print</span>(dataset.features)  <span class="cmt"># 查看字段类型</span>
+
+<span class="cmt"># 划分训练集和测试集</span>
+train_test = dataset.<span class="fn">train_test_split</span>(test_size=<span class="num">0.2</span>, seed=<span class="num">42</span>)
+<span class="fn">print</span>(train_test)  <span class="cmt"># DatasetDict({'train': ..., 'test': ...})</span></code></pre>
+  </div>
+
+  <h3>从文件加载</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> datasets <span class="kw">import</span> load_dataset
+
+<span class="cmt"># 从JSONL加载</span>
+dataset = load_dataset(<span class="str">"json"</span>, data_files=<span class="str">"data.jsonl"</span>)
+
+<span class="cmt"># 从CSV加载</span>
+dataset = load_dataset(<span class="str">"csv"</span>, data_files=<span class="str">"data.csv"</span>)
+
+<span class="cmt"># 从HuggingFace Hub加载</span>
+dataset = load_dataset(<span class="str">"imdb"</span>)
+
+<span class="cmt"># 应用处理函数</span>
+<span class="kw">def</span> <span class="fn">preprocess</span>(example):
+    example[<span class="str">"text"</span>] = example[<span class="str">"text"</span>].lower()
+    <span class="kw">return</span> example
+
+dataset = dataset.<span class="fn">map</span>(preprocess)
+
+<span class="cmt"># 设置格式（PyTorch/TensorFlow）</span>
+dataset.<span class="fn">set_format</span>(<span class="str">"torch"</span>, columns=[<span class="str">"text"</span>, <span class="str">"label"</span>])</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 3 ==================== -->
+<div class="section" id="llm-dataset-s3">
+  <h2>数据加载优化</h2>
+
+  <h3>PyTorch DataLoader</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> torch.utils.data <span class="kw">import</span> DataLoader, Dataset
+
+<span class="kw">class</span> <span class="cls">TextDataset</span>(Dataset):
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, texts, labels, tokenizer, max_length=<span class="num">512</span>):
+        self.texts = texts
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    <span class="kw">def</span> <span class="fn">__len__</span>(self):
+        <span class="kw">return</span> <span class="fn">len</span>(self.texts)
+
+    <span class="kw">def</span> <span class="fn">__getitem__</span>(self, idx):
+        encoding = self.tokenizer(
+            self.texts[idx],
+            truncation=<span class="kw">True</span>,
+            padding=<span class="str">"max_length"</span>,
+            max_length=self.max_length,
+            return_tensors=<span class="str">"pt"</span>
+        )
+        <span class="kw">return</span> {
+            <span class="str">"input_ids"</span>: encoding[<span class="str">"input_ids"</span>].squeeze(),
+            <span class="str">"attention_mask"</span>: encoding[<span class="str">"attention_mask"</span>].squeeze(),
+            <span class="str">"labels"</span>: self.labels[idx]
+        }
+
+<span class="cmt"># 创建DataLoader</span>
+dataset = TextDataset(texts, labels, tokenizer)
+dataloader = DataLoader(
+    dataset,
+    batch_size=<span class="num">32</span>,
+    shuffle=<span class="kw">True</span>,
+    num_workers=<span class="num">4</span>,       <span class="cmt"># 多进程加载</span>
+    pin_memory=<span class="kw">True</span>     <span class="cmt"># 加速GPU传输</span>
+)</code></pre>
+  </div>
+
+  <h3>优化技巧</h3>
+
+  <table>
+    <tr><th>技巧</th><th>说明</th><th>效果</th></tr>
+    <tr><td><code>num_workers > 0</code></td><td>多进程并行加载数据</td><td>加速2-4倍</td></tr>
+    <tr><td><code>pin_memory=True</code></td><td>数据固定在内存，加速GPU传输</td><td>加速10-20%</td></tr>
+    <tr><td><code>prefetch_factor=2</code></td><td>提前加载下一批数据</td><td>减少等待时间</td></tr>
+    <tr><td>内存映射（mmap）</td><td>大文件不完全加载到内存</td><td>节省内存</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 4 ==================== -->
+<div class="section" id="llm-dataset-s4">
+  <h2>数据增强</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>数据增强就像用不同的方式说同一句话——用同义词替换、改变语序、翻译后再翻译回来——这样能增加数据的多样性，防止模型过拟合。
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 注意：</strong>下面展示的回译、同义词替换等方法主要用于<strong>传统NLP分类任务</strong>（如文本分类、情感分析）的数据增强。对于<strong>LLM预训练和指令微调</strong>，更主流的做法是使用<strong>合成数据生成</strong>（见下一节）。
+  </div>
+
+  <h3>常见数据增强方法</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> random
+<span class="kw">from</span> collections <span class="kw">import</span> Counter
+
+<span class="kw">def</span> <span class="fn">back_translation_augment</span>(text, src_lang=<span class="str">"zh"</span>, mid_lang=<span class="str">"en"</span>):
+    <span class="str">"""回译增强：中文 → 英文 → 中文"""</span>
+    <span class="cmt"># 使用翻译模型（如Helsinki-NLP）</span>
+    <span class="cmt"># 这里简化示意</span>
+    <span class="kw">return</span> text  <span class="cmt"># 实际实现需要调用翻译模型</span>
+
+<span class="kw">def</span> <span class="fn">synonym_replace</span>(text, synonyms_dict, n=<span class="num">2</span>):
+    <span class="str">"""同义词替换"""</span>
+    words = text.split()
+    <span class="kw">for</span> _ <span class="kw">in</span> <span class="fn">range</span>(n):
+        idx = random.randint(<span class="num">0</span>, <span class="fn">len</span>(words) - <span class="num">1</span>)
+        <span class="kw">if</span> words[idx] <span class="kw">in</span> synonyms_dict:
+            words[idx] = random.choice(synonyms_dict[words[idx]])
+    <span class="kw">return</span> <span class="str">' '</span>.join(words)
+
+<span class="kw">def</span> <span class="fn">random_insert</span>(text, words_pool, n=<span class="num">1</span>):
+    <span class="str">"""随机插入"""</span>
+    words = text.split()
+    <span class="kw">for</span> _ <span class="kw">in</span> <span class="fn">range</span>(n):
+        idx = random.randint(<span class="num">0</span>, <span class="fn">len</span>(words))
+        word = random.choice(words_pool)
+        words.insert(idx, word)
+    <span class="kw">return</span> <span class="str">' '</span>.join(words)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 4.5 ==================== -->
+<div class="section" id="llm-dataset-s4-5">
+  <h2>合成数据生成（2025-2026主流方案）</h2>
+
+  <div class="callout callout-key">
+    <strong>🔑 核心趋势：</strong>在2025-2026年的LLM训练中，<strong>合成数据</strong>已成为指令微调数据的主要来源。其核心思路是用更强的LLM来生成训练数据，训练较弱的模型。
+  </div>
+
+  <h3>主流合成数据方法</h3>
+
+  <table>
+    <tr><th>方法</th><th>思路</th><th>特点</th></tr>
+    <tr><td><strong>Self-Instruct</strong></td><td>LLM自生成指令-回答对</td><td>用少量种子指令扩展大量数据</td></tr>
+    <tr><td><strong>Evol-Instruct</strong></td><td>逐步增加指令复杂度</td><td>WizardLM使用，提升数据难度分布</td></tr>
+    <tr><td><strong>Magpie</strong></td><td>直接从LLM的对话模板中提取指令</td><td>无需种子数据，成本极低</td></tr>
+    <tr><td><strong>Alpaca方案</strong></td><td>用GPT-4/Claude生成教学数据</td><td>Stanford Alpaca开创，52K条数据</td></tr>
+    <tr><td><strong>蒸馏（Distillation）</strong></td><td>用强模型的输出训练弱模型</td><td>DeepSeek-R1-distill系列使用此方案</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># Self-Instruct 合成数据示例</span>
+<span class="kw">import</span> json
+
+<span class="cmt"># 种子指令模板</span>
+seed_instructions = [
+    {<span class="str">"instruction"</span>: <span class="str">"请将以下英文翻译为中文"</span>, <span class="str">"input"</span>: <span class="str">"Hello world"</span>},
+    {<span class="str">"instruction"</span>: <span class="str">"请总结以下文本"</span>, <span class="str">"input"</span>: <span class="str">"..."</span>},
+]
+
+<span class="cmt"># 使用更强的LLM生成新指令（伪代码）</span>
+<span class="kw">def</span> <span class="fn">generate_synthetic_data</span>(seed_tasks, num_new=<span class="num">1000</span>):
+    <span class="str">"""使用强模型生成新的指令微调数据"""</span>
+    prompt = <span class="str">"""根据以下示例，生成一条新的指令微调数据。
+    要求：指令多样化，覆盖不同任务类型。
+    示例："""</span> + json.dumps(seed_tasks[:<span class="num">5</span>])
+
+    <span class="cmt"># 调用强模型API（如GPT-4、Claude等）</span>
+    response = call_llm(prompt)  <span class="cmt"># 实际调用API</span>
+    <span class="kw">return</span> json.loads(response)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 实践建议：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li>合成数据需要<strong>严格质量过滤</strong>——低质量的合成数据反而会降低模型性能</li>
+      <li>建议混合人工标注数据和合成数据，比例约 1:5 到 1:10</li>
+      <li>DeepSeek-V3（~$5.5M训练成本）的成功证明了合成数据路线的可行性</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== SECTION 5 ==================== -->
+<div class="section" id="llm-dataset-s5">
+  <h2>处理不平衡数据</h2>
+
+  <p>数据不平衡是指不同类别的样本数量差异很大，会导致模型偏向多数类。</p>
+
+  <h3>解决方法</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> collections <span class="kw">import</span> Counter
+<span class="kw">import</span> random
+
+<span class="kw">def</span> <span class="fn">oversample_minority</span>(data, labels):
+    <span class="str">"""过采样少数类"""</span>
+    counter = Counter(labels)
+    max_count = <span class="fn">max</span>(counter.values())
+
+    augmented_data = []
+    augmented_labels = []
+
+    <span class="kw">for</span> label <span class="kw">in</span> counter:
+        <span class="cmt"># 找到这个类别的样本</span>
+        class_data = [d <span class="kw">for</span> d, l <span class="kw">in</span> <span class="fn">zip</span>(data, labels) <span class="kw">if</span> l == label]
+
+        <span class="cmt"># 复制样本直到达到最大数量</span>
+        <span class="kw">while</span> <span class="fn">len</span>(class_data) < max_count:
+            class_data.append(random.choice(class_data))
+
+        augmented_data.extend(class_data[:max_count])
+        augmented_labels.extend([label] * max_count)
+
+    <span class="kw">return</span> augmented_data, augmented_labels
+
+<span class="kw">def</span> <span class="fn">undersample_majority</span>(data, labels):
+    <span class="str">"""欠采样多数类"""</span>
+    counter = Counter(labels)
+    min_count = <span class="fn">min</span>(counter.values())
+
+    sampled_data = []
+    sampled_labels = []
+
+    <span class="kw">for</span> label <span class="kw">in</span> counter:
+        class_data = [d <span class="kw">for</span> d, l <span class="kw">in</span> <span class="fn">zip</span>(data, labels) <span class="kw">if</span> l == label]
+        sampled = random.sample(class_data, min_count)
+        sampled_data.extend(sampled)
+        sampled_labels.extend([label] * min_count)
+
+    <span class="kw">return</span> sampled_data, sampled_labels</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 选择建议：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li><strong>过采样</strong>：数据量小时使用，可能增加训练时间</li>
+      <li><strong>欠采样</strong>：数据量大时使用，可能丢失重要信息</li>
+      <li><strong>权重调整</strong>：在损失函数中给少数类更高权重（推荐）</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== SECTION 6 ==================== -->
+<div class="section" id="llm-dataset-s6">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：构建指令微调数据集 <span class="badge">基础</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>构建一个指令微调数据集。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 准备50条指令数据（instruction-input-output格式）</p>
+      <p>② 划分为训练集（40条）和验证集（10条）</p>
+      <p>③ 保存为JSONL格式</p>
+      <p>④ 统计平均文本长度</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习2：数据增强实战 <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>对一个小数据集进行数据增强。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 使用HuggingFace Datasets加载一个小型数据集</p>
+      <p>② 实现至少2种数据增强方法</p>
+      <p>③ 对比增强前后的数据分布</p>
+      <p>④ 评估数据增强对模型性能的影响</p>
+    </div>
+  </div>
+</div>
+
+<!-- 底部导航 -->
+</div></section>

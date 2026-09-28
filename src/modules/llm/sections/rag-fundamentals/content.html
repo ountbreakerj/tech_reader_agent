@@ -1,0 +1,215 @@
+<section class="llm-mod llm-m-rag-fundamentals" id="llm-rag-fundamentals"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#0d9488;">
+  <h1>📖 RAG基础与架构设计</h1>
+  <p>理解检索增强生成的核心概念和架构</p>
+</div>
+
+<div class="section" id="llm-rag-fundamentals-s1">
+  <h2>什么是RAG</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>RAG（Retrieval-Augmented Generation）就像是给LLM配了一个"图书管理员"——当你问问题时，图书管理员先帮你从图书馆找到最相关的几本书（检索），然后你再根据这些书来回答问题（生成）。这样就解决了LLM知识过时和幻觉的问题。
+  </div>
+
+  <h3>RAG vs Fine-Tuning vs Prompt Engineering</h3>
+
+  <table>
+    <tr><th>方法</th><th>优点</th><th>缺点</th><th>适用场景</th></tr>
+    <tr><td><strong>RAG</strong></td><td>知识实时更新，可溯源</td><td>检索质量影响效果</td><td>知识库问答、文档助手</td></tr>
+    <tr><td><strong>Fine-Tuning</strong></td><td>特定任务效果好</td><td>需要训练数据，知识固化</td><td>领域适配、风格迁移</td></tr>
+    <tr><td><strong>Prompt Engineering</strong></td><td>简单快速</td><td>上下文长度限制</td><td>简单任务、原型验证</td></tr>
+  </table>
+</div>
+
+<div class="section" id="llm-rag-fundamentals-s2">
+  <h2>RAG核心架构</h2>
+
+  <h3>三个阶段</h3>
+
+  <div class="diagram">
+    <pre class="mermaid">
+graph LR
+    subgraph Indexing["索引阶段"]
+        A[文档加载] --> B[文本分割]
+        B --> C[向量化]
+        C --> D[存储到向量库]
+    end
+
+    subgraph Retrieval["检索阶段"]
+        E[用户查询] --> F[查询向量化]
+        F --> G[相似度搜索]
+        G --> H[获取Top-K文档]
+    end
+
+    subgraph Generation["生成阶段"]
+        H --> I[构建Prompt]
+        I --> J[LLM生成回答]
+        J --> K[返回结果]
+    end
+    </pre>
+    <div class="caption">RAG系统三阶段架构</div>
+  </div>
+
+  <h3>完整流程</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_milvus <span class="kw">import</span> Milvus
+<span class="kw">from</span> langchain_huggingface <span class="kw">import</span> HuggingFaceEmbeddings
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> ChatOpenAI
+<span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> ChatPromptTemplate
+<span class="kw">from</span> langchain_core.runnables <span class="kw">import</span> RunnablePassthrough
+<span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> StrOutputParser
+
+<span class="cmt"># 1. 初始化Embedding模型</span>
+embeddings = HuggingFaceEmbeddings(
+    model_name=<span class="str">"BAAI/bge-base-zh-v1.5"</span>
+)
+
+<span class="cmt"># 2. 连接向量数据库</span>
+vectorstore = Milvus(
+    embedding_function=embeddings,
+    collection_name=<span class="str">"documents"</span>,
+    connection_args={<span class="str">"host"</span>: <span class="str">"localhost"</span>, <span class="str">"port"</span>: <span class="num">19530</span>}
+)
+
+<span class="cmt"># 3. 创建检索器</span>
+retriever = vectorstore.as_retriever(
+    search_type=<span class="str">"similarity"</span>,
+    search_kwargs={<span class="str">"k"</span>: <span class="num">3</span>}  <span class="cmt"># 返回3个最相关的文档</span>
+)
+
+<span class="cmt"># 4. 创建RAG链（LCEL风格）</span>
+template = <span class="str">"""根据以下上下文回答问题：
+{context}
+
+问题：{question}
+"""</span>
+prompt = ChatPromptTemplate.from_template(template)
+llm = ChatOpenAI(model=<span class="str">"gpt-4o"</span>)
+
+<span class="kw">def</span> <span class="fn">format_docs</span>(docs):
+    <span class="kw">return</span> <span class="str">"\n\n"</span>.join(doc.page_content <span class="kw">for</span> doc <span class="kw">in</span> docs)
+
+rag_chain = (
+    {<span class="str">"context"</span>: retriever | format_docs, <span class="str">"question"</span>: RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+<span class="cmt"># 5. 查询</span>
+result = rag_chain.invoke(<span class="str">"什么是机器学习？"</span>)
+<span class="fn">print</span>(result)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-rag-fundamentals-s3">
+  <h2>向量嵌入（Embedding）</h2>
+
+  <h3>主流Embedding模型对比</h3>
+
+  <table>
+    <tr><th>模型</th><th>维度</th><th>特点</th><th>适用场景</th></tr>
+    <tr><td><strong>text-embedding-3-small</strong></td><td>1536（可降维）</td><td>OpenAI最新小模型，支持<code>dimensions</code>参数降维</td><td>通用场景，性价比高</td></tr>
+    <tr><td><strong>text-embedding-3-large</strong></td><td>3072</td><td>OpenAI旗舰模型，高精度</td><td>高精度检索、多语言</td></tr>
+    <tr><td><strong>BGE-M3</strong></td><td>1024</td><td>BAAI多语言模型，单模型支持dense+sparse+ColBERT</td><td>多语言RAG（推荐）</td></tr>
+    <tr><td><strong>Jina Embeddings v3</strong></td><td>1024（可变）</td><td>8192 token上下文，任务特定LoRA适配器</td><td>长文档、任务特化</td></tr>
+    <tr><td><strong>Cohere Embed v3</strong></td><td>1024</td><td>多语言，支持int8/binary量化压缩</td><td>大规模生产部署</td></tr>
+    <tr><td><strong>BGE-base-zh</strong></td><td>768</td><td>中文优化，经典模型</td><td>纯中文场景</td></tr>
+    <tr><td><strong>all-MiniLM-L6-v2</strong></td><td>384</td><td>轻量级，速度快</td><td>英文、资源受限</td></tr>
+  </table>
+</div>
+
+<div class="section" id="llm-rag-fundamentals-s4">
+  <h2>文档处理</h2>
+
+  <h3>文本分割策略</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> langchain_text_splitters <span class="kw">import</span> RecursiveCharacterTextSplitter
+
+<span class="cmt"># 递归字符分割（推荐）</span>
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=<span class="num">500</span>,       <span class="cmt"># 每个chunk的最大字符数</span>
+    chunk_overlap=<span class="num">50</span>,     <span class="cmt"># chunk之间的重叠</span>
+    length_function=<span class="fn">len</span>,
+    separators=[<span class="str">"\n\n"</span>, <span class="str">"\n"</span>, <span class="str">"。"</span>, <span class="str">" "</span>]  <span class="cmt"># 分割符优先级</span>
+)
+
+<span class="cmt"># 分割文档</span>
+docs = text_splitter.split_documents(documents)
+<span class="fn">print</span>(<span class="str">f"分割成 <span class="var">{len(docs)}</span> 个chunk"</span>)
+
+<span class="cmt"># chunk大小选择指南（以token为单位）</span>
+<span class="cmt"># - 太小（<128 tokens）：上下文不完整，语义信息不足</span>
+<span class="cmt"># - 太大（>1024 tokens）：检索不精确，噪声过多</span>
+<span class="cmt"># - 推荐：256-1024 tokens（具体取决于embedding模型的最大输入长度）</span>
+<span class="cmt"># - 例如BGE模型最大512 tokens，text-embedding-3系列最大8191 tokens</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-rag-fundamentals-s4-1">
+  <h2>进阶分块策略</h2>
+
+  <p>除了基础的递归字符分割，现代RAG系统采用更智能的分块方法，能显著提升检索质量：</p>
+
+  <table>
+    <tr><th>策略</th><th>原理</th><th>优点</th><th>适用场景</th></tr>
+    <tr><td><strong>语义分块（Semantic Chunking）</strong></td><td>计算相邻句子的embedding相似度，在相似度骤降处切分</td><td>保持语义完整性</td><td>段落结构清晰的文档</td></tr>
+    <tr><td><strong>智能体分块（Agentic Chunking）</strong></td><td>使用LLM判断最佳切分点，理解文档语义结构</td><td>最智能的切分方式</td><td>复杂结构文档、高质量需求</td></tr>
+    <tr><td><strong>延迟分块（Late Chunking）</strong></td><td>先对完整文档生成token级embedding，再切分embedding向量</td><td>保留全局上下文信息</td><td>长文档、跨段落依赖</td></tr>
+    <tr><td><strong>上下文分块（Contextual Chunking）</strong></td><td>用LLM为每个chunk生成上下文摘要，附加到chunk前面</td><td>提升独立chunk的可理解性</td><td>孤立chunk难以理解的场景</td></tr>
+    <tr><td><strong>父子分块（Parent-Child Chunking）</strong></td><td>小chunk用于精确检索，返回其所属的大chunk提供完整上下文</td><td>兼顾检索精度和上下文完整性</td><td>大多数生产RAG系统（推荐）</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>💡 父子分块实践建议：</strong>小chunk通常为128-256 tokens用于embedding检索，父chunk为512-1024 tokens用于提供上下文。检索命中小chunk后，返回其对应的父chunk给LLM，这样既保证检索精度又不丢失上下文。
+  </div>
+</div>
+
+<div class="section" id="llm-rag-fundamentals-s4-2">
+  <h2>查询转换技术</h2>
+
+  <p>用户查询往往不够精确或表述方式单一，查询转换技术在检索前对查询进行优化，能显著提升召回率：</p>
+
+  <h3>HyDE（假设性文档嵌入）</h3>
+  <p>先让LLM生成一个"假设性回答"，再用这个回答的embedding去检索。假设性回答虽然可能包含错误事实，但其语义分布更接近真实文档，能有效弥合查询与文档之间的语义鸿沟。</p>
+
+  <h3>多查询扩展（Multi-Query Expansion）</h3>
+  <p>将原始查询改写为多个不同表述方式的子查询，分别进行检索后合并结果。例如"Python如何读取Excel"可扩展为："Python读取xlsx文件方法"、"openpyxl库使用教程"、"pandas读取Excel数据"等，大幅提高召回率。</p>
+
+  <h3>查询分解（Query Decomposition）</h3>
+  <p>将复杂的多跳问题分解为多个简单子问题，分别检索后综合回答。例如"对比BERT和GPT在文本分类上的优劣"可分解为："BERT在文本分类上的表现"和"GPT在文本分类上的表现"两个子查询。</p>
+
+  <div class="callout callout-info">
+    <strong>📖 选择建议：</strong>HyDE实现最简单，适合作为查询优化的起点；多查询扩展在大多数场景下能稳定提升召回率；查询分解适合处理复杂多跳问题。三者可以组合使用。
+  </div>
+</div>
+
+<div class="section" id="llm-rag-fundamentals-s5">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：构建简单RAG系统</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>从零构建一个简单的RAG问答系统。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 准备5-10个文本文档</p>
+      <p>② 使用LangChain进行文本分割</p>
+      <p>③ 使用HuggingFace Embeddings生成向量</p>
+      <p>④ 存储到Milvus</p>
+      <p>⑤ 实现相似度搜索</p>
+      <p>⑥ 测试3个不同的查询</p>
+    </div>
+  </div>
+</div>
+
+
+
+</div>
+
+</section>

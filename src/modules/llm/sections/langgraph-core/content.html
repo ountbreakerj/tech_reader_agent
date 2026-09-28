@@ -1,0 +1,374 @@
+<section class="llm-mod llm-m-langgraph-core" id="llm-langgraph-core"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#7c3aed;--hero-b:#2563eb;">
+  <h1>LangGraph核心：状态、节点与边</h1>
+  <p>用图结构编排复杂的 LLM 工作流</p>
+</div>
+
+<!-- ==================== SECTION 1: 为什么需要 LangGraph ==================== -->
+<div class="section" id="llm-langgraph-core-s1">
+  <h2>为什么需要 LangGraph</h2>
+
+  <p>LangChain 的 Chain 是线性管道（A -> B -> C），数据单向流动。但真实世界的 LLM 应用往往需要循环（审查-修复-再审查）、条件分支（根据结果走不同路径）、人工介入（暂停等待审批）——这些场景用 Chain 很难实现。</p>
+
+  <div class="compare">
+    <div class="compare-card left">
+      <h4>LangChain Chain</h4>
+      <ul>
+        <li>线性管道 A -> B -> C</li>
+        <li>数据单向流动</li>
+        <li>没有原生循环支持</li>
+        <li>难以实现分支和回退</li>
+        <li>状态管理靠外部变量</li>
+      </ul>
+    </div>
+    <div class="compare-card right">
+      <h4>LangGraph</h4>
+      <ul>
+        <li>图结构（任意连接）</li>
+        <li>状态在节点间共享和修改</li>
+        <li>原生支持循环和条件分支</li>
+        <li>内置持久化和断点恢复</li>
+        <li>原生支持 Human-in-the-Loop</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>LangChain 的 Chain 像是<strong>工厂流水线</strong>——传送带从头到尾，工位固定顺序。LangGraph 像是<strong>地铁线路图</strong>——站点（节点）之间可以有任意连接，有环线、有换乘、有分支，你能设计出任意复杂的工作流。
+  </div>
+</div>
+
+<!-- ==================== SECTION 2: StateGraph 基础 ==================== -->
+<div class="section" id="llm-langgraph-core-s2">
+  <h2>StateGraph 基础：TypedDict State</h2>
+
+  <p>LangGraph 的一切从 <strong>State</strong> 开始。State 是一个在所有节点之间共享的数据结构——类似于多人协作的"共享白板"，每个节点都可以读取和修改。</p>
+
+  <div class="callout callout-key">
+    <strong>核心概念：</strong>State 用 Python 的 <code>TypedDict</code> 定义。每个节点函数接收整个 State，返回一个只包含要更新字段的字典，LangGraph 自动将其合并到 State 中。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">Annotated</span>, <span class="cls">TypedDict</span>
+<span class="kw">from</span> operator <span class="kw">import</span> add
+
+<span class="kw">class</span> <span class="cls">ChatState</span>(<span class="cls">TypedDict</span>):
+    <span class="cmt"># 对话消息列表</span>
+    messages: <span class="cls">Annotated</span>[<span class="cls">list</span>, add]
+    <span class="cmt"># 当前情绪标签</span>
+    mood: <span class="cls">str</span>
+    <span class="cmt"># 对话轮次</span>
+    turn_count: <span class="cls">int</span></code></pre>
+  </div>
+
+  <h3>Annotated 与 Reducer</h3>
+
+  <table>
+    <tr><th>写法</th><th>行为</th><th>适用场景</th></tr>
+    <tr><td><code>field: list</code></td><td>节点返回的 list <strong>覆盖</strong>原值</td><td>不需要保留历史的列表</td></tr>
+    <tr><td><code>field: Annotated[list, add]</code></td><td>节点返回的 list <strong>追加</strong>到原值</td><td>消息历史、日志记录</td></tr>
+    <tr><td><code>field: str</code></td><td>节点返回的 str <strong>覆盖</strong>原值</td><td>单值字段（覆盖即更新）</td></tr>
+    <tr><td><code>field: int</code></td><td>节点返回的 int <strong>覆盖</strong>原值</td><td>计数器、状态标志</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>实用技巧：</strong>消息历史字段（messages）几乎总是用 <code>Annotated[list, add]</code>，这样每个节点只需返回新消息，而不是复制整个历史列表。
+  </div>
+</div>
+
+<!-- ==================== SECTION 3: Node ==================== -->
+<div class="section" id="llm-langgraph-core-s3">
+  <h2>Node（工作者函数）</h2>
+
+  <p>Node 是执行实际工作的函数。每个 Node 接收当前 State，执行逻辑，返回一个字典来更新 State 的部分字段。</p>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>如果 State 是白板，Node 就是走到白板前的<strong>工人</strong>。工人读取白板上的内容，做自己的工作，然后把结果写回白板。关键是：每个工人只更新自己负责的字段，不会擦掉别人写的东西。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> langchain_core.messages <span class="kw">import</span> <span class="cls">SystemMessage</span>, <span class="cls">AIMessage</span>
+
+llm = <span class="cls">ChatAnthropic</span>(model=<span class="str">"claude-opus-5"</span>)
+
+<span class="kw">def</span> <span class="fn">chatbot</span>(state: <span class="cls">ChatState</span>) -> <span class="cls">dict</span>:
+    <span class="str">"""聊天机器人节点：根据消息历史生成回复"""</span>
+    response = llm.<span class="fn">invoke</span>(state[<span class="str">"messages"</span>])
+
+    <span class="cmt"># 返回要更新的字段</span>
+    <span class="kw">return</span> {
+        <span class="str">"messages"</span>: [<span class="cls">AIMessage</span>(content=response.content)],
+        <span class="str">"turn_count"</span>: state.get(<span class="str">"turn_count"</span>, <span class="num">0</span>) + <span class="num">1</span>
+    }
+
+<span class="cmt"># 情绪分析节点</span>
+<span class="kw">def</span> <span class="fn">analyze_mood</span>(state: <span class="cls">ChatState</span>) -> <span class="cls">dict</span>:
+    <span class="str">"""分析用户最新消息的情绪"""</span>
+    last_msg = state[<span class="str">"messages"</span>][<span class="num">-1</span>].content
+    <span class="kw">if</span> <span class="str">"开心"</span> <span class="kw">in</span> last_msg <span class="kw">or</span> <span class="str">"高兴"</span> <span class="kw">in</span> last_msg:
+        mood = <span class="str">"positive"</span>
+    <span class="kw">elif</span> <span class="str">"难过"</span> <span class="kw">in</span> last_msg <span class="kw">or</span> <span class="str">"生气"</span> <span class="kw">in</span> last_msg:
+        mood = <span class="str">"negative"</span>
+    <span class="kw">else</span>:
+        mood = <span class="str">"neutral"</span>
+    <span class="kw">return</span> {<span class="str">"mood"</span>: mood}</code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>常见错误：</strong>Node 函数的返回值必须是字典，只包含要更新的字段。不要返回完整的 State——LangGraph 会自动合并。
+  </div>
+</div>
+
+<!-- ==================== SECTION 4: Edge 与 Conditional Edge ==================== -->
+<div class="section" id="llm-langgraph-core-s4">
+  <h2>Edge（边）与 Conditional Edge（条件边）</h2>
+
+  <p>Edge 定义了节点之间的连接关系——"做完 A 之后去做 B"。</p>
+
+  <h3>普通边（add_edge）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">START</span>, <span class="cls">END</span>
+
+graph = <span class="cls">StateGraph</span>(<span class="cls">ChatState</span>)
+
+<span class="cmt"># 添加节点</span>
+graph.<span class="fn">add_node</span>(<span class="str">"analyze_mood"</span>, analyze_mood)
+graph.<span class="fn">add_node</span>(<span class="str">"chatbot"</span>, chatbot)
+
+<span class="cmt"># 普通边：START -> analyze_mood -> chatbot -> END</span>
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"analyze_mood"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"analyze_mood"</span>, <span class="str">"chatbot"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"chatbot"</span>, <span class="cls">END</span>)</code></pre>
+  </div>
+
+  <h3>条件边（add_conditional_edges）</h3>
+
+  <p>条件边根据当前 State 的值，动态决定下一步走向哪个节点。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">def</span> <span class="fn">route_by_mood</span>(state: <span class="cls">ChatState</span>) -> <span class="cls">str</span>:
+    <span class="str">"""根据情绪路由到不同的处理节点"""</span>
+    mood = state.get(<span class="str">"mood"</span>, <span class="str">"neutral"</span>)
+    <span class="kw">if</span> mood == <span class="str">"positive"</span>:
+        <span class="kw">return</span> <span class="str">"cheerful_reply"</span>
+    <span class="kw">elif</span> mood == <span class="str">"negative"</span>:
+        <span class="kw">return</span> <span class="str">"empathetic_reply"</span>
+    <span class="kw">else</span>:
+        <span class="kw">return</span> <span class="str">"normal_reply"</span>
+
+<span class="cmt"># 添加条件边：从 analyze_mood 出发，根据 route_by_mood 的返回值选择目标</span>
+graph.<span class="fn">add_conditional_edges</span>(
+    <span class="str">"analyze_mood"</span>,       <span class="cmt"># 源节点</span>
+    route_by_mood,         <span class="cmt"># 路由函数（接收 state，返回字符串 key）</span>
+    {
+        <span class="str">"cheerful_reply"</span>: <span class="str">"cheerful_reply"</span>,    <span class="cmt"># key -> 目标节点名</span>
+        <span class="str">"empathetic_reply"</span>: <span class="str">"empathetic_reply"</span>,
+        <span class="str">"normal_reply"</span>: <span class="str">"normal_reply"</span>,
+    }
+)</code></pre>
+  </div>
+
+  <div class="callout callout-key">
+    <strong>条件边的三个参数：</strong>
+    <br>1. <strong>源节点</strong>（str）：从哪个节点出发
+    <br>2. <strong>路由函数</strong>（callable）：接收 State，返回一个字符串 key
+    <br>3. <strong>映射字典</strong>（dict）：key -> 目标节点名的映射
+  </div>
+</div>
+
+<!-- ==================== SECTION 5: START 和 END ==================== -->
+<div class="section" id="llm-langgraph-core-s5">
+  <h2>START 和 END 常量</h2>
+
+  <p><code>START</code> 和 <code>END</code> 是 LangGraph 预定义的特殊节点，分别表示图的入口和出口。</p>
+
+  <table>
+    <tr><th>常量</th><th>来源</th><th>含义</th><th>用法</th></tr>
+    <tr><td><code>START</code></td><td><code>from langgraph.graph import START</code></td><td>图的入口点</td><td><code>add_edge(START, "first_node")</code></td></tr>
+    <tr><td><code>END</code></td><td><code>from langgraph.graph import END</code></td><td>图的终止点</td><td><code>add_edge("last_node", END)</code></td></tr>
+  </table>
+
+  <div class="callout callout-warn">
+    <strong>弃用警告：</strong>旧版 API <code>set_entry_point()</code> 和 <code>set_finish_point()</code> 已弃用。请统一使用 <code>add_edge(START, "node")</code> 和 <code>add_edge("node", END)</code>。
+  </div>
+</div>
+
+<!-- ==================== SECTION 6: compile 和 invoke ==================== -->
+<div class="section" id="llm-langgraph-core-s6">
+  <h2>graph.compile() 与 graph.invoke()</h2>
+
+  <p>构建图之后，需要先 <code>compile()</code> 编译，然后才能 <code>invoke()</code> 执行。编译过程会验证图的结构完整性。</p>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>创建 StateGraph</strong> — 传入 State 类型</div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>add_node</strong> — 注册节点函数</div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>add_edge / add_conditional_edges</strong> — 定义连接</div>
+  </div>
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>compile</strong> — 编译为可执行图</div>
+  </div>
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-content"><strong>invoke / stream</strong> — 传入初始 State 运行</div>
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.messages <span class="kw">import</span> <span class="cls">HumanMessage</span>
+
+<span class="cmt"># 编译</span>
+app = graph.<span class="fn">compile</span>()
+
+<span class="cmt"># 运行</span>
+result = app.<span class="fn">invoke</span>({
+    <span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"你好，今天我很开心！"</span>)],
+    <span class="str">"mood"</span>: <span class="str">"neutral"</span>,
+    <span class="str">"turn_count"</span>: <span class="num">0</span>
+})
+
+<span class="fn">print</span>(result[<span class="str">"messages"</span>][<span class="num">-1</span>].content)
+<span class="fn">print</span>(<span class="str">f"情绪：{result['mood']}"</span>)
+<span class="fn">print</span>(<span class="str">f"对话轮次：{result['turn_count']}"</span>)
+
+<span class="cmt"># 流式运行（查看每个节点的输出）</span>
+<span class="kw">for</span> event <span class="kw">in</span> app.<span class="fn">stream</span>(input_state, stream_mode=<span class="str">"updates"</span>):
+    <span class="fn">print</span>(event)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 7: 完整示例 ==================== -->
+<div class="section" id="llm-langgraph-core-s7">
+  <h2>完整示例：构建一个简单的对话机器人</h2>
+
+  <p>下面是一个完整的对话机器人示例，包含情绪分析和条件路由：</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">Annotated</span>, <span class="cls">TypedDict</span>
+<span class="kw">from</span> operator <span class="kw">import</span> add
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">START</span>, <span class="cls">END</span>
+<span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> langchain_core.messages <span class="kw">import</span> <span class="cls">HumanMessage</span>, <span class="cls">AIMessage</span>, <span class="cls">SystemMessage</span>
+
+<span class="cmt"># 1. 定义 State</span>
+<span class="kw">class</span> <span class="cls">BotState</span>(<span class="cls">TypedDict</span>):
+    messages: <span class="cls">Annotated</span>[<span class="cls">list</span>, add]
+    mood: <span class="cls">str</span>
+
+<span class="cmt"># 2. 初始化模型</span>
+llm = <span class="cls">ChatAnthropic</span>(model=<span class="str">"claude-opus-5"</span>)
+
+<span class="cmt"># 3. 定义节点</span>
+<span class="kw">def</span> <span class="fn">detect_mood</span>(state: <span class="cls">BotState</span>) -> <span class="cls">dict</span>:
+    last_msg = state[<span class="str">"messages"</span>][<span class="num">-1</span>].content
+    <span class="kw">if</span> <span class="kw">any</span>(w <span class="kw">in</span> last_msg <span class="kw">for</span> w <span class="kw">in</span> [<span class="str">"开心"</span>, <span class="str">"高兴"</span>, <span class="str">"谢谢"</span>]):
+        <span class="kw">return</span> {<span class="str">"mood"</span>: <span class="str">"happy"</span>}
+    <span class="kw">elif</span> <span class="kw">any</span>(w <span class="kw">in</span> last_msg <span class="kw">for</span> w <span class="kw">in</span> [<span class="str">"难过"</span>, <span class="str">"生气"</span>, <span class="str">"烦"</span>]):
+        <span class="kw">return</span> {<span class="str">"mood"</span>: <span class="str">"sad"</span>}
+    <span class="kw">return</span> {<span class="str">"mood"</span>: <span class="str">"neutral"</span>}
+
+<span class="kw">def</span> <span class="fn">happy_reply</span>(state: <span class="cls">BotState</span>) -> <span class="cls">dict</span>:
+    resp = llm.<span class="fn">invoke</span>([
+        <span class="cls">SystemMessage</span>(content=<span class="str">"用户心情很好，请用热情积极的语气回复"</span>),
+        *state[<span class="str">"messages"</span>]
+    ])
+    <span class="kw">return</span> {<span class="str">"messages"</span>: [<span class="cls">AIMessage</span>(content=resp.content)]}
+
+<span class="kw">def</span> <span class="fn">sad_reply</span>(state: <span class="cls">BotState</span>) -> <span class="cls">dict</span>:
+    resp = llm.<span class="fn">invoke</span>([
+        <span class="cls">SystemMessage</span>(content=<span class="str">"用户心情不好，请用温暖共情的语气回复，给予安慰"</span>),
+        *state[<span class="str">"messages"</span>]
+    ])
+    <span class="kw">return</span> {<span class="str">"messages"</span>: [<span class="cls">AIMessage</span>(content=resp.content)]}
+
+<span class="kw">def</span> <span class="fn">normal_reply</span>(state: <span class="cls">BotState</span>) -> <span class="cls">dict</span>:
+    resp = llm.<span class="fn">invoke</span>(state[<span class="str">"messages"</span>])
+    <span class="kw">return</span> {<span class="str">"messages"</span>: [<span class="cls">AIMessage</span>(content=resp.content)]}
+
+<span class="cmt"># 4. 定义路由函数</span>
+<span class="kw">def</span> <span class="fn">route</span>(state: <span class="cls">BotState</span>) -> <span class="cls">str</span>:
+    <span class="kw">return</span> state[<span class="str">"mood"</span>]
+
+<span class="cmt"># 5. 构建图</span>
+graph = <span class="cls">StateGraph</span>(<span class="cls">BotState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"detect_mood"</span>, detect_mood)
+graph.<span class="fn">add_node</span>(<span class="str">"happy_reply"</span>, happy_reply)
+graph.<span class="fn">add_node</span>(<span class="str">"sad_reply"</span>, sad_reply)
+graph.<span class="fn">add_node</span>(<span class="str">"normal_reply"</span>, normal_reply)
+
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"detect_mood"</span>)
+graph.<span class="fn">add_conditional_edges</span>(<span class="str">"detect_mood"</span>, route, {
+    <span class="str">"happy"</span>: <span class="str">"happy_reply"</span>,
+    <span class="str">"sad"</span>: <span class="str">"sad_reply"</span>,
+    <span class="str">"neutral"</span>: <span class="str">"normal_reply"</span>,
+})
+graph.<span class="fn">add_edge</span>(<span class="str">"happy_reply"</span>, <span class="cls">END</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"sad_reply"</span>, <span class="cls">END</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"normal_reply"</span>, <span class="cls">END</span>)
+
+<span class="cmt"># 6. 编译并运行</span>
+app = graph.<span class="fn">compile</span>()
+result = app.<span class="fn">invoke</span>({
+    <span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"今天考试没考好，心情很糟糕"</span>)],
+    <span class="str">"mood"</span>: <span class="str">"neutral"</span>
+})
+<span class="fn">print</span>(result[<span class="str">"messages"</span>][<span class="num">-1</span>].content)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>运行流程：</strong>用户输入 -> detect_mood（判断情绪）-> 条件路由 -> 对应的回复节点 -> END。整个过程自动完成，无需手动干预。
+  </div>
+</div>
+
+<!-- ==================== SECTION 8: API 速查 ==================== -->
+<div class="section" id="llm-langgraph-core-s8">
+  <h2>API 速查表</h2>
+
+  <table>
+    <tr><th>API</th><th>用途</th><th>示例</th></tr>
+    <tr><td><code>StateGraph(State)</code></td><td>创建图</td><td><code>graph = StateGraph(MyState)</code></td></tr>
+    <tr><td><code>.add_node(name, fn)</code></td><td>添加节点</td><td><code>graph.add_node("worker", work_fn)</code></td></tr>
+    <tr><td><code>.add_edge(src, dst)</code></td><td>添加普通边</td><td><code>graph.add_edge(START, "a")</code></td></tr>
+    <tr><td><code>.add_conditional_edges(src, fn, map)</code></td><td>添加条件边</td><td>见上方条件路由示例</td></tr>
+    <tr><td><code>.compile()</code></td><td>编译图</td><td><code>app = graph.compile()</code></td></tr>
+    <tr><td><code>.invoke(state)</code></td><td>运行</td><td><code>result = app.invoke(input)</code></td></tr>
+    <tr><td><code>.stream(state)</code></td><td>流式运行</td><td><code>for e in app.stream(input): ...</code></td></tr>
+  </table>
+</div>
+
+<div class="footer">
+  LangChain & LangGraph 教程系列 | 第3章：LangGraph核心
+</div>
+</div></section>

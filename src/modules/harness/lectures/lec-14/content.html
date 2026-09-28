@@ -1,0 +1,75 @@
+<section id="sec-h-lec-14" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 14 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-14">第 14 讲 · Graph 工程：把 Agent 组成有向图</h1>
+    <p>2026 年 7 月，Peter Steinberger 在一次访谈里开了个玩笑："我们已经从提示词工程进化到了……Graph 工程。"这句话并不完全是玩笑。当 loop 复杂到一定程度，你开始想要提前决定 agent 的拓扑结构，而不是让它在运行时自己摸索——这就是 Graph 工程的起点。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>四层框架</h2>
+    <p>Rohit（@rohit4verse）在 2026 年 7 月提出了一个清晰的层次模型，把 AI 软件开发的能力分成四层：</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">层级</th><th scope="col">名称</th><th scope="col">控制单位</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">L1</th><td>Prompt 工程</td><td>单次交互</td></tr>
+        <tr><th scope="row">L2</th><td>Context 工程</td><td>会话级上下文</td></tr>
+        <tr><th scope="row">L3</th><td>Loop 工程</td><td>跨会话的执行流</td></tr>
+        <tr><th scope="row">L4</th><td>Graph 工程</td><td>多 agent 的拓扑结构</td></tr>
+      </tbody>
+    </table></div>
+    <p>每一层都建立在下一层之上。你不能跳过 Context 工程直接做 Graph 工程。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>图的四个原语</h2>
+    <p>Graph 工程用四个概念描述 agent 系统的结构：</p>
+    <ul>
+      <li><strong>节点（Node）</strong>：执行单元，可以是一个 agent、一个函数调用、一个外部服务调用。节点有输入和输出，有明确的职责边界。</li>
+      <li><strong>边（Edge）</strong>：节点之间的连接，定义执行顺序和数据流向。边可以是有条件的——只有当源节点满足某个条件时才走这条边。</li>
+      <li><strong>共享状态（Shared State）</strong>：图中所有节点可以读写的全局状态。是 agent 之间传递上下文的主要机制。</li>
+      <li><strong>路由（Routing）</strong>：基于共享状态或节点输出，动态决定下一步走哪条边。路由让图变成真正的有向图而非线性流水线。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>Loop vs Graph</h2>
+    <p>Loop 和 Graph 的核心区别在于决策发生在什么时候：</p>
+    <p><strong>Loop</strong>：把决策推迟到运行时。Loop 启动时，你不知道它会迭代多少次、经过哪些状态。Agent 在运行时根据情况自己判断。适合开放式探索任务。</p>
+    <p><strong>Graph</strong>：把结构决策前置。在 graph 启动前，你已经决定了有哪些 agent、它们怎么连接、状态怎么传递。运行时只是按图执行。适合可预期结构的复杂任务。</p>
+    <p>Graph 和 Workflow 的区别：Workflow 的节点是函数，Graph 的节点可以是 agent。Agent 节点可以决定自己的内部执行路径，而函数节点不能。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>单 Loop 的三类结构性失败</h2>
+    <p>当任务足够复杂时，单一 loop 会遭遇三类无法靠提示词优化解决的结构性问题：</p>
+    <ul>
+      <li><strong>Goodhart 定律</strong>：当验证目标本身成为优化对象，agent 开始找漏洞，而不是真正解决问题。比如它学会让测试通过而不是让功能正确。</li>
+      <li><strong>向上盲区</strong>：负责执行的 agent 无法判断自己做的方向是否对。没有更高层次的 agent 做战略评估，所有精力都用在战术执行上。</li>
+      <li><strong>冲突循环</strong>：当同一个 agent 同时负责多个有内在冲突的目标时，它在两个目标之间来回振荡，无法收敛。</li>
+    </ul>
+    <p>LangGraph（2024 年末发布，2026 年 6 月月活 6500 万次下载）是目前最成熟的 Graph 工程工具。它的设计解决了状态管理和路由两个核心问题，使 Python 生态里的 multi-agent 图实现变得可操作。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>何时引入 Graph</h2>
+    <p>Graph 比 Loop 复杂，不是所有任务都需要 Graph。五个判断标准：</p>
+    <ol>
+      <li>任务有多个明显不同的角色（规划者、执行者、评估者）。</li>
+      <li>这些角色需要专用的上下文，共享一个上下文会干扰彼此。</li>
+      <li>任务有可预期的结构，不是纯粹的开放式探索。</li>
+      <li>你想要精确控制 agent 之间的信息流，而不是让它们随意共享。</li>
+      <li>单 loop 已经出现了上面三类结构性失败之一。</li>
+    </ol>
+    <p>满足 3 条以上，Graph 工程是值得的投入。满足不到 2 条，先把 Loop 做好。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-13">← 第 13 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-15">第 15 讲 →</a>
+  </nav>
+</section>

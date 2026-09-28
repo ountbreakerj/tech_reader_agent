@@ -1,0 +1,73 @@
+<section id="sec-h-lec-11" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 11 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-11">第 11 讲 · 让 Agent 的运行过程可观测</h1>
+    <p>Agent 执行任务时常常像一个黑盒：它跑了 20 分钟，改了一堆文件，然后告诉你"做完了但有两个测试失败"。你问它为什么失败，"不太确定，可能是时序问题"。这种情况的根源在 harness 缺乏可观测性。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>可观测性缺失的四类影响</h2>
+    <ul>
+      <li><strong>无法区分"正确"和"看似正确"。</strong> 代码审查看的是"写了什么"，运行时追踪看的是"实际跑了什么"，两者缺一不可。</li>
+      <li><strong>评估变成玄学。</strong> 没有评分标准和验收条件时，评估者只能依赖隐式假设。同一个输出，不同评估者可能给出截然不同的评价，质量评估不可复现。</li>
+      <li><strong>重试变成盲猜。</strong> Agent 不知道为什么失败时，重试方向是随机的，每次盲重试都消耗 token 和时间。</li>
+      <li><strong>会话交接信息断崖。</strong> Anthropic 的长期运行 agent 观察表明，重复诊断可能占会话总时间的 30–50%。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>双层可观测性</h2>
+    <p>可观测性分两层，缺一不可。</p>
+    <p><strong>运行时可观测性</strong>（系统层的信号）：日志、追踪、进程事件、健康检查——回答"系统做了什么"。包括：应用生命周期的各阶段状态、关键路径的执行记录、数据流在组件间的流转、异常的资源使用模式、完整的错误上下文。</p>
+    <p><strong>过程可观测性</strong>（harness 决策工件的可见性）：计划、评分标准、验收条件——回答"为什么这个变更应该被接受"。核心工具是冲刺合同和评估评分标准。</p>
+    <p>有完整可观测性 vs 没有可观测性，同一任务效率差约 3 倍（45 分钟 vs 15 分钟）。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>冲刺合同</h2>
+    <p>在每个任务开始前，生成者和评估者协商一份合同，明确这次要做什么、怎么做算通过、排除什么：</p>
+    <div class="codeblock">
+      <pre><code># 冲刺合同: 暗色模式支持
+
+## 范围
+- 修改主题切换组件
+- 更新全局 CSS 变量
+- 添加暗色模式测试
+
+## 验证标准
+- 每个组件的视觉回归测试通过
+- 主流程端到端测试通过
+- 无样式闪烁 (FOUC)
+
+## 排除项
+- 不处理打印样式
+- 不处理第三方组件暗色模式</code></pre></div>
+    <p>冲刺合同防止"生成者做了评估者因可预见原因立即拒绝的东西"。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>Anthropic 的三 Agent 架构实验</h2>
+    <p>Anthropic 2026 年 3 月发布的系统性 harness 实验，用三 agent 架构跑"用 Web Audio API 做一个浏览器端 DAW"：</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">阶段</th><th scope="col">时长</th><th scope="col">成本</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Planner（规划者）</th><td>4.7 分钟</td><td>$0.46</td></tr>
+        <tr><th scope="row">Build 第 1 轮</th><td>2 小时 7 分钟</td><td>$71.08</td></tr>
+        <tr><th scope="row">QA 第 1 轮</th><td>8.8 分钟</td><td>$3.24</td></tr>
+        <tr><th scope="row">Build 第 2–3 轮 + QA</th><td>约 1.5 小时</td><td>$49.92</td></tr>
+        <tr><th scope="row"><strong>总计</strong></th><td><strong>3 小时 50 分钟</strong></td><td><strong>$124.70</strong></td></tr>
+      </tbody>
+    </table></div>
+    <p>Evaluator 用 Playwright MCP 像用户一样点击运行中的应用，对每个 sprint 按产品深度、功能性、视觉设计、代码质量四维度评分。<strong>评估者是通过几轮开发循环调校出来的</strong>：早期版本会识别出合理的问题，然后说服自己这些问题不严重，最终批准工作。读 evaluator 的日志，找到它的判断和人类判断分叉的地方，更新 prompt 解决那些问题——经过几轮，evaluator 的评分才变得合理。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-10">← 第 10 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-12">第 12 讲 →</a>
+  </nav>
+</section>

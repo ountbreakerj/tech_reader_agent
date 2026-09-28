@@ -1,0 +1,383 @@
+<section class="llm-mod llm-m-agent-tools" id="llm-agent-tools"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#0d9488;--hero-b:#1d4ed8;">
+  <h1>Agent与工具开发</h1>
+  <p>构建能自主决策和调用外部工具的智能 Agent</p>
+</div>
+
+<!-- ==================== SECTION 1: create_agent ==================== -->
+<div class="section" id="llm-agent-tools-s1">
+  <h2>create_agent（LangChain v1）</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>ReAct<sup class="tp-mark" data-tp="react" role="button" tabindex="0" title="查看技术点详情" aria-label="查看技术点详情">?</sup> 模式就像一个经验丰富的侦探——先<strong>推理</strong>（Reasoning）：“根据现有线索，我需要查看监控”，再<strong>行动</strong>（Acting）：调用“查看监控”工具，然后根据结果继续推理，直到破案。
+  </div>
+
+  <p>LangChain v1 提供了 <code>create_agent</code> 入口，它内部自动构建了一个包含"推理-行动-观察"循环的图。替代了 LangChain 中已弃用的 <code>AgentExecutor</code>。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain.agents <span class="kw">import</span> <span class="fn">create_agent</span>
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+<span class="kw">from</span> langchain_core.tools <span class="kw">import</span> <span class="fn">tool</span>
+<span class="kw">from</span> langchain_core.messages <span class="kw">import</span> <span class="cls">HumanMessage</span>
+
+<span class="cmt"># 定义工具</span>
+<span class="kw">@tool</span>
+<span class="kw">def</span> <span class="fn">get_weather</span>(city: <span class="cls">str</span>) -> <span class="cls">str</span>:
+    <span class="str">"""获取指定城市的天气信息"""</span>
+    <span class="kw">return</span> <span class="str">f"{city}今天晴天，气温25度"</span>
+
+<span class="kw">@tool</span>
+<span class="kw">def</span> <span class="fn">calculate</span>(expression: <span class="cls">str</span>) -> <span class="cls">str</span>:
+    <span class="str">"""计算数学表达式"""</span>
+    <span class="kw">return</span> <span class="fn">str</span>(<span class="fn">eval</span>(expression))
+
+<span class="cmt"># 一行创建 Agent</span>
+agent = <span class="fn">create_agent</span>(
+    model=<span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>),
+    tools=[get_weather, calculate],
+    system_prompt=<span class="str">"你是一个有用的助手，善于使用工具解决问题"</span>
+)
+
+<span class="cmt"># 运行 Agent</span>
+result = agent.<span class="fn">invoke</span>({
+    <span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"北京今天天气怎么样？再帮我算一下 123 * 456"</span>)]
+})
+
+<span class="cmt"># 查看最终回复</span>
+<span class="fn">print</span>(result[<span class="str">"messages"</span>][<span class="num">-1</span>].content)</code></pre>
+  </div>
+
+  <div class="callout callout-key">
+    <strong>底层原理：</strong><code>create_agent</code> 返回一个可运行的 Agent 图，内部由 LangGraph 状态机驱动，包含两个节点："agent"（调用 LLM 决定下一步）和 "tools"（执行工具调用），通过条件边实现"调用工具 -> 观察结果 -> 再次推理"的循环，直到 LLM 认为可以给出最终答案。
+  </div>
+
+  <h3>Agent 执行流程</h3>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>用户输入</strong> — 消息进入 Agent 节点</div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>LLM 推理</strong> — 模型分析问题，决定是否需要调用工具</div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>工具调用</strong> — 如果 LLM 返回 tool_calls，ToolNode 执行对应工具</div>
+  </div>
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>结果观察</strong> — 工具返回结果作为 ToolMessage 加入消息历史</div>
+  </div>
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-content"><strong>循环或结束</strong> — LLM 再次判断：继续调用工具 或 给出最终回答</div>
+  </div>
+</div>
+
+<!-- ==================== SECTION 2: 自定义工具 ==================== -->
+<div class="section" id="llm-agent-tools-s2">
+  <h2>自定义工具：@tool 装饰器</h2>
+
+  <p><code>@tool</code> 装饰器是定义工具的最简方式。函数的 docstring 会自动成为工具的描述，帮助 LLM 理解工具用途。函数签名自动转为参数 schema。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.tools <span class="kw">import</span> <span class="fn">tool</span>
+
+<span class="kw">@tool</span>
+<span class="kw">def</span> <span class="fn">search_database</span>(query: <span class="cls">str</span>, limit: <span class="cls">int</span> = <span class="num">5</span>) -> <span class="cls">str</span>:
+    <span class="str">"""搜索知识库中的文档。
+
+    Args:
+        query: 搜索关键词
+        limit: 返回结果数量，默认5
+    """</span>
+    <span class="cmt"># 模拟搜索</span>
+    <span class="kw">return</span> <span class="str">f"找到 {limit} 条关于 '{query}' 的结果"</span>
+
+<span class="cmt"># 自定义工具名称</span>
+<span class="kw">@tool</span>(name=<span class="str">"web_search"</span>, description=<span class="str">"搜索互联网获取最新信息"</span>)
+<span class="kw">def</span> <span class="fn">_search</span>(query: <span class="cls">str</span>) -> <span class="cls">str</span>:
+    <span class="kw">return</span> <span class="str">f"互联网搜索结果: {query}"</span>
+
+<span class="cmt"># 查看工具的自动生成的 schema</span>
+<span class="fn">print</span>(search_database.args_schema.model_json_schema())</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>Docstring 很重要：</strong>LLM 通过 docstring 理解工具的用途。写清楚"这个工具做什么"、"每个参数的含义"，能显著提高 Agent 选择和使用工具的准确率。
+  </div>
+</div>
+
+<!-- ==================== SECTION 3: StructuredTool ==================== -->
+<div class="section" id="llm-agent-tools-s3">
+  <h2>StructuredTool 与 Pydantic Schema</h2>
+
+  <p>当工具参数较复杂时，使用 Pydantic 模型定义参数 schema 更为规范。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.tools <span class="kw">import</span> <span class="cls">StructuredTool</span>
+<span class="kw">from</span> pydantic <span class="kw">import</span> <span class="cls">BaseModel</span>, <span class="cls">Field</span>
+
+<span class="cmt"># 定义参数 schema</span>
+<span class="kw">class</span> <span class="cls">SearchInput</span>(<span class="cls">BaseModel</span>):
+    query: <span class="cls">str</span> = <span class="cls">Field</span>(description=<span class="str">"搜索关键词"</span>)
+    source: <span class="cls">str</span> = <span class="cls">Field</span>(
+        description=<span class="str">"数据来源"</span>,
+        default=<span class="str">"all"</span>,
+        enum=[<span class="str">"all"</span>, <span class="str">"web"</span>, <span class="str">"database"</span>, <span class="str">"files"</span>]
+    )
+    max_results: <span class="cls">int</span> = <span class="cls">Field</span>(description=<span class="str">"最大返回数量"</span>, default=<span class="num">10</span>)
+
+<span class="cmt"># 定义执行函数</span>
+<span class="kw">def</span> <span class="fn">_search</span>(query: <span class="cls">str</span>, source: <span class="cls">str</span> = <span class="str">"all"</span>, max_results: <span class="cls">int</span> = <span class="num">10</span>) -> <span class="cls">str</span>:
+    <span class="kw">return</span> <span class="str">f"从{source}搜索'{query}'，返回{max_results}条结果"</span>
+
+<span class="cmt"># 创建 StructuredTool</span>
+search_tool = <span class="cls">StructuredTool</span>.<span class="fn">from_function</span>(
+    func=_search,
+    name=<span class="str">"advanced_search"</span>,
+    description=<span class="str">"从多种数据源搜索信息"</span>,
+    args_schema=<span class="cls">SearchInput</span>,
+    return_direct=<span class="kw">False</span>  <span class="cmt"># True = 工具结果直接返回给用户，不经过LLM</span>
+)</code></pre>
+  </div>
+
+  <h3>@tool vs StructuredTool 对比</h3>
+
+  <table>
+    <tr><th>方式</th><th>优点</th><th>适用场景</th></tr>
+    <tr><td><code>@tool</code> 装饰器</td><td>简洁，函数签名即 schema</td><td>简单工具，参数少且类型基本</td></tr>
+    <tr><td><code>StructuredTool</code></td><td>完全控制 schema，支持 enum、default</td><td>复杂参数、需要精确控制描述</td></tr>
+    <tr><td><code>BaseTool</code> 子类</td><td>最大灵活性，可重写 <code>_run</code>/<code>_arun</code></td><td>需要异步、复杂状态管理</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 4: ToolNode ==================== -->
+<div class="section" id="llm-agent-tools-s4">
+  <h2>ToolNode 内置节点</h2>
+
+  <p><code>ToolNode</code> 是 LangGraph 提供的预构建节点，它接收 LLM 的 <code>tool_calls</code>，自动执行对应的工具函数，并将结果作为 <code>ToolMessage</code> 返回。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langgraph.prebuilt <span class="kw">import</span> <span class="cls">ToolNode</span>
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">START</span>, <span class="cls">END</span>
+
+tools = [get_weather, calculate]
+tool_node = <span class="cls">ToolNode</span>(tools)
+
+<span class="cmt"># 手动构建 Agent 图（等价于 create_agent）</span>
+graph = <span class="cls">StateGraph</span>(<span class="cls">MessagesState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"agent"</span>, call_model)
+graph.<span class="fn">add_node</span>(<span class="str">"tools"</span>, tool_node)
+
+<span class="cmt"># 条件路由：LLM 是否要调用工具？</span>
+graph.<span class="fn">add_conditional_edges</span>(
+    <span class="str">"agent"</span>,
+    <span class="fn">should_continue</span>,
+    {
+        <span class="str">"continue"</span>: <span class="str">"tools"</span>,  <span class="cmt"># 有 tool_calls -> 执行工具</span>
+        <span class="str">"end"</span>: <span class="cls">END</span>,            <span class="cmt"># 无 tool_calls -> 结束</span>
+    }
+)
+graph.<span class="fn">add_edge</span>(<span class="str">"tools"</span>, <span class="str">"agent"</span>)  <span class="cmt"># 工具结果返回给 Agent</span>
+
+<span class="cmt"># should_continue 函数</span>
+<span class="kw">def</span> <span class="fn">should_continue</span>(state):
+    last_message = state[<span class="str">"messages"</span>][<span class="num">-1</span>]
+    <span class="kw">if</span> last_message.tool_calls:
+        <span class="kw">return</span> <span class="str">"continue"</span>
+    <span class="kw">return</span> <span class="str">"end"</span></code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>ToolNode 要求：</strong>工具列表中的每个工具必须有唯一的名称，且工具函数的参数类型必须是 JSON 可序列化的（str、int、float、bool、list、dict）。
+  </div>
+</div>
+
+<!-- ==================== SECTION 5: 多工具编排 ==================== -->
+<div class="section" id="llm-agent-tools-s5">
+  <h2>多工具编排与工具选择</h2>
+
+  <p>当 Agent 拥有多个工具时，LLM 会根据用户问题自动选择最合适的工具。你也可以通过 system prompt 引导工具选择策略。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain.agents <span class="kw">import</span> <span class="fn">create_agent</span>
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+
+<span class="cmt"># 定义多个专业工具</span>
+tools = [
+    search_database,       <span class="cmt"># 搜索知识库</span>
+    get_weather,           <span class="cmt"># 查天气</span>
+    calculate,             <span class="cmt"># 计算器</span>
+    run_sql_query,         <span class="cmt"># SQL 查询</span>
+    send_email,            <span class="cmt"># 发邮件</span>
+]
+
+<span class="cmt"># 通过 prompt 引导工具选择策略</span>
+system_prompt = <span class="str">"""你是一个智能助手，拥有以下工具：
+- search_database: 搜索知识库，适用于文档检索
+- get_weather: 查询天气，适用于天气相关问题
+- calculate: 数学计算，适用于数值计算
+- run_sql_query: SQL 查询，适用于数据库查询
+- send_email: 发送邮件，适用于邮件任务
+
+规则：
+1. 优先使用最合适的工具，不要用错工具
+2. 如果不需要工具，直接回答
+3. 复杂任务可以组合使用多个工具
+"""</span>
+
+agent = <span class="fn">create_agent</span>(
+    model=<span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>),
+    tools=tools,
+    system_prompt=system_prompt
+)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 6: MCP ==================== -->
+<div class="section" id="llm-agent-tools-s6">
+  <h2>MCP（Model Context Protocol）工具集成</h2>
+
+  <p>MCP 是 Anthropic 提出的开放协议，用于标准化 LLM 与外部工具/数据源的连接方式。LangGraph 支持直接将 MCP Server 提供的工具作为 Agent 工具使用。</p>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>MCP 就像是 USB 接口标准。以前每个设备（工具）都有自己独特的连接方式，有了 USB（MCP），任何设备都可以即插即用。MCP 让不同的工具服务器（文件系统、数据库、API）通过统一协议接入 Agent。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 安装 MCP 适配器</span>
+<span class="cmt"># pip install langchain-mcp-adapters</span>
+
+<span class="kw">from</span> langchain_mcp_adapters.client <span class="kw">import</span> <span class="cls">MultiServerMCPClient</span>
+<span class="kw">from</span> langchain.agents <span class="kw">import</span> <span class="fn">create_agent</span>
+
+<span class="cmt"># 连接 MCP 服务器</span>
+<span class="kw">async with</span> <span class="cls">MultiServerMCPClient</span>({
+    <span class="str">"filesystem"</span>: {
+        <span class="str">"transport"</span>: <span class="str">"stdio"</span>,
+        <span class="str">"command"</span>: <span class="str">"npx"</span>,
+        <span class="str">"args"</span>: [<span class="str">"@anthropic/mcp-filesystem"</span>, <span class="str">"/path/to/dir"</span>]
+    },
+    <span class="str">"database"</span>: {
+        <span class="str">"transport"</span>: <span class="str">"sse"</span>,
+        <span class="str">"url"</span>: <span class="str">"http://localhost:8080/sse"</span>
+    }
+}) <span class="kw">as</span> client:
+    <span class="cmt"># MCP 工具自动转为 LangChain 工具</span>
+    tools = client.tools
+
+    agent = <span class="fn">create_agent</span>(
+        model=<span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>),
+        tools=tools
+    )
+
+    result = <span class="kw">await</span> agent.<span class="fn">ainvoke</span>({
+        <span class="str">"messages"</span>: [(<span class="str">"human"</span>, <span class="str">"读取 /path/to/dir 下的 README 文件"</span>)]
+    })</code></pre>
+  </div>
+
+  <div class="callout callout-info">
+    <strong>MCP 传输方式：</strong><code>stdio</code> 适用于本地进程（如 npx 启动的工具服务器）；<code>sse</code>（Server-Sent Events）适用于远程 HTTP 服务器。大多数 MCP 服务器同时支持两种方式。
+  </div>
+</div>
+
+<!-- ==================== SECTION 7: 实战 ==================== -->
+<div class="section" id="llm-agent-tools-s7">
+  <h2>实战：构建一个多工具 Agent</h2>
+
+  <p>综合以上知识，构建一个能查天气、做计算、搜索文档的多工具 Agent：</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain.agents <span class="kw">import</span> <span class="fn">create_agent</span>
+<span class="kw">from</span> langgraph.checkpoint.memory <span class="kw">import</span> <span class="cls">MemorySaver</span>
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+<span class="kw">from</span> langchain_core.tools <span class="kw">import</span> <span class="fn">tool</span>
+<span class="kw">from</span> langchain_core.messages <span class="kw">import</span> <span class="cls">HumanMessage</span>
+
+<span class="cmt"># 定义工具集</span>
+<span class="kw">@tool</span>
+<span class="kw">def</span> <span class="fn">get_weather</span>(city: <span class="cls">str</span>) -> <span class="cls">str</span>:
+    <span class="str">"""获取城市的实时天气"""</span>
+    weather_data = {
+        <span class="str">"北京"</span>: <span class="str">"晴，25度，湿度40%"</span>,
+        <span class="str">"上海"</span>: <span class="str">"多云，28度，湿度65%"</span>,
+    }
+    <span class="kw">return</span> weather_data.<span class="fn">get</span>(city, <span class="str">f"{city}的天气数据暂不可用"</span>)
+
+<span class="kw">@tool</span>
+<span class="kw">def</span> <span class="fn">calculate</span>(expression: <span class="cls">str</span>) -> <span class="cls">str</span>:
+    <span class="str">"""计算数学表达式，支持加减乘除和幂运算"""</span>
+    <span class="kw">try</span>:
+        <span class="kw">return</span> <span class="fn">str</span>(<span class="fn">eval</span>(expression, {<span class="str">"__builtins__"</span>: {}}))
+    <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> e:
+        <span class="kw">return</span> <span class="str">f"计算错误: {e}"</span>
+
+<span class="kw">@tool</span>
+<span class="kw">def</span> <span class="fn">search_docs</span>(query: <span class="cls">str</span>) -> <span class="cls">str</span>:
+    <span class="str">"""搜索内部文档知识库"""</span>
+    <span class="cmt"># 实际项目中对接向量数据库</span>
+    <span class="kw">return</span> <span class="str">f"文档搜索结果: 关于'{query}'找到了3篇相关文档"</span>
+
+<span class="cmt"># 创建带持久化的 Agent</span>
+checkpointer = <span class="cls">MemorySaver</span>()
+agent = <span class="fn">create_agent</span>(
+    model=<span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>),
+    tools=[get_weather, calculate, search_docs],
+    checkpointer=checkpointer,
+    system_prompt=<span class="str">"你是一个多技能助手，善于综合使用工具解决复杂问题"</span>
+)
+
+<span class="cmt"># 运行（带线程ID以支持多轮对话）</span>
+config = {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"user-001"</span>}}
+result = agent.<span class="fn">invoke</span>(
+    {<span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"北京天气怎么样？再帮我算 15% 的折扣价是多少钱（原价 299）"</span>)]},
+    config=config
+)
+<span class="fn">print</span>(result[<span class="str">"messages"</span>][<span class="num">-1</span>].content)
+
+<span class="cmt"># 第二轮对话（自动保持上下文）</span>
+result = agent.<span class="fn">invoke</span>(
+    {<span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"帮我搜索一下关于天气预测的文档"</span>)]},
+    config=config
+)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>生产建议：</strong>实际项目中，工具函数应包含完善的错误处理和超时控制。对于敏感操作（如发邮件、写数据库），建议配合 HITL（人机交互）机制，在执行前要求人工确认。
+  </div>
+</div>
+
+<div class="footer">
+  LangChain & LangGraph 教程系列 | 第4章：Agent与工具开发
+</div>
+</div></section>

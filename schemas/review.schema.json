@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tech Reader design review",
+  "type": "object",
+  "required": ["verdict", "scope", "findings", "checks"],
+  "properties": {
+    "verdict": { "enum": ["pass", "changes_required", "user_decision_required"] },
+    "scope": { "type": "array", "items": { "type": "string" } },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "role", "location", "evidence", "expected", "recommendation"],
+        "properties": {
+          "severity": { "enum": ["blocking", "major", "minor", "suggestion"] },
+          "role": { "enum": ["product", "ux", "ui", "art", "accessibility"] },
+          "location": { "type": "string" },
+          "evidence": { "type": "string" },
+          "expected": { "type": "string" },
+          "recommendation": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "checks": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

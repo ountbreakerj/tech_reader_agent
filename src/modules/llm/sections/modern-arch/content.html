@@ -1,0 +1,609 @@
+<section class="llm-mod llm-m-modern-arch" id="llm-modern-arch"><div class="module-wrapper">
+<h1>现代LLM架构详解</h1>
+<p class="subtitle">深入了解 Flash Attention、RoPE、GQA、MLA、MoE、Mamba、RWKV 等前沿架构组件</p>
+
+<!-- ==================== Section 1 ==================== -->
+<h2><span class="section-number">14.1</span> Flash Attention</h2>
+
+<h3>IO-aware 精确注意力的原理</h3>
+<p>标准 Transformer 的自注意力机制计算复杂度为 O(N²)，且需要将完整的 N×N 注意力矩阵写入 GPU 的 HBM（高带宽内存）。Flash Attention 的核心创新是 <strong>IO-aware</strong>——它不改变数学等价性，而是通过重新组织计算顺序，大幅减少对 HBM 的读写次数。</p>
+
+<p>关键思想：利用 GPU 的 SRAM（片上内存，速度比 HBM 快 ~10x）进行分块（tiling）计算，将 Q、K、V 分成小块加载到 SRAM 中，在片上完成 softmax 和矩阵乘法，避免将中间注意力矩阵写回 HBM。</p>
+
+<div class="callout">
+    <strong>Flash Attention 核心公式</strong>
+    通过在线 softmax 算法（online softmax trick），可以逐块计算 softmax 而无需存储完整注意力矩阵。IO 复杂度从 O(N²) 降低到 O(N²d²/M)，其中 M 是 SRAM 大小。
+</div>
+
+<h3>Flash Attention 2 / 3 改进</h3>
+<p><strong>Flash Attention 2</strong> 在 v1 基础上进一步优化：</p>
+<ul>
+    <li>减少非矩阵乘法运算（non-matmul FLOPs），将 rescaling 操作延迟到最后</li>
+    <li>改进并行策略：在序列长度维度上并行，而非仅在 batch 和 head 维度上</li>
+    <li>工作分区优化：在 warp 之间更好地分配工作，减少共享内存读写</li>
+    <li>速度比 Flash Attention 1 快约 2x</li>
+</ul>
+<p><strong>Flash Attention 3</strong>（2024年发布，针对 Hopper 架构 GPU）：</p>
+<ul>
+    <li>利用 H100 的异步特性（WGMMA、TMA）实现 warp 级别的生产者-消费者模式</li>
+    <li>FP8 量化注意力计算，保持精度的同时进一步加速</li>
+    <li>利用 Hopper 的硬件特性实现更好的计算-通信重叠</li>
+</ul>
+
+<h3>PyTorch 集成使用</h3>
+<pre><code>import torch
+import torch.nn.functional as F
+
+# PyTorch 2.0+ 内置了对 Flash Attention 的支持
+# scaled_dot_product_attention 会自动选择最优后端
+
+batch_size, num_heads, seq_len, head_dim = 2, 8, 2048, 128
+q = torch.randn(batch_size, num_heads, seq_len, head_dim, device="cuda")
+k = torch.randn(batch_size, num_heads, seq_len, head_dim, device="cuda")
+v = torch.randn(batch_size, num_heads, seq_len, head_dim, device="cuda")
+
+# 方法一：使用 scaled_dot_product_attention（自动选择 Flash Attention）
+output = F.scaled_dot_product_attention(
+    q, k, v,
+    attn_mask=None,
+    dropout_p=0.0,
+    is_causal=True,  # 因果注意力（解码器场景）
+    scale=None       # 默认 1/sqrt(head_dim)
+)
+
+# 方法二：显式使用 flash_attn 库
+from flash_attn import flash_attn_func
+
+# flash_attn_func 输入格式: (batch, seqlen, nheads, headdim)
+q_reshaped = q.transpose(1, 2)  # 调整维度
+k_reshaped = k.transpose(1, 2)
+v_reshaped = v.transpose(1, 2)
+output_flash = flash_attn_func(q_reshaped, k_reshaped, v_reshaped, causal=True)
+
+# 方法三：在 nn.MultiheadAttention 中启用
+attn_layer = torch.nn.MultiheadAttention(
+    embed_dim=512,
+    num_heads=8,
+    batch_first=True
+).cuda()
+
+# PyTorch 2.x：使用新的 SDPA 后端选择 API
+from torch.nn.attention import SDPBackend, sdpa_kernel
+
+with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+    attn_output, _ = attn_layer(q.transpose(1,2), k.transpose(1,2), v.transpose(1,2))</code></pre>
+
+<h3>内存节省计算</h3>
+<table>
+    <tr><th>序列长度</th><th>标准注意力 (HBM)</th><th>Flash Attention (HBM)</th><th>节省比例</th></tr>
+    <tr><td>512</td><td>~1 MB</td><td>~0.2 MB</td><td>~80%</td></tr>
+    <tr><td>2048</td><td>~16 MB</td><td>~1.5 MB</td><td>~90%</td></tr>
+    <tr><td>8192</td><td>~256 MB</td><td>~8 MB</td><td>~97%</td></tr>
+    <tr><td>32768</td><td>~4 GB</td><td>~50 MB</td><td>~99%</td></tr>
+</table>
+<p>注意：Flash Attention 的实际 GPU 内存使用与序列长度呈线性关系（O(N)），而标准注意力是二次方（O(N²)），这使得超长序列训练成为可能。</p>
+
+<!-- ==================== Section 2 ==================== -->
+<h2><span class="section-number">14.2</span> RoPE（旋转位置编码）</h2>
+
+<h3>原理：旋转矩阵编码相对位置</h3>
+<p>RoPE（Rotary Position Embedding）由苏剑林在 2021 年提出。核心思想是：<strong>通过旋转矩阵将位置信息注入到 Query 和 Key 向量中</strong>，使得两个 token 的注意力分数仅依赖于它们的相对位置。</p>
+
+<p>对于 d 维向量，RoPE 将其分成 d/2 个二维子空间，每个子空间应用角度为 m·θᵢ 的旋转：</p>
+
+<pre><code># RoPE 的数学表示
+# 给定位置 m 的向量 x = [x₀, x₁, x₂, x₃, ..., x_{d-2}, x_{d-1}]
+# RoPE 将其变换为：
+# x' = [x₀·cos(m·θ₀) - x₁·sin(m·θ₀),
+#        x₀·sin(m·θ₀) + x₁·cos(m·θ₀),
+#        x₂·cos(m·θ₁) - x₃·sin(m·θ₁),
+#        x₂·sin(m·θ₁) + x₃·cos(m·θ₁),
+#        ...]
+#
+# 其中 θᵢ = 10000^(-2i/d)
+#
+# 关键性质：<RoPE(q, m), RoPE(k, n)> = <q, k>_{m-n}
+# 即 q 和 k 的内积只取决于相对位置 (m-n)</code></pre>
+
+<h3>RoPE 实现代码</h3>
+<pre><code>import torch
+import torch.nn as nn
+
+class RotaryPositionalEmbedding(nn.Module):
+    def __init__(self, dim, max_seq_len=8192, base=10000):
+        super().__init__()
+        # 计算频率: θᵢ = base^(-2i/d)
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+        self.dim = dim
+
+    def forward(self, seq_len, device):
+        # 生成位置索引 [0, 1, 2, ..., seq_len-1]
+        t = torch.arange(seq_len, device=device, dtype=self.inv_freq.dtype)
+        # 计算角度矩阵: (seq_len, dim//2)
+        freqs = torch.outer(t, self.inv_freq)
+        # 拼接得到完整角度: (seq_len, dim)
+        emb = torch.cat([freqs, freqs], dim=-1)
+        return emb.cos(), emb.sin()
+
+def apply_rotary_pos_emb(q, k, cos, sin):
+    """应用旋转位置编码到 q 和 k"""
+    def rotate_half(x):
+        x1, x2 = x[..., :x.shape[-1]//2], x[..., x.shape[-1]//2:]
+        return torch.cat([-x2, x1], dim=-1)
+
+    # 扩展维度以广播: (1, 1, seq_len, dim)
+    cos = cos.unsqueeze(0).unsqueeze(0)
+    sin = sin.unsqueeze(0).unsqueeze(0)
+
+    q_embed = q * cos + rotate_half(q) * sin
+    k_embed = k * cos + rotate_half(k) * sin
+    return q_embed, k_embed
+
+# 使用示例
+rope = RotaryPositionalEmbedding(dim=128)
+cos, sin = rope(seq_len=2048, device="cuda")
+
+q = torch.randn(2, 8, 2048, 128, device="cuda")
+k = torch.randn(2, 8, 2048, 128, device="cuda")
+q_rope, k_rope = apply_rotary_pos_emb(q, k, cos, sin)</code></pre>
+
+<h3>RoPE 的优势</h3>
+<ul>
+    <li><strong>相对位置感知</strong>：内积天然反映相对距离，无需学习绝对位置</li>
+    <li><strong>远距离衰减</strong>：随着相对距离增大，内积自然衰减，符合直觉</li>
+    <li><strong>良好的外推性</strong>：通过 NTK-aware 缩放、YaRN 等技术可扩展到远超训练长度</li>
+    <li><strong>无额外参数</strong>：不引入可学习参数，仅通过数学变换实现</li>
+</ul>
+
+<div class="callout callout-success">
+    <strong>为什么几乎所有现代 LLM 都用 RoPE？</strong>
+    RoPE 综合了绝对位置编码（实现简单）和相对位置编码（理论优雅）的优点。从 LLaMA、Mistral、Qwen、DeepSeek 到 Gemma，几乎所有 2023 年后的主流开源 LLM 都采用 RoPE。它与线性注意力、Flash Attention 等技术完全兼容，且通过 YaRN/NTK 可轻松扩展上下文窗口。
+</div>
+
+<!-- ==================== Section 3 ==================== -->
+<h2><span class="section-number">14.3</span> GQA（分组查询注意力）</h2>
+
+<h3>MHA vs MQA vs GQA 对比</h3>
+<table>
+    <tr><th>机制</th><th>全称</th><th>KV Head 数量</th><th>KV Cache 大小</th><th>质量</th><th>速度</th></tr>
+    <tr><td>MHA</td><td>Multi-Head Attention</td><td>H（= Q heads）</td><td>最大</td><td>最高</td><td>最慢</td></tr>
+    <tr><td>MQA</td><td>Multi-Query Attention</td><td>1</td><td>最小（1/H）</td><td>较低</td><td>最快</td></tr>
+    <tr><td>GQA</td><td>Grouped-Query Attention</td><td>G（G &lt; H）</td><td>中等（G/H）</td><td>接近MHA</td><td>接近MQA</td></tr>
+</table>
+
+<p><strong>GQA 是 MHA 和 MQA 的折中</strong>：将 H 个 Query Head 分成 G 组，每组共享一个 KV Head。当 G=H 时退化为 MHA，G=1 时退化为 MQA。</p>
+
+<pre><code>import torch
+import torch.nn as nn
+
+class GroupedQueryAttention(nn.Module):
+    def __init__(self, d_model, num_q_heads=32, num_kv_heads=8, head_dim=128):
+        super().__init__()
+        self.num_q_heads = num_q_heads
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = head_dim
+        self.num_groups = num_q_heads // num_kv_heads  # 每组共享的 Q head 数
+
+        self.q_proj = nn.Linear(d_model, num_q_heads * head_dim, bias=False)
+        self.k_proj = nn.Linear(d_model, num_kv_heads * head_dim, bias=False)
+        self.v_proj = nn.Linear(d_model, num_kv_heads * head_dim, bias=False)
+        self.o_proj = nn.Linear(num_q_heads * head_dim, d_model, bias=False)
+
+    def forward(self, x, mask=None):
+        B, L, _ = x.shape
+        q = self.q_proj(x).view(B, L, self.num_q_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(B, L, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, L, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+        # 将 KV heads 扩展到与 Q heads 一致
+        k = k.repeat_interleave(self.num_groups, dim=1)  # (B, num_q_heads, L, head_dim)
+        v = v.repeat_interleave(self.num_groups, dim=1)
+
+        # 标准注意力计算
+        scale = self.head_dim ** -0.5
+        attn = (q @ k.transpose(-2, -1)) * scale
+        if mask is not None:
+            attn = attn.masked_fill(mask == 0, float("-inf"))
+        attn = torch.softmax(attn, dim=-1)
+        out = (attn @ v).transpose(1, 2).reshape(B, L, -1)
+        return self.o_proj(out)
+
+# 示例：Llama 2 70B 的 GQA 配置
+gqa = GroupedQueryAttention(
+    d_model=8192,
+    num_q_heads=64,   # 64 个 Q heads
+    num_kv_heads=8,    # 8 个 KV heads（8:1 分组）
+    head_dim=128
+)</code></pre>
+
+<h3>Llama 2/3/4 使用 GQA 的原因</h3>
+<p>Llama 2 的 70B 模型首先引入 GQA（8 个 KV groups），原因如下：</p>
+<ul>
+    <li><strong>KV Cache 减少 8x</strong>：推理时每个 token 只需缓存 8 个 KV head 而非 64 个</li>
+    <li><strong>推理吞吐提升 ~30%</strong>：更大的 batch size 可以放入相同显存</li>
+    <li><strong>质量损失极小</strong>：相比 MHA，困惑度差异在 0.1% 以内</li>
+    <li>Llama 3 全系列（8B/70B/405B）继续使用 GQA，Llama 4 进一步优化了分组策略</li>
+</ul>
+
+<h3>KV Cache 节省计算</h3>
+<pre><code># 以 Llama 2 70B 为例计算 KV Cache 节省
+# 模型参数
+num_layers = 80
+d_model = 8192
+num_q_heads = 64
+num_kv_heads_mha = 64  # 如果用 MHA
+num_kv_heads_gqa = 8   # 实际使用 GQA
+head_dim = 128
+seq_len = 4096
+bytes_per_param = 2  # FP16
+
+# MHA 的 KV Cache
+kv_cache_mha = 2 * num_layers * num_kv_heads_mha * seq_len * head_dim * bytes_per_param
+# = 2 * 80 * 64 * 4096 * 128 * 2 = 10,737,418,240 bytes ≈ 10 GB
+
+# GQA 的 KV Cache
+kv_cache_gqa = 2 * num_layers * num_kv_heads_gqa * seq_len * head_dim * bytes_per_param
+# = 2 * 80 * 8 * 4096 * 128 * 2 = 1,342,177,280 bytes ≈ 1.25 GB
+
+# 节省约 87.5% 的 KV Cache 内存
+print(f"MHA KV Cache: {kv_cache_mha / 1e9:.2f} GB")
+print(f"GQA KV Cache: {kv_cache_gqa / 1e9:.2f} GB")
+print(f"节省: {(1 - kv_cache_gqa / kv_cache_mha) * 100:.1f}%")</code></pre>
+
+<!-- ==================== Section 4 ==================== -->
+<h2><span class="section-number">14.4</span> MLA（多头潜在注意力）</h2>
+
+<h3>DeepSeek V2/V3 的创新设计</h3>
+<p>MLA（Multi-head Latent Attention）是 DeepSeek V2 引入的注意力机制，其核心思想是：<strong>将 KV 投影到低维潜在空间（latent space），再从潜在空间恢复</strong>，从而大幅压缩 KV Cache。</p>
+
+<pre><code>import torch
+import torch.nn as nn
+
+class MultiHeadLatentAttention(nn.Module):
+    def __init__(self, d_model=2048, num_heads=16, head_dim=128,
+                 kv_lora_rank=512, q_lora_rank=512):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.kv_lora_rank = kv_lora_rank
+
+        # KV 压缩: 将 KV 压缩到低维 latent
+        self.kv_compress = nn.Linear(d_model, kv_lora_rank, bias=False)
+        # KV 解压
+        self.k_decompress = nn.Linear(kv_lora_rank, num_heads * head_dim, bias=False)
+        self.v_decompress = nn.Linear(kv_lora_rank, num_heads * head_dim, bias=False)
+
+        # Q 也做低秩压缩
+        self.q_compress = nn.Linear(d_model, q_lora_rank, bias=False)
+        self.q_decompress = nn.Linear(q_lora_rank, num_heads * head_dim, bias=False)
+
+        # RoPE 需要单独的小维度
+        self.k_rope_proj = nn.Linear(d_model, 64, bias=False)  # 从 h_t 直接投影 RoPE key
+        self.q_rope_proj = nn.Linear(q_lora_rank, 64, bias=False)
+
+        self.o_proj = nn.Linear(num_heads * head_dim, d_model, bias=False)
+
+    def forward(self, x):
+        B, L, _ = x.shape
+
+        # 压缩 KV 到 latent space
+        kv_latent = self.kv_compress(x)  # (B, L, kv_lora_rank)
+        # 缓存时只需存 kv_latent，而非完整 KV！
+
+        # 解压得到 K, V
+        k = self.k_decompress(kv_latent).view(B, L, self.num_heads, self.head_dim)
+        v = self.v_decompress(kv_latent).view(B, L, self.num_heads, self.head_dim)
+
+        # Q 压缩 + 解压
+        q_latent = self.q_compress(x)
+        q = self.q_decompress(q_latent).view(B, L, self.num_heads, self.head_dim)
+
+        # RoPE 一路直接从 h_t 投影，绕过低秩压缩，故称 decoupled
+        k_rope = self.k_rope_proj(x)  # (B, L, 64)
+        q_rope = self.q_rope_proj(q_latent)
+
+        return q, k, v, kv_latent  # 推理时只需缓存 kv_latent</code></pre>
+
+<h3>与 GQA 对比</h3>
+<table>
+    <tr><th>特性</th><th>GQA</th><th>MLA</th></tr>
+    <tr><td>压缩方式</td><td>共享 KV heads</td><td>低秩投影到 latent space</td></tr>
+    <tr><td>KV Cache 存储</td><td>共享后的 KV heads</td><td>低维 latent 向量</td></tr>
+    <tr><td>压缩率</td><td>固定（取决于分组数）</td><td>可调节（取决于 lora_rank）</td></tr>
+    <tr><td>信息保留</td><td>每组只有一个 KV 视角</td><td>latent 包含融合信息</td></tr>
+    <tr><td>实现复杂度</td><td>简单</td><td>需要额外压缩/解压层</td></tr>
+    <tr><td>代表模型</td><td>Llama 2/3, Mistral</td><td>DeepSeek V2/V3</td></tr>
+</table>
+
+<div class="callout">
+    <strong>MLA 的实际效果</strong>
+    DeepSeek V2 使用 kv_lora_rank=512，相比 MHA 的完整 KV cache 压缩了约 93.3%，同时保持了与 MHA 相当甚至更优的性能。DeepSeek V3 和 R1 均延续了 MLA 设计。
+</div>
+
+<!-- ==================== Section 5 ==================== -->
+<h2><span class="section-number">14.5</span> MoE（混合专家）详解</h2>
+
+<h3>路由机制：Top-K 门控</h3>
+<p>MoE（Mixture of Experts）的核心思想是用多个"专家"网络替代 FFN 层中的单一前馈网络，由门控网络（Router）为每个 token 选择激活哪些专家。</p>
+
+<pre><code>import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class TopKRouter(nn.Module):
+    def __init__(self, d_model, num_experts, top_k=2):
+        super().__init__()
+        self.top_k = top_k
+        self.gate = nn.Linear(d_model, num_experts, bias=False)
+
+    def forward(self, x):
+        # x: (batch, seq_len, d_model)
+        logits = self.gate(x)  # (batch, seq_len, num_experts)
+
+        # 选择 top-k 专家
+        top_k_logits, top_k_indices = logits.topk(self.top_k, dim=-1)
+        top_k_weights = F.softmax(top_k_logits, dim=-1)
+
+        return top_k_weights, top_k_indices, logits
+
+class MoELayer(nn.Module):
+    def __init__(self, d_model, d_ff, num_experts=8, top_k=2):
+        super().__init__()
+        self.num_experts = num_experts
+        self.top_k = top_k
+        self.router = TopKRouter(d_model, num_experts, top_k)
+
+        # 每个专家是一个独立的 FFN
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(d_model, d_ff, bias=False),
+                nn.SiLU(),
+                nn.Linear(d_ff, d_model, bias=False)
+            ) for _ in range(num_experts)
+        ])
+
+    def forward(self, x):
+        # x: (batch, seq_len, d_model)
+        B, L, D = x.shape
+        weights, indices, router_logits = self.router(x)
+
+        output = torch.zeros_like(x)
+        x_flat = x.view(-1, D)  # (B*L, D)
+        weights_flat = weights.view(-1, self.top_k)
+        indices_flat = indices.view(-1, self.top_k)
+
+        for k in range(self.top_k):
+            expert_idx = indices_flat[:, k]  # (B*L,)
+            expert_weight = weights_flat[:, k].unsqueeze(-1)  # (B*L, 1)
+
+            for e in range(self.num_experts):
+                mask = (expert_idx == e)
+                if mask.any():
+                    expert_input = x_flat[mask]
+                    expert_output = self.experts[e](expert_input)
+                    output.view(-1, D)[mask] += expert_weight[mask] * expert_output
+
+        return output, router_logits</code></pre>
+
+<h3>负载均衡</h3>
+<p>MoE 训练中的一大挑战是<strong>负载不均衡</strong>：少数专家被过度使用，多数专家闲置。解决方案包括：</p>
+
+<pre><code>def load_balancing_loss(router_logits, num_experts, top_k):
+    """
+    辅助损失函数：鼓励均匀路由
+    router_logits: (batch, seq_len, num_experts)
+    """
+    probs = F.softmax(router_logits, dim=-1)  # (B, L, E)
+
+    # 每个专家被选中的频率
+    # 使用 top-k 的 one-hot 近似
+    _, indices = router_logits.topk(top_k, dim=-1)
+    one_hot = F.one_hot(indices, num_experts).float()
+    freq = one_hot.mean(dim=[0, 1, 2])  # (E,) 每个专家的平均选中频率
+
+    # 每个专家的平均路由概率
+    mean_prob = probs.mean(dim=[0, 1])  # (E,)
+
+    # 负载均衡损失 = N * sum(freq * mean_prob)
+    # 理想情况下 freq 和 mean_prob 都是均匀的 (1/E)
+    loss = num_experts * (freq * mean_prob).sum()
+    return loss</code></pre>
+
+<h3>主流模型 MoE 设计对比</h3>
+<table>
+    <tr><th>模型</th><th>总参数</th><th>激活参数</th><th>专家数</th><th>Top-K</th><th>特点</th></tr>
+    <tr><td>Mixtral 8x7B</td><td>46.7B</td><td>12.9B</td><td>8</td><td>2</td><td>每层 FFN 替换为 8 个专家 FFN；注意力与其余参数共享，token 采用 top-2 路由</td></tr>
+    <tr><td>Mixtral 8x22B</td><td>141B</td><td>39B</td><td>8</td><td>2</td><td>规模更大的 Mixtral</td></tr>
+    <tr><td>DeepSeek V3</td><td>671B</td><td>37B</td><td>256 + 1共享</td><td>8 (+1)</td><td>细粒度专家 + 共享专家</td></tr>
+    <tr><td>Llama 4 Maverick</td><td>400B</td><td>17B</td><td>128</td><td>1</td><td>128 个专家激活 1 个</td></tr>
+    <tr><td>Llama 4 Scout</td><td>109B</td><td>约17B</td><td>16</td><td>1</td><td>轻量级 MoE 设计</td></tr>
+</table>
+
+<h3>MoE 训练挑战</h3>
+<ul>
+    <li><strong>通信开销</strong>：分布式训练时专家分布在不同 GPU，需要 All-to-All 通信</li>
+    <li><strong>训练不稳定</strong>：路由决策是离散的，梯度估计困难</li>
+    <li><strong>专家坍缩</strong>：少数专家被反复选中，其余专家得不到训练</li>
+    <li><strong>微调困难</strong>：少量数据下容易过拟合，需要特殊的微调策略</li>
+</ul>
+
+<!-- ==================== Section 6 ==================== -->
+<h2><span class="section-number">14.6</span> SSM 与 Mamba</h2>
+
+<h3>状态空间模型原理</h3>
+<p>SSM（State Space Model）源自控制理论，用连续状态方程描述系统行为：</p>
+<pre><code># 连续时间 SSM:
+# h'(t) = A·h(t) + B·x(t)    (状态方程)
+# y(t)  = C·h(t) + D·x(t)    (输出方程)
+#
+# 离散化后（ZOH 离散化）:
+# h_t = A̅·h_{t-1} + B̅·x_t
+# y_t = C·h_t
+#
+# 其中 A̅ = exp(Δ·A), B̅ = (Δ·A)^(-1)·(A̅ - I)·Δ·B
+#
+# 优势：可以用卷积（并行训练）或递推（高效推理）两种方式计算</code></pre>
+
+<h3>Mamba 的选择性机制</h3>
+<p>Mamba（S6 模型）的核心创新：<strong>让 SSM 的参数 B、C、Δ 依赖于输入</strong>（input-dependent），从而使模型具备内容感知的选择能力。</p>
+
+<pre><code>import torch
+import torch.nn as nn
+
+class SelectiveSSM(nn.Module):
+    """简化的 Mamba 选择性 SSM 层"""
+    def __init__(self, d_model, d_state=16, d_conv=4, expand=2):
+        super().__init__()
+        d_inner = d_model * expand
+
+        # 输入投影
+        self.in_proj = nn.Linear(d_model, d_inner * 2, bias=False)
+
+        # 1D 因果卷积
+        self.conv1d = nn.Conv1d(d_inner, d_inner, d_conv,
+                                 padding=d_conv-1, groups=d_inner)
+
+        # SSM 参数投影（input-dependent！这是 Mamba 的关键）
+        self.x_proj = nn.Linear(d_inner, d_state * 2 + 1, bias=False)
+        # 输出: B(d_state), C(d_state), Δ(1)
+
+        # A 参数（对数空间初始化，确保稳定性）
+        A = torch.arange(1, d_state + 1, dtype=torch.float32)
+        self.A_log = nn.Parameter(torch.log(A))
+        self.D = nn.Parameter(torch.ones(d_inner))
+
+        self.out_proj = nn.Linear(d_inner, d_model, bias=False)
+
+    def forward(self, x):
+        # x: (B, L, D)
+        B_batch, L, _ = x.shape
+
+        # 双分支：一个经过 SSM，一个做门控
+        xz = self.in_proj(x)
+        x_branch, z = xz.chunk(2, dim=-1)
+
+        # 因果卷积
+        x_conv = self.conv1d(x_branch.transpose(1, 2))[:, :, :L].transpose(1, 2)
+        x_conv = torch.nn.functional.silu(x_conv)
+
+        # 计算 input-dependent 的 B, C, Δ
+        x_ssm = self.x_proj(x_conv)
+        B_param, C_param, delta = x_ssm.split(
+            [self.A_log.shape[0], self.A_log.shape[0], 1], dim=-1
+        )
+        delta = torch.nn.functional.softplus(delta)  # 确保 Δ > 0
+
+        # 离散化 A
+        A = -torch.exp(self.A_log)  # (d_state,)
+        # A̅ = exp(Δ·A)，此处简化处理
+        deltaA = torch.exp(delta.unsqueeze(-1) * A)  # (B, L, d_state)
+        deltaB = delta.unsqueeze(-1) * B_param.unsqueeze(2)  # 简化
+
+        # 状态递推（实际中使用并行扫描算法加速）
+        d_state = A.shape[0]
+        h = torch.zeros(B_batch, x_conv.shape[-1] // 1, d_state,
+                        device=x.device)  # 简化示例
+        # ... 省略完整递推逻辑
+
+        return self.out_proj(x_conv * torch.nn.functional.silu(z))</code></pre>
+
+<h3>Mamba-2 改进</h3>
+<p>Mamba-2（2024）揭示了 SSM 与注意力之间的深层联系（SSD 框架），实现了：</p>
+<ul>
+    <li>理论训练速度比 Mamba-1 快 2-8x</li>
+    <li>结构化状态空间对偶性（SSD），统一了 SSM 和线性注意力</li>
+    <li>支持更高效的分块并行计算</li>
+</ul>
+
+<h3>与 Transformer 对比</h3>
+<table>
+    <tr><th>特性</th><th>Transformer</th><th>Mamba</th></tr>
+    <tr><td>训练复杂度</td><td>O(N²d)</td><td>O(Nd)</td></tr>
+    <tr><td>推理复杂度（每步）</td><td>O(Nd)（需KV cache）</td><td>O(d)（固定状态）</td></tr>
+    <tr><td>上下文长度</td><td>受 KV cache 限制</td><td>理论无限（受限于状态大小）</td></tr>
+    <tr><td>长序列能力</td><td>需要外推技术</td><td>天然处理长序列</td></tr>
+    <tr><td>在上下文学习</td><td>强</td><td>相对较弱</td></tr>
+</table>
+
+<h3>Jamba 混合架构</h3>
+<p>AI21 的 Jamba 采用 <strong>Transformer + Mamba 混合架构</strong>：交替堆叠 Transformer 层和 Mamba 层，兼取两者之长。部分层使用 MoE 进一步提升模型容量。类似地，Zamba 和 Griffin 等模型也探索了混合路线。</p>
+
+<!-- ==================== Section 7 ==================== -->
+<h2><span class="section-number">14.7</span> RWKV</h2>
+
+<h3>线性注意力 RNN 的核心思想</h3>
+<p>RWKV（Receptance Weighted Key Value）由彭博提出，结合了 Transformer 和 RNN 的优势：</p>
+<ul>
+    <li><strong>训练像 Transformer</strong>：可以并行计算，充分利用 GPU</li>
+    <li><strong>推理像 RNN</strong>：每步只需 O(1) 复杂度，无需 KV cache</li>
+</ul>
+
+<pre><code># RWKV 的时间混合机制（简化）
+# Attention 部分：
+# wkv_t = (Σ_{i=1}^{t-1} e^{-(t-1-i)w + k_i} · v_i + e^{u+k_t} · v_t)
+#       / (Σ_{i=1}^{t-1} e^{-(t-1-i)w + k_i} + e^{u+k_t})
+#
+# 其中:
+# w = 时间衰减参数（learnable）
+# u = 当前 token 的 bonus 参数
+# k, v = key, value（来自线性投影）
+#
+# 递推形式:
+# a_t = e^{-w} · a_{t-1} + e^{k_t} · v_t    (分子递推)
+# b_t = e^{-w} · b_{t-1} + e^{k_t}           (分母递推)
+# wkv_t = (a_t + e^{u+k_t} · v_t) / (b_t + e^{u+k_t})</code></pre>
+
+<h3>RWKV-6/7 改进</h3>
+<p><strong>RWKV-6（2024）</strong>引入了多项改进：</p>
+<ul>
+    <li><strong>数据依赖的线性插值</strong>：时间衰减参数 w 依赖于输入数据，类似 Mamba 的选择性机制</li>
+    <li><strong>多头机制</strong>：引入类似 GQA 的多头结构</li>
+    <li><strong>1.5T token 训练</strong>：在 100+ 语言的语料上训练</li>
+    <li>性能逼近同规模 Transformer（如 Llama 3 等）</li>
+</ul>
+<p><strong>RWKV-7（2025，代号 Goose）</strong>：</p>
+<ul>
+    <li>进一步引入了 state evolution 机制</li>
+    <li>在多个基准上超越了同规模 Transformer</li>
+    <li>证明了线性复杂度架构可以匹配 Transformer 的表达能力</li>
+    <li>支持 100 万+ token 的上下文长度，推理内存恒定</li>
+</ul>
+
+<div class="callout callout-success">
+    <strong>RWKV 的独特价值</strong>
+    RWKV 是唯一一个同时兼具"并行训练"和"恒定推理复杂度"的架构，且完全开源（Apache 2.0）。对于需要在边缘设备或低资源环境下部署长上下文应用的场景，RWKV 可能是最实用的选择。
+</div>
+
+<!-- ==================== Section 8 ==================== -->
+<h2><span class="section-number">14.8</span> 动手练习</h2>
+
+<div class="callout callout-warn">
+    <strong>练习 1：实现简化版 Flash Attention</strong>
+    使用 Python/PyTorch 实现分块注意力（tiled attention），只使用 O(N) 额外内存。你可以参考在线 softmax 算法，逐块加载 K、V 并更新输出。验证你的实现与标准注意力在数学上等价（误差 < 1e-5）。
+</div>
+
+<div class="callout callout-warn">
+    <strong>练习 2：RoPE 外推实验</strong>
+    实现 NTK-aware RoPE 缩放（修改 base 频率），测试模型在超出训练长度时的困惑度变化。分别测试 base=10000（原始）、base=500000（NTK 缩放）在 2x 和 4x 训练长度下的表现。
+</div>
+
+<div class="callout callout-warn">
+    <strong>练习 3：GQA 对比实验</strong>
+    在小模型（如 125M 参数）上对比 MHA（32 heads）、GQA-8（32Q/8KV）、MQA（32Q/1KV）三种配置的训练收敛速度和推理吞吐量。统计不同序列长度下的 KV cache 内存占用。
+</div>
+
+<div class="callout callout-warn">
+    <strong>练习 4：MoE 路由可视化</strong>
+    训练一个小型 MoE 模型（4 专家，top-2），记录每个 batch 的路由决策。可视化：(1) 每个专家的负载分布；(2) 不同 token 类型（名词、动词、标点等）的路由偏好；(3) 加入负载均衡损失前后的变化。
+</div>
+
+<div class="callout callout-warn">
+    <strong>练习 5：Mamba vs Transformer 对比</strong>
+    在长序列任务上（如 16K、32K、64K token 的语言建模）对比 Mamba 和同等参数量 Transformer 的 (1) 训练速度，(2) 推理速度，(3) 内存占用，(4) 困惑度。绘制性能-序列长度曲线。
+</div>
+
+<p style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 0.9rem;">
+    返回目录 | 上一章：分布式训练 | 下一章：模型评估进阶
+</p>
+</div></section>

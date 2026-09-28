@@ -1,0 +1,424 @@
+<section class="llm-mod llm-m-lcel" id="llm-lcel"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>LCEL详解：LangChain表达式语言</h1>
+  <p>掌握 Runnable 协议、管道语法与链式组合</p>
+</div>
+
+<!-- ==================== SECTION 1: 设计哲学 ==================== -->
+<div class="section" id="llm-lcel-s1">
+  <h2>LCEL 设计哲学</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>LCEL 就像是 Unix 的管道 <code>|</code>。在终端里，<code>cat file | grep error | sort | uniq</code> 将多个简单工具串联成复杂操作。LCEL 同样用 <code>|</code> 将 Prompt、LLM、Parser 等组件串联，数据在管道中流动，每一步做一件事。
+  </div>
+
+  <p>LCEL（LangChain Expression Language）是 LangChain 1.x 的核心设计理念。它的基础是 <strong>Runnable 协议</strong>——所有组件都实现了统一的接口：</p>
+
+  <table>
+    <tr><th>方法</th><th>说明</th><th>适用场景</th></tr>
+    <tr><td><code>invoke(input)</code></td><td>同步单次调用</td><td>最基本用法，处理单条输入</td></tr>
+    <tr><td><code>batch([inputs])</code></td><td>批量调用（自动并发）</td><td>处理多条输入，性能优化</td></tr>
+    <tr><td><code>stream(input)</code></td><td>流式输出</td><td>实时显示 LLM 生成内容</td></tr>
+    <tr><td><code>ainvoke(input)</code></td><td>异步单次调用</td><td>async/await 场景</td></tr>
+    <tr><td><code>abatch([inputs])</code></td><td>异步批量调用</td><td>高并发服务端</td></tr>
+    <tr><td><code>astream(input)</code></td><td>异步流式输出</td><td>异步流式场景</td></tr>
+  </table>
+
+  <div class="callout callout-key">
+    <strong>核心优势：</strong>因为所有组件共享同一接口，任意两个 Runnable 都可以 <code>A | B</code> 串联。不管 A 是 Prompt、LLM 还是自定义函数，不管 B 是 Parser、另一个 LLM 还是检索器——它们的输入输出协议是一致的。
+  </div>
+</div>
+
+<!-- ==================== SECTION 2: Pipe 语法 ==================== -->
+<div class="section" id="llm-lcel-s2">
+  <h2>Pipe 语法详解</h2>
+
+  <p><code>|</code> 操作符将两个 Runnable 串联为一个 <code>RunnableSequence</code>。左边的输出变成右边的输入。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+<span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> <span class="cls">StrOutputParser</span>
+
+prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(<span class="str">"翻译成英文：{text}"</span>)
+llm = <span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>)
+parser = <span class="cls">StrOutputParser</span>()
+
+<span class="cmt"># 等价写法</span>
+chain = prompt | llm | parser              <span class="cmt"># 管道语法（推荐）</span>
+chain = prompt.<span class="fn">pipe</span>(llm).<span class="fn">pipe</span>(parser)    <span class="cmt"># 显式 .pipe()（不常用）</span>
+
+<span class="cmt"># 数据流：str -> list[Message] -> AIMessage -> str</span>
+<span class="cmt">#          {text}  prompt输出      llm输出     parser输出</span>
+
+result = chain.<span class="fn">invoke</span>({<span class="str">"text"</span>: <span class="str">"你好世界"</span>})
+<span class="cmt"># -> "Hello World"</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>类型转换链：</strong><code>PromptTemplate</code> 接收 <code>dict</code> 输出 <code>str</code>；<code>ChatPromptTemplate</code> 接收 <code>dict</code> 输出 <code>list[BaseMessage]</code>；<code>ChatModel</code> 接收消息列表输出 <code>AIMessage</code>；<code>StrOutputParser</code> 接收 <code>AIMessage</code> 输出 <code>str</code>。这就是为什么它们能用 <code>|</code> 串联——输入输出类型是匹配的。
+  </div>
+</div>
+
+<!-- ==================== SECTION 3: 核心 Runnable 方法 ==================== -->
+<div class="section" id="llm-lcel-s3">
+  <h2>核心 Runnable 方法</h2>
+
+  <h3>invoke — 单次调用</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># invoke 接收单个输入，返回单个输出</span>
+result = chain.<span class="fn">invoke</span>({<span class="str">"text"</span>: <span class="str">"人工智能改变世界"</span>})
+<span class="fn">print</span>(result)  <span class="cmt"># -> "Artificial intelligence is changing the world"</span></code></pre>
+  </div>
+
+  <h3>batch — 批量调用</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># batch 接收输入列表，返回输出列表</span>
+<span class="cmt"># 默认并发执行，自动处理速率限制</span>
+inputs = [
+    {<span class="str">"text"</span>: <span class="str">"你好世界"</span>},
+    {<span class="str">"text"</span>: <span class="str">"机器学习"</span>},
+    {<span class="str">"text"</span>: <span class="str">"深度学习"</span>}
+]
+results = chain.<span class="fn">batch</span>(inputs)
+
+<span class="cmt"># 可通过 max_concurrency 控制并发数</span>
+results = chain.<span class="fn">batch</span>(inputs, {<span class="str">"max_concurrency"</span>: <span class="num">2</span>})
+
+<span class="cmt"># 异步批量（适合 Web 服务）</span>
+results = <span class="kw">await</span> chain.<span class="fn">abatch</span>(inputs)</code></pre>
+  </div>
+
+  <h3>stream — 流式输出</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># stream 返回一个生成器，逐步产出结果</span>
+<span class="kw">for</span> chunk <span class="kw">in</span> chain.<span class="fn">stream</span>({<span class="str">"text"</span>: <span class="str">"量子计算的未来"</span>}):
+    <span class="fn">print</span>(chunk, end=<span class="str">""</span>, flush=<span class="kw">True</span>)
+
+<span class="cmt"># 异步流式</span>
+<span class="kw">async for</span> chunk <span class="kw">in</span> chain.<span class="fn">astream</span>({<span class="str">"text"</span>: <span class="str">"量子计算的未来"</span>}):
+    <span class="fn">print</span>(chunk, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 4: Runnable 辅助类 ==================== -->
+<div class="section" id="llm-lcel-s4">
+  <h2>RunnablePassthrough / RunnableLambda / RunnableParallel</h2>
+
+  <p>除了 LLM 和 Prompt，LCEL 还提供了三个常用辅助类来构建更灵活的管道。</p>
+
+  <h3>RunnablePassthrough — 透传输入</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.runnables <span class="kw">import</span> <span class="cls">RunnablePassthrough</span>
+
+<span class="cmt"># RunnablePassthrough 直接将输入透传为输出</span>
+passthrough = <span class="cls">RunnablePassthrough</span>()
+result = passthrough.<span class="fn">invoke</span>(<span class="str">"hello"</span>)
+<span class="cmt"># -> "hello"</span>
+
+<span class="cmt"># 常用于保留原始输入，同时传递给其他分支</span>
+<span class="cmt"># 典型场景：RAG 中保留原始问题</span></code></pre>
+  </div>
+
+  <h3>RunnableLambda — 自定义函数</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.runnables <span class="kw">import</span> <span class="cls">RunnableLambda</span>
+
+<span class="cmt"># 方式一：用 RunnableLambda 包装函数</span>
+<span class="kw">def</span> <span class="fn">count_chars</span>(text: <span class="cls">str</span>) -> <span class="cls">dict</span>:
+    <span class="kw">return</span> {<span class="str">"text"</span>: text, <span class="str">"count"</span>: <span class="fn">len</span>(text)}
+
+counter = <span class="cls">RunnableLambda</span>(count_chars)
+result = counter.<span class="fn">invoke</span>(<span class="str">"Hello"</span>)
+<span class="cmt"># -> {"text": "Hello", "count": 5}</span>
+
+<span class="cmt"># 方式二：直接在管道中使用 lambda（自动包装）</span>
+chain = prompt | llm | (<span class="kw">lambda</span> x: x.content.upper())
+result = chain.<span class="fn">invoke</span>({<span class="str">"text"</span>: <span class="str">"你好"</span>})
+
+<span class="cmt"># 方式三：用 .map() 对列表每个元素应用函数</span>
+upper = <span class="cls">RunnableLambda</span>(<span class="kw">lambda</span> x: x.upper())
+result = upper.<span class="fn">batch</span>([<span class="str">"hello"</span>, <span class="str">"world"</span>])
+<span class="cmt"># -> ["HELLO", "WORLD"]</span></code></pre>
+  </div>
+
+  <h3>RunnableParallel — 并行执行</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.runnables <span class="kw">import</span> <span class="cls">RunnableParallel</span>, <span class="cls">RunnablePassthrough</span>
+
+<span class="cmt"># RunnableParallel 将多个 Runnable 并行执行</span>
+<span class="cmt"># 输入同时传递给所有分支，输出合并为 dict</span>
+
+<span class="cmt"># 简写方式（在管道中直接用 dict）</span>
+chain = (
+    <span class="cls">RunnableParallel</span>({
+        <span class="str">"original"</span>: <span class="cls">RunnablePassthrough</span>(),
+        <span class="str">"length"</span>: <span class="cls">RunnableLambda</span>(<span class="kw">lambda</span> x: <span class="fn">len</span>(x)),
+        <span class="str">"upper"</span>: <span class="cls">RunnableLambda</span>(<span class="kw">lambda</span> x: x.upper())
+    })
+)
+
+result = chain.<span class="fn">invoke</span>(<span class="str">"hello world"</span>)
+<span class="cmt"># -> {"original": "hello world", "length": 11, "upper": "HELLO WORLD"}</span>
+
+<span class="cmt"># 实际场景：RAG 中同时获取上下文和保留问题</span>
+rag_setup = <span class="cls">RunnableParallel</span>({
+    <span class="str">"context"</span>: retriever | format_docs,
+    <span class="str">"question"</span>: <span class="cls">RunnablePassthrough</span>()
+})</code></pre>
+  </div>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong><code>RunnableParallel</code> 就像是餐厅的"套餐"——你点了一个订单，厨房同时开始做主菜（检索上下文）和配菜（保留原始问题），最后一起端上来组成完整的套餐（prompt 输入字典）。
+  </div>
+</div>
+
+<!-- ==================== SECTION 5: 链式组合 ==================== -->
+<div class="section" id="llm-lcel-s5">
+  <h2>链式组合：Prompt | LLM | OutputParser</h2>
+
+  <p>这是 LCEL 最经典的组合模式。数据在管道中依次经过三个阶段：</p>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>Prompt</strong> — 接收 <code>dict</code> 变量，输出消息列表 <code>list[BaseMessage]</code></div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>LLM</strong> — 接收消息列表，输出 <code>AIMessage</code></div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>OutputParser</strong> — 接收 <code>AIMessage</code>，输出 <code>str</code> / <code>dict</code> / <code>Pydantic</code></div>
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+<span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> <span class="cls">StrOutputParser</span>
+
+<span class="cmt"># 构建翻译链</span>
+translate_prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+    (<span class="str">"system"</span>, <span class="str">"你是专业翻译，将用户输入翻译成{target_lang}，只输出翻译结果"</span>),
+    (<span class="str">"human"</span>, <span class="str">"{text}"</span>)
+])
+llm = <span class="cls">ChatAnthropic</span>(model=<span class="str">"claude-opus-5"</span>)
+parser = <span class="cls">StrOutputParser</span>()
+
+translate_chain = translate_prompt | llm | parser
+
+<span class="cmt"># 构建摘要链</span>
+summarize_prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(
+    <span class="str">"请用一句话总结以下内容：\n{text}"</span>
+)
+summarize_chain = summarize_prompt | llm | parser
+
+<span class="cmt"># 组合链：先翻译，再摘要</span>
+pipeline = translate_chain | summarize_chain
+
+result = pipeline.<span class="fn">invoke</span>({
+    <span class="str">"target_lang"</span>: <span class="str">"英文"</span>,
+    <span class="str">"text"</span>: <span class="str">"LangChain 是一个用于构建基于大语言模型的应用程序的框架。它提供了标准化的接口和工具，简化了开发流程。"</span>
+})</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 6: 分支与合并 ==================== -->
+<div class="section" id="llm-lcel-s6">
+  <h2>分支与合并</h2>
+
+  <p>通过 <code>RunnableParallel</code> + <code>RunnablePassthrough</code>，可以实现数据的分支处理和结果合并。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.runnables <span class="kw">import</span> <span class="cls">RunnableParallel</span>
+
+<span class="cmt"># 分支：同时对一段文本做翻译和摘要</span>
+branch_chain = <span class="cls">RunnableParallel</span>({
+    <span class="str">"translation"</span>: translate_prompt | llm | parser,
+    <span class="str">"summary"</span>: summarize_prompt | llm | parser,
+    <span class="str">"original"</span>: <span class="cls">RunnablePassthrough</span>()
+})
+
+result = branch_chain.<span class="fn">invoke</span>({
+    <span class="str">"target_lang"</span>: <span class="str">"英文"</span>,
+    <span class="str">"text"</span>: <span class="str">"深度学习是机器学习的一个子领域..."</span>
+})
+<span class="cmt"># -> {"translation": "Deep learning is...", "summary": "...", "original": "..."}</span>
+
+<span class="cmt"># 合并：将分支结果汇总为最终报告</span>
+<span class="kw">def</span> <span class="fn">merge_results</span>(data):
+    <span class="kw">return</span> <span class="str">f"""原文：{data['original']}
+翻译：{data['translation']}
+摘要：{data['summary']}"""</span>
+
+full_chain = branch_chain | <span class="cls">RunnableLambda</span>(merge_results)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>并行执行：</strong><code>RunnableParallel</code> 中的多个分支是真正并行执行的（利用线程池或异步），所以"翻译"和"摘要"同时进行，总耗时约等于最慢的那个分支，而不是两者之和。
+  </div>
+</div>
+
+<!-- ==================== SECTION 7: 错误处理 ==================== -->
+<div class="section" id="llm-lcel-s7">
+  <h2>错误处理</h2>
+
+  <p>LCEL 提供了两种内置的容错机制：回退和重试。</p>
+
+  <h3>with_fallbacks — 回退</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+<span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+
+<span class="cmt"># 主模型失败时，自动切换到备选模型</span>
+primary_llm = <span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>)
+fallback_llm = <span class="cls">ChatAnthropic</span>(model=<span class="str">"claude-opus-5"</span>)
+
+chain = prompt | primary_llm.<span class="fn">with_fallbacks</span>([fallback_llm]) | parser
+
+<span class="cmt"># 如果 OpenAI API 调用失败，自动用 Claude 重试</span>
+result = chain.<span class="fn">invoke</span>({<span class="str">"text"</span>: <span class="str">"你好"</span>})</code></pre>
+  </div>
+
+  <h3>with_retry — 重试</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 配置重试策略</span>
+llm_with_retry = llm.<span class="fn">with_retry</span>(
+    stop_after_attempt=<span class="num">3</span>,    <span class="cmt"># 最多重试3次</span>
+    wait_exponential_jitter=<span class="kw">True</span>  <span class="cmt"># 指数退避 + 随机抖动</span>
+)
+
+chain = prompt | llm_with_retry | parser
+
+<span class="cmt"># 也可以对整个链配置重试</span>
+chain_with_retry = chain.<span class="fn">with_retry</span>(stop_after_attempt=<span class="num">2</span>)</code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>注意：</strong><code>with_retry</code> 只重试可重试的异常（如网络超时、429 速率限制）。对于 400 参数错误等不可重试异常，不会触发重试。建议搭配 <code>with_fallbacks</code> 使用，实现"重试后回退"的完整容错链。
+  </div>
+</div>
+
+<!-- ==================== SECTION 8: 实战 RAG ==================== -->
+<div class="section" id="llm-lcel-s8">
+  <h2>实战：构建一个 RAG Chain</h2>
+
+  <p>综合运用 LCEL 的各种组件，构建一个完整的 RAG（检索增强生成）管道：</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+<span class="kw">from</span> langchain_core.runnables <span class="kw">import</span> <span class="cls">RunnableParallel</span>, <span class="cls">RunnablePassthrough</span>
+<span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> <span class="cls">StrOutputParser</span>
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+<span class="kw">from</span> langchain_milvus <span class="kw">import</span> <span class="cls">Milvus</span>
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">OpenAIEmbeddings</span>
+
+<span class="cmt"># 1. 初始化组件</span>
+embeddings = <span class="cls">OpenAIEmbeddings</span>(model=<span class="str">"text-embedding-3-small"</span>)
+vectorstore = <span class="cls">Milvus</span>(embedding_function=embeddings, collection_name=<span class="str">"docs"</span>)
+retriever = vectorstore.<span class="fn">as_retriever</span>(search_kwargs={<span class="str">"k"</span>: <span class="num">3</span>})
+llm = <span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>, temperature=<span class="num">0</span>)
+
+<span class="cmt"># 2. 辅助函数</span>
+<span class="kw">def</span> <span class="fn">format_docs</span>(docs):
+    <span class="str">"""将检索到的文档列表格式化为单个字符串"""</span>
+    <span class="kw">return</span> <span class="str">"\n\n"</span>.join(
+        <span class="str">f"[来源: {doc.metadata.get('source', '未知')}]\n{doc.page_content}"</span>
+        <span class="kw">for</span> doc <span class="kw">in</span> docs
+    )
+
+<span class="cmt"># 3. 构建 RAG Prompt</span>
+rag_prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+    (<span class="str">"system"</span>, <span class="str">"""你是一个知识问答助手。根据以下检索到的上下文回答问题。
+如果上下文中没有相关信息，请说明你不确定。
+
+上下文：
+{context}"""</span>),
+    (<span class="str">"human"</span>, <span class="str">"{question}"</span>)
+])
+
+<span class="cmt"># 4. 组装 RAG Chain</span>
+rag_chain = (
+    <span class="cls">RunnableParallel</span>({
+        <span class="str">"context"</span>: retriever | format_docs,   <span class="cmt"># 检索 + 格式化</span>
+        <span class="str">"question"</span>: <span class="cls">RunnablePassthrough</span>()    <span class="cmt"># 保留原始问题</span>
+    })
+    | rag_prompt    <span class="cmt"># 填入 prompt 模板</span>
+    | llm           <span class="cmt"># 调用 LLM</span>
+    | <span class="cls">StrOutputParser</span>()  <span class="cmt"># 提取文本</span>
+)
+
+<span class="cmt"># 5. 调用</span>
+answer = rag_chain.<span class="fn">invoke</span>(<span class="str">"什么是向量数据库？"</span>)
+<span class="fn">print</span>(answer)
+
+<span class="cmt"># 6. 流式输出（用户逐字看到回答）</span>
+<span class="kw">for</span> chunk <span class="kw">in</span> rag_chain.<span class="fn">stream</span>(<span class="str">"Milvus 和 Chroma 的区别是什么？"</span>):
+    <span class="fn">print</span>(chunk, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
+  </div>
+
+  <div class="callout callout-key">
+    <strong>LCEL 的价值：</strong>整个 RAG 管道只有约 10 行核心代码，但包含了检索、格式化、提示词构建、LLM 调用、输出解析五个步骤，且支持流式输出、批量调用、异步执行、错误重试——这些都不需要额外代码。这就是 LCEL 管道语法的威力。
+  </div>
+</div>
+
+<div class="footer">
+  LangChain & LangGraph 教程系列 | 第2章：LCEL详解
+</div>
+</div></section>

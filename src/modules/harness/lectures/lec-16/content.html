@@ -1,0 +1,89 @@
+<section id="sec-h-lec-16" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 16 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-16">第 16 讲 · OpenAI Codex 深度解析</h1>
+    <p>OpenAI Codex（2025 年发布的 agent 产品，区别于 2021 年的代码生成模型）是一个云端 agent 执行环境，在隔离的沙箱容器里运行代码任务，每个任务有独立的网络和文件系统。它的 harness 设计反映了 OpenAI 从大规模 agent 部署中总结的工程原则。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>AGENTS.md：Codex 的指令入口</h2>
+    <p>Codex 的指令文件叫 <code>AGENTS.md</code>（与 Claude Code 的命名相同，但约定略有差异）。Codex 建议把 AGENTS.md 放在仓库根目录，作为 agent 的操作手册：</p>
+    <div class="codeblock">
+      <pre><code># AGENTS.md
+
+## 环境设置
+- Python: 3.12（用 `python3`，不是 `python`）
+- 依赖安装：`pip install -e ".[dev]"`
+- 数据库迁移：`alembic upgrade head`
+
+## 测试
+- 运行全部测试：`pytest`
+- 运行单个模块：`pytest tests/test_api.py -v`
+- 覆盖率报告：`pytest --cov=src`
+
+## 代码风格
+- formatter: black（提交前自动运行）
+- linter: ruff
+- 类型检查：mypy --strict src/
+
+## 禁止操作
+- 不要修改 migrations/ 目录里的已有文件
+- 不要删除测试，只能新增
+- 生产配置在 config/prod.yaml，不要在任务中修改</code></pre></div>
+    <p>AGENTS.md 的核心价值：把"环境配置知识"从人脑里移到文件里，让 agent 不需要靠猜测或试错就能知道该怎么操作这个仓库。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>沙箱隔离：每任务一个干净环境</h2>
+    <p>Codex 的关键架构决策是沙箱隔离：每个任务在一个独立的云端容器里运行，有自己的文件系统克隆和网络环境。任务完成后，容器销毁，变更以 git diff 形式返回给用户审查。</p>
+    <p>这个设计直接解决了第 12 讲的 Clean State 问题：不需要 agent 主动清理，因为每次都是干净的起点。但代价是每次任务都要重新初始化环境（安装依赖、配置数据库等），这正是 AGENTS.md 里"环境设置"部分存在的原因。</p>
+    <p>沙箱隔离也解决了第 06 讲的初始化问题：容器启动 = 干净的初始化状态，不存在上一次会话的上下文污染。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>并发任务：多沙箱同时运行</h2>
+    <p>Codex 支持同时运行多个任务，每个任务在独立沙箱里并发执行。这是第 13 讲"Worktrees"原语的云端实现：不需要本地 git worktree，直接在云端开多个隔离的执行环境。</p>
+    <p>并发任务的 harness 挑战：如何防止多个 agent 同时修改同一个功能区域造成冲突？OpenAI 的建议是把任务粒度设计成正交的——每个并发任务修改不同的模块，最终 merge 时冲突最小化。这呼应了第 07 讲的"范围表面"概念：任务范围越精确，并发时越不容易冲突。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>架构约束的早期前置</h2>
+    <p>OpenAI 在 Codex 大规模部署中观察到的关键规律：<strong>Agent 会复制仓库中已有的模式。</strong>如果仓库里有不好的模式（绕过类型检查、不写测试、直接操作数据库而不经过 ORM），agent 会把这些模式传播到新代码里。</p>
+    <p>因此架构约束必须是第一天就建立的早期前置条件，不能等到 agent 已经生成了大量代码再来补救。具体做法：</p>
+    <ul>
+      <li>在 AGENTS.md 里明确禁止的模式，附上为什么禁止。</li>
+      <li>配置 lint 规则强制执行约束，不依赖 agent 自觉遵守。</li>
+      <li>已有代码里的反模式在 agent 参与前先清理，否则 agent 会模仿。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>面向 Agent 的错误消息设计</h2>
+    <p>OpenAI 团队在 Codex 实践中强调的一个细节：给 agent 的错误消息要包含修复指导，不只是报错。这直接影响 agent 的自修正成功率。</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">模式</th><th scope="col">示例</th><th scope="col">效果</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">只报错</th><td>TypeError: cannot read property 'id' of undefined</td><td>Agent 只能猜测原因</td></tr>
+        <tr><th scope="row">报错 + 定位</th><td>同上，附 stack trace + 文件行号</td><td>Agent 能找到位置，但不知道为什么</td></tr>
+        <tr><th scope="row">报错 + 原因 + 修复</th><td>找到了，为什么会发生，该怎么改</td><td>Agent 一次修复成功率显著提升</td></tr>
+      </tbody>
+    </table></div>
+    <p>OpenAI 的内部数据：使用结构化错误消息（what/why/how）后，agent 首次修复成功率从约 40% 提升到约 70%，平均修复轮次从 3.2 降到 1.4。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>人类审查：diff 作为交接工件</h2>
+    <p>Codex 的工作流在设计上强制人类审查：任务完成后，agent 的所有变更以 git diff 形式呈现，用户决定是否接受、修改或拒绝。这是对第 09 讲"生成者-评估者分离"的产品化实现——评估者是真正的人类，不是另一个 agent。</p>
+    <p>这个设计选择反映了一个务实判断：在 2025–2026 年的模型能力水平下，人类审查 diff 比完全自动化更可靠。随着模型能力提升，这个边界会移动，但架构上保留这个检查点是正确的。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-15">← 第 15 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-17">第 17 讲 →</a>
+  </nav>
+</section>

@@ -1,0 +1,608 @@
+<section class="llm-mod llm-m-data-cleaning" id="llm-data-cleaning"><div class="module-wrapper">
+<!-- 侧边栏导航 -->
+
+
+
+
+
+<!-- 主内容区 -->
+
+
+
+<!-- Hero Banner -->
+<div class="hero-banner">
+  <h1>🧹 数据清洗与预处理</h1>
+  <p>高质量的数据是训练好模型的基础</p>
+</div>
+
+<!-- 数据处理Pipeline -->
+<div class="section">
+  <h2>数据处理Pipeline</h2>
+
+  <div class="pipeline-step">
+    <div class="num">1</div>
+    <div><strong>数据收集</strong> — 从公开数据集、网页爬虫、私有数据中获取原始数据</div>
+  </div>
+  <div class="pipeline-step">
+    <div class="num">2</div>
+    <div><strong>文本清洗</strong> — 去除HTML标签、特殊字符、乱码、低质量内容</div>
+  </div>
+  <div class="pipeline-step">
+    <div class="num">3</div>
+    <div><strong>文本分词</strong> — 使用BPE/WordPiece等算法将文本转换为子词</div>
+  </div>
+  <div class="pipeline-step">
+    <div class="num">4</div>
+    <div><strong>文本编码</strong> — 将子词转换为模型可以理解的数字ID</div>
+  </div>
+  <div class="pipeline-step">
+    <div class="num">5</div>
+    <div><strong>格式转换</strong> — 转换为模型训练所需的格式（JSONL、HuggingFace格式）</div>
+  </div>
+  <div class="pipeline-step">
+    <div class="num">6</div>
+    <div><strong>质量检查</strong> — 统计分析、可视化、质量过滤</div>
+  </div>
+</div>
+
+<!-- ==================== SECTION 1 ==================== -->
+<div class="section" id="llm-data-cleaning-s1">
+  <h2>数据来源</h2>
+
+  <h3>公开数据集</h3>
+
+  <table>
+    <tr><th>数据集</th><th>规模</th><th>类型</th><th>适用场景</th></tr>
+    <tr><td><strong>Wikipedia</strong></td><td>~20GB</td><td>百科全书文本</td><td>通用知识、多语言</td></tr>
+    <tr><td><strong>CommonCrawl</strong></td><td>PB级</td><td>网页爬虫数据</td><td>大规模预训练</td></tr>
+    <tr><td><strong>C4</strong></td><td>~800GB</td><td>清洗后的网页</td><td>T5、LLaMA等模型训练</td></tr>
+    <tr><td><strong>The Pile</strong></td><td>~825GB</td><td>多样化文本</td><td>开源大模型训练</td></tr>
+    <tr><td><strong>OpenWebText</strong></td><td>~38GB</td><td>Reddit高赞链接</td><td>GPT系列模型训练</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>💡 数据集选择建议：</strong>学习阶段使用小规模数据集（如C4的子集或Wikipedia），生产环境使用The Pile或完整C4。
+  </div>
+
+  <h3>私有数据</h3>
+
+  <p>很多场景需要使用自己的数据：</p>
+  <ul>
+    <li><strong>文档数据</strong>：公司文档、产品说明、技术手册</li>
+    <li><strong>对话数据</strong>：客服记录、聊天记录、会议纪要</li>
+    <li><strong>代码数据</strong>：GitHub代码、内部代码库</li>
+    <li><strong>领域数据</strong>：金融报告、医疗记录、法律文书</li>
+  </ul>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 数据版权注意：</strong>使用公开数据集前，务必检查其许可证（License）。有些数据集（如CommonCrawl）可能包含受版权保护的内容。
+  </div>
+</div>
+
+<!-- ==================== SECTION 2 ==================== -->
+<div class="section" id="llm-data-cleaning-s2">
+  <h2>文本清洗</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>文本清洗就像是做饭前的洗菜——把烂叶子（乱码）、泥土（HTML标签）、虫子（特殊字符）都去掉，只留下干净的食材。
+  </div>
+
+  <h3>常见清洗操作</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> re
+<span class="kw">from</span> bs4 <span class="kw">import</span> BeautifulSoup
+
+<span class="kw">def</span> <span class="fn">clean_text</span>(text: <span class="cls">str</span>) -> <span class="cls">str</span>:
+    <span class="str">"""文本清洗主函数"""</span>
+
+    <span class="cmt"># 1. 去除HTML标签</span>
+    text = BeautifulSoup(text, <span class="str">"html.parser"</span>).get_text()
+
+    <span class="cmt"># 2. 去除URL链接</span>
+    text = re.sub(<span class="str">r'https?://\S+|www\.\S+'</span>, <span class="str">''</span>, text)
+
+    <span class="cmt"># 3. 去除邮箱地址</span>
+    text = re.sub(<span class="str">r'\S+@\S+\.\S+'</span>, <span class="str">''</span>, text)
+
+    <span class="cmt"># 4. 去除多余空白字符</span>
+    text = re.sub(<span class="str">r'\s+'</span>, <span class="str">' '</span>, text)
+
+    <span class="cmt"># 5. 去除特殊字符（保留中文、英文、数字、基本标点）</span>
+    text = re.sub(<span class="str">r'[^\w\s一-鿿.,!?;:\'"-]'</span>, <span class="str">''</span>, text)
+
+    <span class="cmt"># 6. 去除前后空白</span>
+    text = text.strip()
+
+    <span class="kw">return</span> text</code></pre>
+  </div>
+
+  <h3>质量过滤</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">def</span> <span class="fn">quality_filter</span>(text: <span class="cls">str</span>, min_length: <span class="cls">int</span> = <span class="num">50</span>, max_length: <span class="cls">int</span> = <span class="num">10000</span>) -> <span class="cls">bool</span>:
+    <span class="str">"""质量过滤：检查文本是否满足训练要求"""</span>
+
+    <span class="cmt"># 1. 长度过滤</span>
+    <span class="kw">if</span> <span class="fn">len</span>(text) < min_length <span class="kw">or</span> <span class="fn">len</span>(text) > max_length:
+        <span class="kw">return False</span>
+
+    <span class="cmt"># 2. 重复率检查（简单的n-gram重复）</span>
+    words = text.split()
+    <span class="kw">if</span> <span class="fn">len</span>(words) > <span class="num">100</span>:
+        unique_ratio = <span class="fn">len</span>(<span class="fn">set</span>(words)) / <span class="fn">len</span>(words)
+        <span class="kw">if</span> unique_ratio < <span class="num">0.3</span>:  <span class="cmt"># 重复率超过70%</span>
+            <span class="kw">return False</span>
+
+    <span class="cmt"># 3. 语言检测（推荐使用fastText的lid.176模型，支持176种语言）</span>
+    chinese_chars = <span class="fn">sum</span>(<span class="num">1</span> <span class="kw">for</span> c <span class="kw">in</span> text <span class="kw">if</span> <span class="str">'一'</span> <= c <= <span class="str">'鿿'</span>)
+    <span class="kw">if</span> <span class="fn">len</span>(text) > <span class="num">0</span> <span class="kw">and</span> chinese_chars / <span class="fn">len</span>(text) > <span class="num">0.1</span>:
+        <span class="kw">return True</span>  <span class="cmt"># 包含足够中文（注：生产环境推荐用fastText lid.176替代）</span>
+
+    <span class="cmt"># 4. 检查是否是乱码（连续特殊字符过多）</span>
+    special_count = <span class="fn">sum</span>(<span class="num">1</span> <span class="kw">for</span> c <span class="kw">in</span> text <span class="kw">if</span> <span class="kw">not</span> c.isalnum() <span class="kw">and</span> <span class="kw">not</span> c.isspace())
+    <span class="kw">if</span> special_count / <span class="fn">len</span>(text) > <span class="num">0.3</span>:
+        <span class="kw">return False</span>  <span class="cmt"># 可能是乱码</span>
+
+    <span class="kw">return True</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 语言检测推荐：</strong>生产环境建议使用 <strong>fastText lid.176</strong> 模型进行语言识别（支持176种语言），准确率远高于简单的字符比例判断。FineWeb、RedPajama、Dolma等主流数据集均采用此方案。
+  </div>
+
+  <h3>困惑度（Perplexity）质量过滤</h3>
+
+  <p>除了规则过滤外，还可以使用<strong>语言模型困惑度</strong>来评估文本质量——低困惑度的文本通常更通顺、更有价值。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 使用KenLM进行困惑度过滤（CCNet/FineWeb方案）</span>
+<span class="cmt"># 安装: pip install kenlm</span>
+<span class="kw">import</span> kenlm
+
+<span class="cmt"># 加载预训练的KenLM n-gram模型</span>
+model = kenlm.<span class="fn">Model</span>(<span class="str">"zh.arpa.klm"</span>)
+
+<span class="kw">def</span> <span class="fn">perplexity_filter</span>(text, max_ppl=<span class="num">1000</span>):
+    <span class="str">"""困惑度过滤：文本越通顺，困惑度越低"""</span>
+    log_score = model.<span class="fn">score</span>(text, bos=<span class="kw">True</span>, eos=<span class="kw">True</span>)
+    num_words = <span class="fn">len</span>(text.split())
+    ppl = <span class="num">10</span> ** (-log_score / num_words)
+    <span class="kw">return</span> ppl < max_ppl  <span class="cmt"># 困惑度过高说明文本质量差</span></code></pre>
+  </div>
+
+  <h3>PII（个人身份信息）去除</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> re
+
+<span class="kw">def</span> <span class="fn">remove_pii</span>(text: <span class="cls">str</span>) -> <span class="cls">str</span>:
+    <span class="str">"""去除个人身份信息（PII）"""</span>
+
+    <span class="cmt"># 去除电话号码</span>
+    text = re.sub(<span class="str">r'1[3-9]\d{9}'</span>, <span class="str">'[电话]'</span>, text)  <span class="cmt"># 中国手机号</span>
+    text = re.sub(<span class="str">r'\d{3}-\d{4}-\d{4}'</span>, <span class="str">'[电话]'</span>, text)  <span class="cmt"># 座机</span>
+
+    <span class="cmt"># 去除身份证号</span>
+    text = re.sub(<span class="str">r'\d{17}[\dX]'</span>, <span class="str">'[身份证]'</span>, text)
+
+    <span class="cmt"># 去除邮箱</span>
+    text = re.sub(<span class="str">r'\S+@\S+\.\S+'</span>, <span class="str">'[邮箱]'</span>, text)
+
+    <span class="cmt"># 去除银行卡号</span>
+    text = re.sub(<span class="str">r'\d{16,19}'</span>, <span class="str">'[卡号]'</span>, text)
+
+    <span class="kw">return</span> text</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 PII去除推荐：</strong>仅使用正则表达式容易遗漏边界情况。生产环境建议使用微软开源的 <strong>Presidio</strong> 库（<code>pip install presidio-analyzer presidio-anonymizer</code>），它结合了正则、NLP实体识别和上下文分析，能更准确地识别姓名、地址、信用卡号等PII信息。
+  </div>
+</div>
+
+<!-- ==================== SECTION 3 ==================== -->
+<div class="section" id="llm-data-cleaning-s3">
+  <h2>文本分词（Tokenization）</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>分词就像是把一篇文章拆成一个个单词或字符。但LLM使用的分词更智能——它不是按空格分词，而是学习最有用的子词单元（如"un"、"##ing"等）。
+  </div>
+
+  <!-- 3.1 BPE -->
+  <div id="llm-data-cleaning-s3-1">
+    <h3>BPE（Byte-Pair Encoding）算法</h3>
+
+    <p>BPE的核心思想：<strong>从字符开始，反复合并最频繁出现的相邻字符对</strong>。</p>
+
+    <h4>BPE训练过程</h4>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">Python</span>
+        
+      </div>
+      <pre><code><span class="kw">from</span> tokenizers <span class="kw">import</span> Tokenizer
+<span class="kw">from</span> tokenizers.models <span class="kw">import</span> BPE
+<span class="kw">from</span> tokenizers.trainers <span class="kw">import</span> BpeTrainer
+<span class="kw">from</span> tokenizers.pre_tokenizers <span class="kw">import</span> Whitespace
+
+<span class="cmt"># 1. 初始化BPE分词器</span>
+tokenizer = Tokenizer(BPE(unk_token=<span class="str">"[UNK]"</span>))
+tokenizer.pre_tokenizer = Whitespace()
+
+<span class="cmt"># 2. 配置训练器</span>
+trainer = BpeTrainer(
+    vocab_size=<span class="num">30000</span>,        <span class="cmt"># 词表大小</span>
+    min_frequency=<span class="num">2</span>,         <span class="cmt"># 最小出现次数</span>
+    special_tokens=[<span class="str">"[UNK]"</span>, <span class="str">"[CLS]"</span>, <span class="str">"[SEP]"</span>, <span class="str">"[PAD]"</span>, <span class="str">"[MASK]"</span>]
+)
+
+<span class="cmt"># 3. 训练BPE</span>
+files = [<span class="str">"data/corpus.txt"</span>]  <span class="cmt"># 训练语料文件列表</span>
+tokenizer.<span class="fn">train</span>(files, trainer)
+
+<span class="cmt"># 4. 保存分词器</span>
+tokenizer.<span class="fn">save</span>(<span class="str">"bpe_tokenizer.json"</span>)
+
+<span class="cmt"># 5. 使用分词器</span>
+output = tokenizer.<span class="fn">encode</span>(<span class="str">"Hello, how are you?"</span>)
+<span class="fn">print</span>(output.tokens)  <span class="cmt"># ['Hello', ',', 'how', 'are', 'you', '?']</span>
+<span class="fn">print</span>(output.ids)     <span class="cmt"># [152, 15, 567, 389, 456, 35]</span></code></pre>
+    </div>
+  </div>
+
+  <!-- 3.2 WordPiece -->
+  <div id="llm-data-cleaning-s3-2">
+    <h3>WordPiece算法</h3>
+
+    <p>WordPiece与BPE类似，但合并标准不同：BPE选择<strong>频率最高</strong>的字符对，WordPiece选择使<strong>语言模型似然最大</strong>的字符对。</p>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">Python</span>
+        
+      </div>
+      <pre><code><span class="cmt"># BERT使用WordPiece分词器</span>
+<span class="kw">from</span> transformers <span class="kw">import</span> BertTokenizer
+
+tokenizer = BertTokenizer.<span class="fn">from_pretrained</span>(<span class="str">'bert-base-chinese'</span>)
+
+<span class="cmt"># 分词示例</span>
+text = <span class="str">"自然语言处理很有趣"</span>
+tokens = tokenizer.<span class="fn">tokenize</span>(text)
+<span class="fn">print</span>(tokens)  <span class="cmt"># ['自', '然', '语', '言', '处', '理', '很', '有', '趣']</span>
+
+<span class="cmt"># 编码</span>
+encoded = tokenizer.<span class="fn">encode</span>(text)
+<span class="fn">print</span>(encoded)  <span class="cmt"># [101, 5369, 3698, 6206, 3698, 4844, 5664, 2399, 3241, 7176, 102]</span></code></pre>
+    </div>
+  </div>
+
+  <!-- 3.3 tiktoken -->
+  <div id="llm-data-cleaning-s3-3">
+    <h3>tiktoken使用（GPT系列）</h3>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">Python</span>
+        
+      </div>
+      <pre><code><span class="kw">import</span> tiktoken
+
+<span class="cmt"># 加载GPT-4的分词器</span>
+enc = tiktoken.<span class="fn">encoding_for_model</span>(<span class="str">"gpt-4"</span>)
+
+<span class="cmt"># 分词示例</span>
+text = <span class="str">"Hello, how are you? 你好吗？"</span>
+tokens = enc.<span class="fn">encode</span>(text)
+<span class="fn">print</span>(tokens)        <span class="cmt"># [9906, 11, 582, 527, 499, 30, 108803, 5101, 9434, 30]</span>
+<span class="fn">print</span>(enc.<span class="fn">decode</span>(tokens))  <span class="cmt"># 解码回原文</span>
+
+<span class="cmt"># 查看词表大小</span>
+<span class="fn">print</span>(enc.n_vocab)   <span class="cmt"># 100277</span></code></pre>
+    </div>
+
+    <div class="callout callout-info">
+      <strong>📖 分词器对比：</strong>
+      <ul style="margin-top: 0.5rem;">
+        <li><strong>BPE</strong>：GPT系列、LLaMA系列使用</li>
+        <li><strong>WordPiece</strong>：BERT系列使用</li>
+        <li><strong>SentencePiece</strong>：T5、ALBERT等使用（语言无关）</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SECTION 4 ==================== -->
+<div class="section" id="llm-data-cleaning-s4">
+  <h2>文本编码</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>如果说分词是把句子拆成单词，那么编码就是给每个单词分配一个唯一的编号。就像给每个学生分配学号一样。
+  </div>
+
+  <h3>特殊Token</h3>
+
+  <table>
+    <tr><th>Token</th><th>说明</th><th>使用场景</th></tr>
+    <tr><td><code>[BOS]</code></td><td>句子开始</td><td>标记文本开始</td></tr>
+    <tr><td><code>[EOS]</code></td><td>句子结束</td><td>标记文本结束</td></tr>
+    <tr><td><code>[PAD]</code></td><td>填充</td><td>补齐batch中的短句子</td></tr>
+    <tr><td><code>[UNK]</code></td><td>未知词</td><td>词表中没有的词</td></tr>
+    <tr><td><code>[MASK]</code></td><td>掩码</td><td>BERT的MLM预训练</td></tr>
+    <tr><td><code>[CLS]</code></td><td>分类标记</td><td>BERT的分类任务</td></tr>
+    <tr><td><code>[SEP]</code></td><td>分隔符</td><td>分隔两个句子</td></tr>
+  </table>
+
+  <h3>编码长度处理</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> transformers <span class="kw">import</span> AutoTokenizer
+
+tokenizer = AutoTokenizer.<span class="fn">from_pretrained</span>(<span class="str">"bert-base-chinese"</span>)
+
+text = <span class="str">"这是一段很长的文本，需要被截断..."</span> * <span class="num">50</span>
+
+<span class="cmt"># 方法1：截断（truncation）</span>
+encoded = tokenizer.<span class="fn">encode</span>(text, max_length=<span class="num">512</span>, truncation=<span class="kw">True</span>)
+
+<span class="cmt"># 方法2：填充（padding）到固定长度</span>
+batch_encoded = tokenizer(
+    [<span class="str">"文本1"</span>, <span class="str">"文本2"</span>, <span class="str">"文本3"</span>],
+    padding=<span class="str">"max_length"</span>,
+    max_length=<span class="num">128</span>,
+    truncation=<span class="kw">True</span>
+)
+
+<span class="cmt"># 方法3：动态填充（推荐，最高效）</span>
+batch_encoded = tokenizer(
+    [<span class="str">"文本1"</span>, <span class="str">"这是一个很长的文本"</span>],
+    padding=<span class="str">"longest"</span>,  <span class="cmt"># 填充到batch中最长的长度</span>
+    truncation=<span class="kw">True</span>
+)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 5 ==================== -->
+<div class="section" id="llm-data-cleaning-s5">
+  <h2>数据格式转换</h2>
+
+  <h3>常见格式</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">JSON</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 1. 纯文本格式（最简单）</span>
+{
+  <span class="str">"text"</span>: <span class="str">"自然语言处理是人工智能的重要分支..."</span>
+}
+
+<span class="cmt"># 2. 对话格式</span>
+{
+  <span class="str">"conversations"</span>: [
+    {<span class="str">"from"</span>: <span class="str">"human"</span>, <span class="str">"value"</span>: <span class="str">"什么是机器学习？"</span>},
+    {<span class="str">"from"</span>: <span class="str">"assistant"</span>, <span class="str">"value"</span>: <span class="str">"机器学习是..."</span>}
+  ]
+}
+
+<span class="cmt"># 3. 指令格式（Alpaca格式）</span>
+{
+  <span class="str">"instruction"</span>: <span class="str">"请解释以下概念"</span>,
+  <span class="str">"input"</span>: <span class="str">"深度学习"</span>,
+  <span class="str">"output"</span>: <span class="str">"深度学习是..."</span>
+}
+
+<span class="cmt"># 4. HuggingFace datasets格式</span>
+{
+  <span class="str">"text"</span>: <span class="str">"..."</span>,
+  <span class="str">"metadata"</span>: {<span class="str">"source"</span>: <span class="str">"wikipedia"</span>, <span class="str">"lang"</span>: <span class="str">"zh"</span>}
+}</code></pre>
+  </div>
+
+  <h3>转换代码</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> json
+
+<span class="cmt"># 原始文本 → JSONL格式</span>
+<span class="kw">def</span> <span class="fn">convert_to_jsonl</span>(input_file, output_file):
+    <span class="kw">with</span> <span class="fn">open</span>(input_file, <span class="str">'r'</span>, encoding=<span class="str">'utf-8'</span>) <span class="kw">as</span> f:
+        lines = f.readlines()
+
+    <span class="kw">with</span> <span class="fn">open</span>(output_file, <span class="str">'w'</span>, encoding=<span class="str">'utf-8'</span>) <span class="kw">as</span> f:
+        <span class="kw">for</span> line <span class="kw">in</span> lines:
+            line = line.strip()
+            <span class="kw">if</span> line:
+                json_line = {<span class="str">"text"</span>: line}
+                f.write(json.dumps(json_line, ensure_ascii=<span class="kw">False</span>) + <span class="str">'\n'</span>)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 6 ==================== -->
+<div class="section" id="llm-data-cleaning-s6">
+  <h2>数据质量检查</h2>
+
+  <h3>统计分析</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> json
+<span class="kw">from</span> collections <span class="kw">import</span> Counter
+<span class="kw">import</span> matplotlib.pyplot <span class="kw">as</span> plt
+
+<span class="kw">def</span> <span class="fn">analyze_dataset</span>(jsonl_file):
+    <span class="str">"""分析数据集质量"""</span>
+    lengths = []
+    sources = []
+
+    <span class="kw">with</span> <span class="fn">open</span>(jsonl_file, <span class="str">'r'</span>, encoding=<span class="str">'utf-8'</span>) <span class="kw">as</span> f:
+        <span class="kw">for</span> line <span class="kw">in</span> f:
+            data = json.loads(line)
+            lengths.append(<span class="fn">len</span>(data[<span class="str">"text"</span>]))
+            sources.append(data.get(<span class="str">"source"</span>, <span class="str">"unknown"</span>))
+
+    <span class="cmt"># 统计信息</span>
+    <span class="fn">print</span>(<span class="str">f"总样本数: <span class="var">{len(lengths)}</span>"</span>)
+    <span class="fn">print</span>(<span class="str">f"平均长度: <span class="var">{sum(lengths)/len(lengths):.1f}</span>"</span>)
+    <span class="fn">print</span>(<span class="str">f"长度中位数: <span class="var">{sorted(lengths)[len(lengths)//2]}</span>"</span>)
+    <span class="fn">print</span>(<span class="str">f"来源分布: <span class="var">{Counter(sources)}</span>"</span>)
+
+    <span class="cmt"># 可视化</span>
+    plt.figure(figsize=(<span class="num">10</span>, <span class="num">4</span>))
+    plt.hist(lengths, bins=<span class="num">50</span>)
+    plt.xlabel(<span class="str">'文本长度'</span>)
+    plt.ylabel(<span class="str">'样本数'</span>)
+    plt.title(<span class="str">'文本长度分布'</span>)
+    plt.savefig(<span class="str">'length_distribution.png'</span>)
+    plt.show()</code></pre>
+  </div>
+
+  <h3>重复检测</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> hashlib
+<span class="kw">from</span> collections <span class="kw">import</span> defaultdict
+
+<span class="kw">def</span> <span class="fn">detect_duplicates</span>(jsonl_file):
+    <span class="str">"""检测重复文本"""</span>
+    hash_counts = defaultdict(<span class="fn">int</span>)
+    duplicates = []
+
+    <span class="kw">with</span> <span class="fn">open</span>(jsonl_file, <span class="str">'r'</span>, encoding=<span class="str">'utf-8'</span>) <span class="kw">as</span> f:
+        <span class="kw">for</span> line_num, line <span class="kw">in</span> <span class="fn">enumerate</span>(f, <span class="num">1</span>):
+            data = json.loads(line)
+            text = data[<span class="str">"text"</span>]
+            text_hash = hashlib.md5(text.encode()).hexdigest()
+
+            hash_counts[text_hash] += <span class="num">1</span>
+            <span class="kw">if</span> hash_counts[text_hash] > <span class="num">1</span>:
+                duplicates.append((line_num, text[:<span class="num">50</span>]))
+
+    <span class="fn">print</span>(<span class="str">f"发现 <span class="var">{len(duplicates)}</span> 个重复"</span>)
+    <span class="kw">return</span> duplicates</code></pre>
+  </div>
+
+  <h3>MinHash + LSH 近似去重</h3>
+
+  <p>上面的哈希方法只能检测<strong>完全相同的</strong>文本。实际数据中更多是<strong>近似重复</strong>（如略有修改的新闻转载、论坛引用）。主流数据集（FineWeb、RedPajama、Dolma）均采用 <strong>MinHash + LSH（局部敏感哈希）</strong> 进行大规模近似去重。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># MinHash + LSH 近似去重（推荐方案）</span>
+<span class="cmt"># 安装: pip install datasketch</span>
+<span class="kw">from</span> datasketch <span class="kw">import</span> MinHash, MinHashLSH
+
+<span class="kw">def</span> <span class="fn">create_minhash</span>(text, num_perm=<span class="num">128</span>):
+    <span class="str">"""将文本转为MinHash签名"""</span>
+    m = MinHash(num_perm=num_perm)
+    <span class="kw">for</span> word <span class="kw">in</span> text.split():
+        m.update(word.encode(<span class="str">'utf-8'</span>))
+    <span class="kw">return</span> m
+
+<span class="cmt"># 建立LSH索引（阈值0.8表示Jaccard相似度>0.8视为重复）</span>
+lsh = MinHashLSH(threshold=<span class="num">0.8</span>, num_perm=<span class="num">128</span>)
+
+<span class="cmt"># 插入数据并查询近似重复</span>
+<span class="kw">for</span> idx, text <span class="kw">in</span> <span class="fn">enumerate</span>(texts):
+    mh = create_minhash(text)
+    result = lsh.query(mh)  <span class="cmt"># 查询是否有相似文档</span>
+    <span class="kw">if not</span> result:
+        lsh.insert(<span class="str">f"doc_<span class="var">{idx}</span>"</span>, mh)
+    <span class="kw">else</span>:
+        <span class="fn">print</span>(<span class="str">f"文档 <span class="var">{idx}</span> 与 <span class="var">{result}</span> 近似重复"</span>)</code></pre>
+  </div>
+
+  <div class="callout callout-info">
+    <strong>📖 主流去重工具推荐：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li><strong>text-dedup</strong>：集成多种去重算法（MinHash、SimHash、Suffix Array等），开箱即用</li>
+      <li><strong>datatrove</strong>（HuggingFace）：大规模数据处理pipeline，包含MinHash去重模块</li>
+      <li><strong>NVIDIA NeMo Curator</strong>：GPU加速的去重和质量过滤，适合超大规模数据</li>
+      <li><strong>Dolma Toolkit</strong>（AI2）：Allen AI开源，被Dolma/OLMo数据集使用</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== SECTION 7 ==================== -->
+<div class="section" id="llm-data-cleaning-s7">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：清洗真实数据 <span class="badge">基础</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>清洗一个真实的文本数据集。</p>
+      <p><strong>数据集：</strong>下载一个小型Wikipedia数据集（或使用提供的样例数据）</p>
+      <p><strong>要求：</strong></p>
+      <p>① 实现文本清洗函数（去除HTML、URL、特殊字符等）</p>
+      <p>② 实现质量过滤函数（长度、重复率、语言检测）</p>
+      <p>③ 批量处理1000条数据</p>
+      <p>④ 统计清洗前后的数据量变化</p>
+      <p>⑤ 输出清洗后的数据到JSONL文件</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习2：训练BPE分词器 <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>用自己准备的数据训练一个BPE分词器。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 准备1000条中文文本数据</p>
+      <p>② 使用tokenizers库训练BPE分词器</p>
+      <p>③ 设置词表大小为10000</p>
+      <p>④ 对比训练前后的分词效果</p>
+      <p>⑤ 统计词频分布</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习3：数据集质量报告 <span class="badge">综合</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>生成一份完整的数据集质量报告。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 加载JSONL格式的数据集</p>
+      <p>② 统计：样本数、平均长度、长度分布、来源分布</p>
+      <p>③ 检测并报告重复数据</p>
+      <p>④ 生成可视化图表（长度分布、来源饼图）</p>
+      <p>⑤ 输出质量报告（JSON格式）</p>
+    </div>
+  </div>
+</div>
+
+<!-- 底部导航 -->
+</div></section>

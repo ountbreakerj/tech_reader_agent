@@ -1,0 +1,1166 @@
+<section class="llm-mod llm-m-happy-source llm-happy-training" id="llm-happy-training"><div class="module-wrapper"><div class="llm-hero" style="--hero-a:#0f766e;--hero-b:#2563eb;"><h1>⚙️ Happy-LLM：训练、对齐与微调实践</h1><p>预训练数据管线、DeepSpeed、LoRA/QLoRA 与偏好对齐</p><div class="source-meta">来源：Datawhale China · Happy-LLM（本地离线融合）</div></div><div class="callout callout-info"><p>📌 本节保留 Happy-LLM 原教程的概念、公式、代码与图示，并按 Tech Reader 的单文件离线规范转换。外部图片已复制并登记为本地资源。</p></div><div class="happy-source-file"><div class="source-file-label">来源文件 · docs/chapter6/第六章 大模型训练流程实践.md</div><p>第五章中，我们从零开始动手搭建了 LLaMA2 模型，并完整实现了其预训练和微调的全流程。在本章中，我们将深入探讨大模型的训练流程实践，重点介绍如何利用主流的大模型框架高效地进行模型训练和性能优化。</p>
+<blockquote>阅读建议：在开始本章实践前，建议先阅读 [第六章实践说明](./readme.md) 和 [学习与环境准备](../学习与环境准备.md)。本章正文聚焦 Pretrain、SFT 与 PEFT 三条主线，偏好对齐作为进阶主题在 6.4 节给出整体学习路线，并提供补充专题材料。</blockquote>
+<div class="section" id="llm-happy-training-src1-s1"><h2>6.1 模型预训练</h2>
+<p>在上一章，我们逐步拆解了 LLM 的模型结构及训练过程，从零手写实现了 LLaMA 模型结构及 Pretrain、SFT 全流程，更深入地理解了 LLM 的模型原理及训练细节。但是，在实际应用中，手写实现的 LLM 训练存在以下问题：</p>
+<ul>
+<li>手写实现 LLM 结构工作量大，难以实时跟进最新模型的结构创新；</li>
+<li>从零实现的 LLM 训练无法较好地实现多卡分布式训练，训练效率较低；</li>
+<li>和现有预训练 LLM 不兼容，无法使用预训练好的模型参数</li>
+</ul>
+<p>因此，在本章中，我们将介绍目前 LLM 领域的主流训练框架 Transformers，并结合分布式框架 deepspeed、高效微调框架 peft 等主流框架，实践使用 transformers 进行模型 Pretrain、SFT 全流程，更好地对接业界的主流 LLM 技术方案。</p>
+<h3>6.1.1 框架介绍</h3>
+<p>Transformers 是由 Hugging Face 开发的 NLP 框架，通过模块化设计实现了对 BERT、GPT、LLaMA、T5、ViT 等上百种主流模型架构的统一支持。通过使用 Transformers，开发者无需重复实现基础网络结构，通过 AutoModel 类即可一键加载任意预训练，图6.1 为 Hugging Face Transformers 课程首页：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/6-images/1-1-58007eb888.png" alt="alt text" width="90%">
+    <p>图6.1 Hugging Face Transformers</p>
+</div>
+<p>同时，框架内置的 Trainer 类封装了分布式训练的核心逻辑，支持 PyTorch 原生 DDP、DeepSpeed、Megatron-LM 等多种分布式训练策略。通过简单配置训练参数，即可实现数据并行、模型并行、流水线并行的混合并行训练，在 8 卡 A100 集群上可轻松支持百亿参数模型的高效训练。配合 SavingPolicy 和 LoggingCallback 等组件，实现了训练过程的自动化管理。其还支持与 Deepspeed、peft、wandb、Swanlab 等框架进行集成，直接通过参数设置即可无缝对接，从而快速、高效实现 LLM 训练。</p>
+<p>对 LLM 时代的 NLP 研究者更为重要的是，HuggingFace 基于 Transformers 框架搭建了其庞大的 AI 社区，开放了数亿个预训练模型参数、25万+不同类型数据集，通过 Transformers、Dataset、Evaluate 等多个框架实现对预训练模型、数据集及评估函数的集成，从而帮助开发者可以便捷地使用任一预训练模型，在开源模型及数据集的基础上便捷地实现个人模型的开发与应用。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/6-images/1-2-e30a4b7358.png" alt="alt text" width="90%">
+    <p>图6.2 Hugging Face Transformers 模型社区</p>
+</div>
+<p>在 LLM 时代，模型结构的调整和重新预训练越来越少，开发者更多的业务应用在于使用预训练好的 LLM 进行 Post Train 和 SFT，来支持自己的下游业务应用。且由于预训练模型体量大，便捷集成 deepspeed 等分布式训练框架逐渐成为 LLM 时代 NLP 模型训练的必备技能。因此，Transformers 已逐步成为学界、业界 NLP 技术的主流框架，不管是企业业务开发还是科研研究，都逐渐首选 Transformers 进行模型实现。同时，新发布的开源 LLM 如 DeepSeek、Qwen 也都会第一时间在 Transformers 社区开放其预训练权重与模型调用 Demo。通过使用 Transformers 框架，可以高效、便捷地完成 LLM 训练及开发，实现工业级的产出交付。接下来，我们就会以 Transformers 框架为基础，介绍如何通过 Transformers 框架实现 LLM 的 Pretrain 及 SFT。</p>
+<h3>6.1.2 初始化 LLM</h3>
+<p>我们可以使用 transformers 的 AutoModel 类来直接初始化已经实现好的模型。对于任意预训练模型，其参数中都包含有模型的配置信息。如果是想要从头训练一个 LLM，可以使用一个已有的模型架构来直接初始化。这里，我们以 <a href="https://huggingface.co/Qwen/Qwen2.5-1.5B/tree/main" target="_blank" rel="noreferrer">Qwen-2.5-1.5B</a>的模型架构为例：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/6-images/1-3-c7958ec917.png" alt="alt text" width="90%">
+    <p>图6.3 Qwen-2.5-1.5B</p>
+</div>
+<p>该界面即为 HuggingFace 社区中的 Qwen-2.5-1.5B 模型参数，其中的 <code>config.json</code> 文件即是模型的配置信息，包括了模型的架构、隐藏层大小、模型层数等，如图6.4所示：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/6-images/1-4-0c92c0e503.png" alt="alt text" width="90%">
+    <p>图6.4 Qwen-2.5-1.5B config.json 文件</p>
+</div>
+<p>我们可以沿用该模型的配置信息，初始化一个 Qwen-2.5-1.5B 模型来进行训练，也可以在该配置信息的基础上进行更改，如修改隐藏层大小、注意力头数等，来定制一个模型结构。HuggingFace 提供了 Python 工具来便捷下载想使用的模型参数：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import os
+# 设置环境变量，此处使用 HuggingFace 镜像网站
+os.environ[&#39;HF_ENDPOINT&#39;] = &#39;https://hf-mirror.com&#39;
+# 下载模型
+os.system(&#39;huggingface-cli download --resume-download Qwen/Qwen2.5-1.5B --local-dir your_local_dir&#39;)</code></pre></div>
+<p>如图6.5，此处的 “Qwen/Qwen2.5-1.5B”即为要下载模型的标识符，对于其他模型，可以直接复制 HuggingFace 上的模型名即可：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/6-images/1-5-a6ba8fe194.png" alt="alt text" width="90%">
+    <p>图6.5 模型下载标识</p>
+</div>
+<p>下载完成后，可以使用 AutoConfig 类直接加载下载好的配置文件：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 加载定义好的模型参数-此处以 Qwen-2.5-1.5B 为例
+# 使用 transforemrs 的 Config 类进行加载
+from transformers import AutoConfig
+
+# 下载参数的本地路径
+model_path = &quot;qwen-1.5b&quot;
+config = AutoConfig.from_pretrained(model_name_or_path)</code></pre></div>
+<p>也可以对配置文件进行自定义，然后以同样的方式加载即可。可以使用 AutoModel 类基于加载好的配置对象生成对应的模型：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 使用该配置生成一个定义好的模型
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_config(config,trust_remote_code=True)</code></pre></div>
+<p>由于 LLM 一般都是 CausalLM 架构，此处使用了 AutoModelForCausalLM 类进行加载。如果是用于分类任务训练，可使用 AutoModelForSequenceClassification 类来加载。查看该 model，图6.6可以看到其架构和定义的配置文件相同：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/6-images/1-6-65b01dd1d2.png" alt="alt text" width="70%">
+    <p>图6.6 模型结构输出结果</p>
+</div>
+<p>该 model 就是一个从零初始化的 Qwen-2.5-1.5B 模型了。一般情况下，我们很少从零初始化 LLM 进行预训练，较多的做法是加载一个预训练好的 LLM 权重，在自己的语料上进行后训练。这里，我们也介绍如何从下载好的模型参数中初始化一个预训练好的模型。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained(model_name_or_path,trust_remote_code=True)</code></pre></div>
+<p>类似的，直接使用 from_pretrained 方法加载即可，此处的 model_name_or_path 即为下载好的参数的本地路径。</p>
+<p>我们还需要初始化一个 tokenizer。此处，我们直接使用 Qwen-2.5-1.5B 对应的 tokenizer 参数即可：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 加载一个预训练好的 tokenizer
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)</code></pre></div>
+<p>加载好的 tokenizer 即可直接使用，对任意文本进行分词处理。</p>
+<h3>6.1.3 预训练数据处理</h3>
+<p>与第五章类似，我们使用出门问问序列猴子开源数据集作为预训练数据集，可以用与第五章一致的方式进行数据集的下载和解压。HuggingFace 的 datasets 库是和 transformers 框架配套的、用于数据下载和处理的第三方库。我们可以直接使用 datasets 的 load_dataset 函数来加载预训练数据：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 加载预训练数据
+from datasets import load_dataset
+
+ds = load_dataset(&#39;json&#39;, data_files=&#39;/mobvoi_seq_monkey_general_open_corpus.jsonl&#39;)</code></pre></div>
+<p>注意，由于数据集较大，加载可能会出现时间较长或内存不够的情况，建议前期测试时将预训练数据集拆分一部分出来进行测试。加载出来的 ds 是一个 DatasetDict 对象，加载的数据会默认保存在 <code>train</code> 键对应的值中，可以通过以下代码查看：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>ds[&quot;train&quot;][0]</code></pre></div>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/6-images/1-7-08c88cf9b9.png" alt="alt text" width="100%">
+    <p>图6.7 数据集展示</p>
+</div>
+<p>可以通过 feature 属性查看数据集的特征（也就是列），这里需要保存一下数据集的列名，因为后续数据处理时，再将文本 tokenize 之后，需要移除原先的文本：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 查看特征
+column_names = list(ds[&quot;train&quot;].features)
+# columnes_name:[&quot;text&quot;]</code></pre></div>
+<p>接着使用加载好的 tokenizer 对数据集进行处理，此处使用 map 函数来进行批量处理：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 对数据集进行 tokenize
+def tokenize_function(examples):
+    # 使用预先加载的 tokenizer 进行分词
+    output = tokenizer([item for item in examples[&quot;text&quot;]])
+    return output
+
+# 批量处理
+tokenized_datasets = ds.map(
+    tokenize_function,
+    batched=True,
+    num_proc=10,
+    remove_columns=column_names,
+    load_from_cache_file=True,
+    desc=&quot;Running tokenizer on dataset&quot;,
+)</code></pre></div>
+<p>处理完成后的数据集会包括&#39;input_ids&#39;, &#39;attention_mask&#39;两列，分别是文本 tokenize 之后的数值序列和注意力掩码（标识是否 padding）。map 方法会通过 remove_columns 参数将原先的‘text’移除，训练中不再使用。</p>
+<p>由于预训练一般为 CLM 任务，一次性学习多个样本的序列语义不影响模型性能，且训练数据量大、训练时间长，对训练效率要求比较高。在预训练过程中，一般会把多个文本段拼接在一起，处理成统一长度的文本块，再对每个文本块进行训练。在这里，我们实现一个拼接函数将文本块拼接到 2048个 token 长度，再通过 map 方法来进行批量处理：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 预训练一般将文本拼接成固定长度的文本段
+from itertools import chain
+
+# 这里我们取块长为 2048
+block_size = 2048
+
+def group_texts(examples):
+    # 将文本段拼接起来
+    concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
+    # 计算拼起来的整体长度
+    total_length = len(concatenated_examples[list(examples.keys())[0]])
+    # 如果长度太长，进行分块
+    if total_length &gt;= block_size:
+        total_length = (total_length // block_size) * block_size
+    # 按 block_size 进行切分
+    result = {
+        k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
+        for k, t in concatenated_examples.items()
+    }
+    # CLM 任务，labels 和 input 是相同的
+    result[&quot;labels&quot;] = result[&quot;input_ids&quot;].copy()
+    return result
+
+# 批量处理
+lm_datasets = tokenized_datasets.map(
+    group_texts,
+    batched=True,
+    num_proc=10,
+    load_from_cache_file=True,
+    desc=f&quot;Grouping texts in chunks of {block_size}&quot;,
+    batch_size = 40000,
+)
+train_dataset = lm_datasets[&quot;train&quot;]</code></pre></div>
+<p>处理得到的 train_dataset 就是一个可直接用于 CLM Pretrain 的预训练数据集了，其每个样本长度为 2048个 token。</p>
+<h3>6.1.4 使用 Trainer 进行训练</h3>
+<p>接下来，我们使用 transformers 提供的 Trainer 类进行训练。Trainer 封装了模型的训练逻辑，且做了较好的效率优化、可视化等工作，可以高效、便捷地完成 LLM 的训练。</p>
+<p>首先我们需要配置训练的超参数，使用 TrainingArguments 类来实例化一个参数对象：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>from transformers import TrainingArguments
+# 配置训练参数
+
+training_args = TrainingArguments(
+    output_dir=&quot;output&quot;,# 训练参数输出路径
+    per_device_train_batch_size=4,# 训练的 batch_size
+    gradient_accumulation_steps=4,# 梯度累计步数，实际 bs = 设置的 bs * 累计步数
+    logging_steps=10,# 打印 loss 的步数间隔
+    num_train_epochs=1,# 训练的 epoch 数
+    save_steps=100, # 保存模型参数的步数间隔
+    learning_rate=1e-4,# 学习率
+    gradient_checkpointing=True# 开启梯度检查点
+)</code></pre></div>
+<p>然后基于初始化的 model、tokenzier 和 training_args，并传入处理好的训练数据集，实例化一个 trainer 对象：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>from transformers import Trainer, default_data_collator
+from torchdata.datapipes.iter import IterableWrapper
+
+# 训练器
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset= IterableWrapper(train_dataset),
+    eval_dataset= None,
+    tokenizer=tokenizer,
+    # 默认为 MLM 的 collator，使用 CLM 的 collater
+    data_collator=default_data_collator
+)</code></pre></div>
+<p>再使用 train 方法，即会按照配置好的训练超参进行训练和保存：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>trainer.train()</code></pre></div>
+<blockquote>注：上述代码存放于 <code>./code/pretrain.ipynb</code> 文件中。</blockquote>
+<h3>6.1.5 使用 DeepSpeed 实现分布式训练</h3>
+<p>由于预训练规模大、时间长，一般不推荐使用 Jupyter Notebook 来运行，容易发生中断。且由于预训练规模大，一般需要使用多卡进行分布式训练，否则训练时间太长。在这里，我们介绍如何基于上述代码，使用 DeepSpeed 框架实现分布式训练，从而完成业界可用的 LLM Pretrain。</p>
+<p>长时间训练一般使用 bash 脚本设定超参，再启动写好的 python 脚本实现训练。我们使用一个 Python 脚本（<code>./code/pretrain.py</code>）来实现训练全流程。</p>
+<p>先导入所需第三方库：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import logging
+import math
+import os
+import sys
+from dataclasses import dataclass, field
+from torchdata.datapipes.iter import IterableWrapper
+from itertools import chain
+import deepspeed
+from typing import Optional,List
+
+import datasets
+import pandas as pd
+import torch
+from datasets import load_dataset
+import transformers
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    HfArgumentParser,
+    Trainer,
+    TrainingArguments,
+    default_data_collator,
+    set_seed,
+)
+import datetime
+from transformers.testing_utils import CaptureLogger
+from transformers.trainer_utils import get_last_checkpoint
+import swanlab</code></pre></div>
+<p>首先需要定义几个超参的类型，用于处理 sh 脚本中设定的超参值。由于 transformers 本身有 TraingingArguments 类，其中包括了训练的一些必备超参数。我们这里只需定义 TrainingArguments 中未包含的超参即可，主要包括模型相关的超参（定义在 ModelArguments）和数据相关的超参（定义在 DataTrainingArguments）：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 超参类
+@dataclass
+class ModelArguments:
+    &quot;&quot;&quot;
+    关于模型的参数
+    &quot;&quot;&quot;
+
+    model_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={
+            &quot;help&quot;: (
+                &quot;后训练使用，为预训练模型参数地址&quot;
+            )
+        },
+    )
+    config_name: Optional[str] = field(
+        default=None, metadata={&quot;help&quot;: &quot;预训练使用，Config 文件地址&quot;}
+    )
+    tokenizer_name: Optional[str] = field(
+        default=None, metadata={&quot;help&quot;: &quot;预训练 Tokenizer 地址&quot;}
+    )
+    torch_dtype: Optional[str] = field(
+        default=None,
+        metadata={
+            &quot;help&quot;: (
+                &quot;模型训练使用的数据类型，推荐 bfloat16&quot;
+            ),
+            &quot;choices&quot;: [&quot;auto&quot;, &quot;bfloat16&quot;, &quot;float16&quot;, &quot;float32&quot;],
+        },
+    )
+
+
+@dataclass
+class DataTrainingArguments:
+    &quot;&quot;&quot;
+    关于训练的参数
+    &quot;&quot;&quot;
+
+    train_files: Optional[List[str]]  = field(default=None, metadata={&quot;help&quot;: &quot;训练数据路径&quot;})
+    block_size: Optional[int] = field(
+        default=None,
+        metadata={
+            &quot;help&quot;: (
+                &quot;设置的文本块长度&quot;
+            )
+        },
+    )
+    preprocessing_num_workers: Optional[int] = field(
+        default=None,
+        metadata={&quot;help&quot;: &quot;预处理使用线程数.&quot;},
+    )</code></pre></div>
+<p>然后即可定义一个主函数实现上述训练过程的封装。首先通过 transformers 提供的 HfArgumentParser 工具来加载 sh 脚本中设定的超参：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 加载脚本参数
+parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+model_args, data_args, training_args = parser.parse_args_into_dataclasses()</code></pre></div>
+<p>在大规模的训练中，一般使用 log 来保存训练过程的信息，一般不推荐使用 print 直接打印，容易发生关键训练信息的丢失。这里，我们直接使用 python 自带的 logging 库来实现日志记录。首先需要进行 log 的设置：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 设置日志
+logging.basicConfig(
+    format=&quot;%(asctime)s - %(levelname)s - %(name)s - %(message)s&quot;,
+    datefmt=&quot;%m/%d/%Y %H:%M:%S&quot;,
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+
+# 将日志级别设置为 INFO
+transformers.utils.logging.set_verbosity_info()
+log_level = training_args.get_process_log_level()
+logger.setLevel(log_level)
+datasets.utils.logging.set_verbosity(log_level)
+transformers.utils.logging.set_verbosity(log_level)
+transformers.utils.logging.enable_default_handler()
+transformers.utils.logging.enable_explicit_format()</code></pre></div>
+<p>这里将日志的级别设置为 INFO。logging 的日志共有 DEBUG、INFO、WARNING、ERROR 以及 CRITICAL 五个级别，将日志设置为哪个级别，就会只输出该级别及该级别之上的信息。设置完成后，在需要记录日志的地方，直接使用 logger 即可，记录时会指定记录日志的级别，例如：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 训练整体情况记录
+logger.warning(
+    f&quot;Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}&quot;
+    + f&quot;distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}&quot;
+)
+logger.info(f&quot;Training/evaluation parameters {training_args}&quot;)</code></pre></div>
+<p>后续就不再赘述脚本中的日志记录。</p>
+<p>在大规模训练中，发生中断是往往难以避免的，训练一般会固定间隔保存 checkpoint，中断之后基于最近的 checkpoint 恢复训练即可。因此，我们需要首先检测是否存在旧的 checkpoint 并从 checkpoint 恢复训练：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 检查 checkpoint
+last_checkpoint = None
+if os.path.isdir(training_args.output_dir):
+    # 使用 transformers 自带的 get_last_checkpoint 自动检测
+    last_checkpoint = get_last_checkpoint(training_args.output_dir)
+    if last_checkpoint is None and len(os.listdir(training_args.output_dir)) &gt; 0:
+        raise ValueError(
+            f&quot;输出路径 ({training_args.output_dir}) 非空 &quot;
+        )
+    elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
+        logger.info(
+            f&quot;从 {last_checkpoint}恢复训练&quot;
+        )</code></pre></div>
+<p>接着以上文介绍过的方式初始化模型，此处将从零初始化和基于已有预训练模型初始化包装在一起：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 初始化模型
+if model_args.config_name is not None:
+    # from scrach
+    config = AutoConfig.from_pretrained(model_args.config_name)
+    logger.warning(&quot;你正在从零初始化一个模型&quot;)
+    logger.info(f&quot;模型参数配置地址：{model_args.config_name}&quot;)
+    logger.info(f&quot;模型参数：{config}&quot;)
+    model = AutoModelForCausalLM.from_config(config,trust_remote_code=True)
+    n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
+    logger.info(f&quot;预训练一个新模型 - Total size={n_params/2**20:.2f}M params&quot;)
+elif model_args.model_name_or_path is not None:
+    logger.warning(&quot;你正在初始化一个预训练模型&quot;)
+    logger.info(f&quot;模型参数地址：{model_args.model_name_or_path}&quot;)
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path,trust_remote_code=True)
+    n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
+    logger.info(f&quot;继承一个预训练模型 - Total size={n_params/2**20:.2f}M params&quot;)
+else:
+    logger.error(&quot;config_name 和 model_name_or_path 不能均为空&quot;)
+    raise ValueError(&quot;config_name 和 model_name_or_path 不能均为空&quot;)</code></pre></div>
+<p>再类似的进行 tokenizer 的加载和预训练数据的处理。该部分和上文完全一致，此处不再赘述，读者可以在代码中详细查看细节。类似的，使用 Trainer 进行训练：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>logger.info(&quot;初始化 Trainer&quot;)
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset= IterableWrapper(train_dataset),
+    tokenizer=tokenizer,
+    data_collator=default_data_collator
+)
+
+# 从 checkpoint 加载
+checkpoint = None
+if training_args.resume_from_checkpoint is not None:
+    checkpoint = training_args.resume_from_checkpoint
+elif last_checkpoint is not None:
+        checkpoint = last_checkpoint
+
+logger.info(&quot;开始训练&quot;)
+train_result = trainer.train(resume_from_checkpoint=checkpoint)
+trainer.save_model() </code></pre></div>
+<p>注意，由于上文检测了是否存在 checkpoint，此处使用 resume_from_checkpoint 来实现从 checkpoint 恢复训练的功能。</p>
+<p>由于在大规模训练中监测训练进度、loss 下降趋势尤为重要，在脚本中，我们使用了 swanlab 作为训练检测的工具。在脚本开始进行了 swanlab 的初始化：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 初始化 SwanLab
+swanlab.init(project=&quot;pretrain&quot;, experiment_name=&quot;from_scrach&quot;)</code></pre></div>
+<p>在启动训练后，终端会输出 swanlab 监测的 url，点击即可观察训练进度。此处不再赘述 swanlab 的使用细节，欢迎读者查阅相关的资料说明。</p>
+<p>完成上述代码后，我们使用一个 sh 脚本（<code>./code/pretrain.sh</code>）定义超参数的值，并通过 Deepspeed 启动训练，从而实现高效的多卡分布式训练：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code># 设置可见显卡
+CUDA_VISIBLE_DEVICES=0,1
+
+deepspeed pretrain.py \
+    --config_name autodl-tmp/qwen-1.5b \
+    --tokenizer_name autodl-tmp/qwen-1.5b \
+    --train_files autodl-tmp/dataset/pretrain_data/mobvoi_seq_monkey_general_open_corpus_small.jsonl \
+    --per_device_train_batch_size 16 \
+    --gradient_accumulation_steps 4 \
+    --do_train \
+    --output_dir autodl-tmp/output/pretrain \
+    --evaluation_strategy  no \
+    --learning_rate 1e-4 \
+    --num_train_epochs 1 \
+    --warmup_steps 200 \
+    --logging_dir autodl-tmp/output/pretrain/logs \
+    --logging_strategy steps \
+    --logging_steps 5 \
+    --save_strategy steps \
+    --save_steps 100 \
+    --preprocessing_num_workers 10 \
+    --save_total_limit 1 \
+    --seed 12 \
+    --block_size 2048 \
+    --bf16 \
+    --gradient_checkpointing \
+    --deepspeed ./ds_config_zero2.json \
+    --report_to swanlab
+    # --resume_from_checkpoint ${output_model}/checkpoint-20400 \</code></pre></div>
+<p>在安装了 Deepspeed 第三方库后，可以直接通过 Deepspeed 命令来启动多卡训练。上述脚本命令主要是定义了各种超参数的值，可参考使用。在第四章中，我们介绍了 DeepSpeed 分布式训练的原理和 ZeRO 阶段设置，在这里，我们使用 ZeRO-2 进行训练。此处加载了 <code>ds_config_zero.json</code> 作为 DeepSpeed 的配置参数：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">json</span></div><pre><code>{
+    &quot;fp16&quot;: {
+        &quot;enabled&quot;: &quot;auto&quot;,
+        &quot;loss_scale&quot;: 0,
+        &quot;loss_scale_window&quot;: 1000,
+        &quot;initial_scale_power&quot;: 16,
+        &quot;hysteresis&quot;: 2,
+        &quot;min_loss_scale&quot;: 1
+    },
+    &quot;bf16&quot;: {
+        &quot;enabled&quot;: &quot;auto&quot;
+    },
+    &quot;optimizer&quot;: {
+        &quot;type&quot;: &quot;AdamW&quot;,
+        &quot;params&quot;: {
+            &quot;lr&quot;: &quot;auto&quot;,
+            &quot;betas&quot;: &quot;auto&quot;,
+            &quot;eps&quot;: &quot;auto&quot;,
+            &quot;weight_decay&quot;: &quot;auto&quot;
+        }
+    },
+
+    &quot;scheduler&quot;: {
+        &quot;type&quot;: &quot;WarmupLR&quot;,
+        &quot;params&quot;: {
+            &quot;warmup_min_lr&quot;: &quot;auto&quot;,
+            &quot;warmup_max_lr&quot;: &quot;auto&quot;,
+            &quot;warmup_num_steps&quot;: &quot;auto&quot;
+        }
+    },
+
+    &quot;zero_optimization&quot;: {
+        &quot;stage&quot;: 2,
+        &quot;offload_optimizer&quot;: {
+            &quot;device&quot;: &quot;none&quot;,
+            &quot;pin_memory&quot;: true
+        },
+        &quot;allgather_partitions&quot;: true,
+        &quot;allgather_bucket_size&quot;: 2e8,
+        &quot;overlap_comm&quot;: true,
+        &quot;reduce_scatter&quot;: true,
+        &quot;reduce_bucket_size&quot;: 2e8,
+        &quot;contiguous_gradients&quot;: true
+    },
+
+    &quot;gradient_accumulation_steps&quot;: &quot;auto&quot;,
+    &quot;gradient_clipping&quot;: &quot;auto&quot;,
+    &quot;steps_per_print&quot;: 100,
+    &quot;train_batch_size&quot;: &quot;auto&quot;,
+    &quot;train_micro_batch_size_per_gpu&quot;: &quot;auto&quot;,
+    &quot;wall_clock_breakdown&quot;: false
+}</code></pre></div>
+<p>最后，在终端 bash 运行该 <code>pretrain.sh</code> 脚本即可开始训练。</p>
+</div>
+<div class="section" id="llm-happy-training-src1-s2"><h2>6.2 模型有监督微调</h2>
+<p>在上一节，我们介绍了如何使用 Transformers 框架快速、高效地进行模型预训练。在本部分，我们将基于上部分内容，介绍如何使用 Transformers 框架对预训练好的模型进行有监督微调。</p>
+<h3>6.2.1 Pretrain VS SFT</h3>
+<p>首先需要回顾一下，对 LLM 进行预训练和进行有监督微调的核心差异在于什么。在第四章中提到过，目前成型的 LLM 一般通过 Pretrain-SFT-RLHF 三个阶段来训练，在 Pretrain 阶段，会对海量无监督文本进行自监督建模，来学习文本语义规则和文本中的世界知识；在 SFT 阶段，一般通过对 Pretrain 好的模型进行指令微调，即训练模型根据用户指令完成对应任务，从而使模型能够遵循用户指令，根据用户指令进行规划、行动和输出。因此，Pretrain 和 SFT 均使用 CLM 建模，其核心差异在于，Pretrain 使用海量无监督文本进行训练，模型直接对文本执行“预测下一个 token”的任务；而 SFT 使用构建成对的指令对数据，模型根据输入的指令，建模后续的输出。反映到具体的训练实现上，Pretrain 会对全部 text 进行 loss 计算，要求模型对整个文本实现建模预测；而 SFT 仅对输出进行 loss 计算，不计算指令部分的 loss。</p>
+<p>因此，相较于上一节完成的 Pretrain 代码，SFT 部分仅需要修改数据处理环节，实现对指令对数据转化为训练样本的构建，其余部分和 Pretrain 是完全一致的实现逻辑。本部分代码脚本为<code>./code/finetune.py</code>。</p>
+<h3>6.2.2 微调数据处理</h3>
+<p>同样与第五章类似，我们此处使用贝壳开源的 BelleGroup 数据集进行 SFT。</p>
+<p>在 SFT 过程中，我们会定义一个 Chat Template，这个 Template 即表示了如何将对话数据转化为一个模型可以建模拟合的文本序列。当我们使用做过 SFT 的模型进行下游任务微调时，一般需要查看该模型的 Chat Template 并进行适配，即是为了不损伤其在 SFT 中学到的指令遵循能力。由于我们此处使用 Pretrain 模型进行 SFT，可以自定义一个 Chat Template。由于我们使用了 Qwen-2.5-1.5B 模型结构进行 Pretrain，此处我们沿承使用 Qwen-2.5 的 Chat Template。如果读者没有足够的资源进行上一部分模型的 Pretrain 的话，此处也可以使用官方的 Qwen-2.5-1.5B 模型作为 SFT 的基座模型。</p>
+<p>我们首先定义几个特殊 token，特殊 token 在模型进行拟合中有特殊的作用，包括文本序列开始（BOS）、文本序列结束（EOS）、换行符等。定义特殊 token，有助于避免模型在拟合过程中的语义混淆：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>
+# 不同的 tokenizer 需要特别定义
+# BOS
+im_start = tokenizer(&quot;&lt;|im_start|&gt;&quot;).input_ids
+# EOS
+im_end = tokenizer(&quot;&lt;|im_end|&gt;&quot;).input_ids
+# PAD
+IGNORE_TOKEN_ID = tokenizer.pad_token_id
+# 换行符
+nl_tokens = tokenizer(&#39;\n&#39;).input_ids
+# 角色标识符
+_system = tokenizer(&#39;system&#39;).input_ids + nl_tokens
+_user = tokenizer(&#39;human&#39;).input_ids + nl_tokens
+_assistant = tokenizer(&#39;assistant&#39;).input_ids + nl_tokens</code></pre></div>
+<p>Qwen 系列的 Chat Template 一般有三个对话角色：System、User 和 Assistant。System 是系统提示词，负责激活模型的能力，默认为“You are a helpful assistant.”，一般不会在 SFT 过程中更改使用。User 即为用户给出的提示词，此处由于数据集中的对话角色为 “human”，我们将 “user” 修改为了“human”。Assistant 即为 LLM 给出的回复，也就是模型在 SFT 过程中需要拟合的文本。</p>
+<p>接着，由于该数据集是一个多轮对话数据集，我们需要对多轮对话进行拼接处理，将多轮对话拼接到一个文本序列中：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 拼接多轮对话
+input_ids, targets = [], []
+# 多个样本
+for i in tqdm(range(len(sources))):
+    # source 为一个多轮对话样本
+    source = sources[i]
+    # 从 user 开始
+    if source[0][&quot;from&quot;] != &quot;human&quot;:
+        source = source[1:]
+    # 分别是输入和输出
+    input_id, target = [], []
+    # system: 【BOS】system\nYou are a helpful assistant.【EOS】\n
+    system = im_start + _system + tokenizer(system_message).input_ids + im_end + nl_tokens
+    input_id += system
+    # system 不需要拟合
+    target += im_start + [IGNORE_TOKEN_ID] * (len(system)-3) + im_end + nl_tokens
+    assert len(input_id) == len(target)
+    # 依次拼接
+    for j, sentence in enumerate(source):
+        # sentence 为一轮对话
+        role = roles[sentence[&quot;from&quot;]]
+        # user：&lt;|im_start|&gt;human\ninstruction【EOS】\n
+        # assistant：&lt;|im_start|&gt;assistant\nresponse【EOS】\n
+        _input_id = tokenizer(role).input_ids + nl_tokens + \
+            tokenizer(sentence[&quot;value&quot;]).input_ids + im_end + nl_tokens
+        input_id += _input_id
+        if role == &#39;&lt;|im_start|&gt;human&#39;:
+            # user 不需要拟合
+            _target = im_start + [IGNORE_TOKEN_ID] * (len(_input_id)-3) + im_end + nl_tokens
+        elif role == &#39;&lt;|im_start|&gt;assistant&#39;:
+            # assistant 需要拟合
+            _target = im_start + [IGNORE_TOKEN_ID] * len(tokenizer(role).input_ids) + \
+                _input_id[len(tokenizer(role).input_ids)+1:-2] + im_end + nl_tokens
+        else:
+            print(role)
+            raise NotImplementedError
+        target += _target
+    assert len(input_id) == len(target)
+    # 最后进行 PAD
+    input_id += [tokenizer.pad_token_id] * (max_len - len(input_id))
+    target += [IGNORE_TOKEN_ID] * (max_len - len(target))
+    input_ids.append(input_id[:max_len])
+    targets.append(target[:max_len])</code></pre></div>
+<p>上述代码沿承了 Qwen 的 Chat Template 逻辑，读者也可以根据自己的偏好进行修改，其核心点在于 User 的文本不需要拟合，因此 targets 中 User 对应的文本内容是使用的 IGNORE_TOKEN_ID 进行遮蔽，而 Assistant 对应的文本内容则是文本原文，是需要计算 loss 的。目前主流 LLM IGNORE_TOKEN_ID 一般设置为 -100。</p>
+<p>完成拼接后，将 tokenize 后的数值序列转化为 <code>Torch.tensor</code>，再拼接成 Dataset 所需的字典返回即可：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>input_ids = torch.tensor(input_ids)
+targets = torch.tensor(targets)
+
+return dict(
+    input_ids=input_ids,
+    labels=targets,
+    attention_mask=input_ids.ne(tokenizer.pad_token_id),
+)</code></pre></div>
+<p>完成上述处理逻辑后，需要自定义一个 Dataset 类，在该类中调用该逻辑进行数据的处理：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class SupervisedDataset(Dataset):
+
+    def __init__(self, raw_data, tokenizer, max_len: int):
+        super(SupervisedDataset, self).__init__()
+        # 加载并预处理数据
+        sources = [example[&quot;conversations&quot;] for example in raw_data]
+        # preprocess 即上文定义的数据预处理逻辑
+        data_dict = preprocess(sources, tokenizer, max_len)
+
+        self.input_ids = data_dict[&quot;input_ids&quot;]
+        self.labels = data_dict[&quot;labels&quot;]
+        self.attention_mask = data_dict[&quot;attention_mask&quot;]
+
+    def __len__(self):
+        return len(self.input_ids)
+
+    def __getitem__(self, i) -&gt; Dict[str, torch.Tensor]:
+        return dict(
+            input_ids=self.input_ids[i],
+            labels=self.labels[i],
+            attention_mask=self.attention_mask[i],
+        )</code></pre></div>
+<p>该类继承自 Torch 的 Dataset 类，可以直接在 Trainer 中使用。完成数据处理后，基于上一节脚本，修改数据处理逻辑即可，后续模型训练等几乎完全一致，此处附上主函数逻辑：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 加载脚本参数
+parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
+# 初始化 SwanLab
+swanlab.init(project=&quot;sft&quot;, experiment_name=&quot;qwen-1.5b&quot;)
+
+# 设置日志
+logging.basicConfig(
+    format=&quot;%(asctime)s - %(levelname)s - %(name)s - %(message)s&quot;,
+    datefmt=&quot;%m/%d/%Y %H:%M:%S&quot;,
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+
+# 将日志级别设置为 INFO
+transformers.utils.logging.set_verbosity_info()
+log_level = training_args.get_process_log_level()
+logger.setLevel(log_level)
+datasets.utils.logging.set_verbosity(log_level)
+transformers.utils.logging.set_verbosity(log_level)
+transformers.utils.logging.enable_default_handler()
+transformers.utils.logging.enable_explicit_format()
+
+# 训练整体情况记录
+logger.warning(
+    f&quot;Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}&quot;
+    + f&quot;distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}&quot;
+)
+logger.info(f&quot;Training/evaluation parameters {training_args}&quot;)
+
+# 检查 checkpoint
+last_checkpoint = None
+if os.path.isdir(training_args.output_dir):
+    last_checkpoint = get_last_checkpoint(training_args.output_dir)
+    if last_checkpoint is None and len(os.listdir(training_args.output_dir)) &gt; 0:
+        raise ValueError(
+            f&quot;输出路径 ({training_args.output_dir}) 非空 &quot;
+        )
+    elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
+        logger.info(
+            f&quot;从 {last_checkpoint}恢复训练&quot;
+        )
+
+# 设置随机数种子.
+set_seed(training_args.seed)
+
+# 初始化模型
+logger.warning(&quot;加载预训练模型&quot;)
+logger.info(f&quot;模型参数地址：{model_args.model_name_or_path}&quot;)
+model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path,trust_remote_code=True)
+n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
+logger.info(f&quot;继承一个预训练模型 - Total size={n_params/2**20:.2f}M params&quot;)
+
+# 初始化 Tokenizer
+tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+logger.info(&quot;完成 tokenizer 加载&quot;)
+
+# 加载微调数据
+with open(data_args.train_files) as f:
+    lst = [json.loads(line) for line in f.readlines()[:10000]]
+logger.info(&quot;完成训练集加载&quot;)
+logger.info(f&quot;训练集地址：{data_args.train_files}&quot;)
+logger.info(f&#39;训练样本总数:{len(lst)}&#39;)
+# logger.info(f&quot;训练集采样：{ds[&quot;train&quot;][0]}&quot;)
+
+train_dataset = SupervisedDataset(lst, tokenizer=tokenizer, max_len=2048)
+
+logger.info(&quot;初始化 Trainer&quot;)
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset= IterableWrapper(train_dataset),
+    tokenizer=tokenizer
+)
+
+# 从 checkpoint 加载
+checkpoint = None
+if training_args.resume_from_checkpoint is not None:
+    checkpoint = training_args.resume_from_checkpoint
+elif last_checkpoint is not None:
+        checkpoint = last_checkpoint
+
+logger.info(&quot;开始训练&quot;)
+train_result = trainer.train(resume_from_checkpoint=checkpoint)
+trainer.save_model() </code></pre></div>
+<p>启动方式也同样在 sh 脚本中使用 deepspeed 启动即可，此处不再赘述，源码见 ./code/finetune.sh。</p>
+</div>
+<div class="section" id="llm-happy-training-src1-s3"><h2>6.3 高效微调</h2>
+<p>在前面几节，我们详细介绍了基于 Transformers 框架对模型进行 Pretrain、SFT 以及 RLHF 的原理和实践细节。但是，由于 LLM 参数量大，训练数据多，通过上述方式对模型进行训练（主要指 SFT 及 RLHF）需要调整模型全部参数，资源压力非常大。对资源有限的企业或课题组来说，如何高效、快速对模型进行领域或任务的微调，以低成本地使用 LLM 完成目标任务，是非常重要的。</p>
+<h3>6.3.1 高效微调方案</h3>
+<p>针对全量微调的昂贵问题，目前主要有两种解决方案：</p>
+<p><strong>Adapt Tuning</strong>。即在模型中添加 Adapter 层，在微调时冻结原参数，仅更新 Adapter 层。</p>
+<p>具体而言，其在预训练模型每层中插入用于下游任务的参数，即 Adapter 模块，在微调时冻结模型主体，仅训练特定于任务的参数，如图6.8所示。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/6-images/3-1-2d43a40e4b.png" alt="alt text" width="90%">
+    <p>图6.8 Adapt Tuning</p>
+</div>
+<p>每个 Adapter 模块由两个前馈子层组成，第一个前馈子层将 Transformer 块的输出作为输入，将原始输入维度 <span class="math" role="math" aria-label="数学公式">d</span> 投影到 <span class="math" role="math" aria-label="数学公式">m</span>，通过控制 <span class="math" role="math" aria-label="数学公式">m</span> 的大小来限制 Adapter 模块的参数量，通常情况下 <span class="math" role="math" aria-label="数学公式">m &lt;&lt; d</span>。在输出阶段，通过第二个前馈子层还原输入维度，将 <span class="math" role="math" aria-label="数学公式">m</span> 重新投影到 <span class="math" role="math" aria-label="数学公式">d</span>，作为 Adapter 模块的输出(如上图右侧结构)。</p>
+<p>LoRA 事实上就是一种改进的 Adapt Tuning 方法。但 Adapt Tuning 方法存在推理延迟问题，由于增加了额外参数和额外计算量，导致微调之后的模型计算速度相较原预训练模型更慢。</p>
+<p><strong>Prefix Tuning</strong>。该种方法固定预训练 LM，为 LM 添加可训练，任务特定的前缀，这样就可以为不同任务保存不同的前缀，微调成本也小。具体而言，在每一个输入 token 前构造一段与下游任务相关的 virtual tokens 作为 prefix，在微调时只更新 prefix 部分的参数，而其他参数冻结不变。</p>
+<p>也是目前常用的微量微调方法的 Ptuning，其实就是 Prefix Tuning 的一种改进。但 Prefix Tuning 也存在固定的缺陷：模型可用序列长度减少。由于加入了 virtual tokens，占用了可用序列长度，因此越高的微调质量，模型可用序列长度就越低。</p>
+<h3>6.3.2 LoRA 微调</h3>
+<p>如果一个大模型是将数据映射到高维空间进行处理，这里假定在处理一个细分的小任务时，是不需要那么复杂的大模型的，可能只需要在某个子空间范围内就可以解决，那么也就不需要对全量参数进行优化了，我们可以定义当对某个子空间参数进行优化时，能够达到全量参数优化的性能的一定水平（如90%精度）时，那么这个子空间参数矩阵的秩就可以称为对应当前待解决问题的本征秩（intrinsic rank）。</p>
+<p>预训练模型本身就隐式地降低了本征秩，当针对特定任务进行微调后，模型中权重矩阵其实具有更低的本征秩（intrinsic rank）。同时，越简单的下游任务，对应的本征秩越低。（<a href="https://arxiv.org/abs/2012.13255" target="_blank" rel="noreferrer">Intrinsic Dimensionality Explains the Effectiveness of Language Model Fine-Tuning</a>）因此，权重更新的那部分参数矩阵尽管随机投影到较小的子空间，仍然可以有效的学习，可以理解为针对特定的下游任务这些权重矩阵就不要求满秩。我们可以通过优化密集层在适应过程中变化的秩分解矩阵来间接训练神经网络中的一些密集层，从而实现仅优化密集层的秩分解矩阵来达到微调效果。</p>
+<p>例如，假设预训练参数为 <span class="math" role="math" aria-label="数学公式">θ<sup>D</sup><sub>0</sub></span>，在特定下游任务上密集层权重参数矩阵对应的本征秩为 <span class="math" role="math" aria-label="数学公式">θ<sup>d</sup></span>，对应特定下游任务微调参数为 <span class="math" role="math" aria-label="数学公式">θ<sup>D</sup></span>，那么有：</p>
+<div class="math-display" role="math" aria-label="数学公式">θ<sup>D</sup> = θ<sup>D</sup><sub>0</sub> + θ<sup>d</sup> M</div>
+<p>这个 <span class="math" role="math" aria-label="数学公式">M</span> 即为 LoRA 优化的秩分解矩阵。</p>
+<p>想对于其他高效微调方法，LoRA 存在以下优势：</p>
+<ol>
+<li>可以针对不同的下游任务构建小型 LoRA 模块，从而在共享预训练模型参数基础上有效地切换下游任务。</li>
+<li>LoRA 使用自适应优化器（Adaptive Optimizer），不需要计算梯度或维护大多数参数的优化器状态，训练更有效、硬件门槛更低。</li>
+<li>LoRA 使用简单的线性设计，在部署时将可训练矩阵与冻结权重合并，不存在推理延迟。</li>
+<li>LoRA 与其他方法正交，可以组合。</li>
+</ol>
+<p>因此，LoRA 成为目前高效微调 LLM 的主流方法，尤其是对于资源受限、有监督训练数据受限的情况下，LoRA 微调往往会成为 LLM 微调的首选方法。</p>
+<h3>6.3.3 LoRA 微调的原理</h3>
+<h4>（1）低秩参数化更新矩阵</h4>
+<p>LoRA 假设权重更新的过程中也有一个较低的本征秩，对于预训练的权重参数矩阵 <span class="math" role="math" aria-label="数学公式">W0 ∈ R<sup>d × k</sup></span> (<span class="math" role="math" aria-label="数学公式">d</span> 为上一层输出维度，<span class="math" role="math" aria-label="数学公式">k</span> 为下一层输入维度)，使用低秩分解来表示其更新：</p>
+<div class="math-display" role="math" aria-label="数学公式">W<sub>0</sub> + ΔW = W<sub>0</sub> + BA <span class="math-space"> </span><span class="math-space"> </span> where <span class="math-space"> </span> B ∈ R<sup>d × r</sup>, A ∈ R<sup>r × k</sup></div>
+<p>在训练过程中，<span class="math" role="math" aria-label="数学公式">W<sub>0</sub></span> 冻结不更新，<span class="math" role="math" aria-label="数学公式">A</span>、<span class="math" role="math" aria-label="数学公式">B</span> 包含可训练参数。</p>
+<p>因此，LoRA 的前向传递函数为：</p>
+<div class="math-display" role="math" aria-label="数学公式">h = W<sub>0</sub> x + Δ W x = W<sub>0</sub> x + B A x</div>
+<p>在开始训练时，对 <span class="math" role="math" aria-label="数学公式">A</span> 使用随机高斯初始化，对 <span class="math" role="math" aria-label="数学公式">B</span> 使用零初始化，然后使用 Adam 进行优化。</p>
+<p>训练思路如图6.9所示：</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/6-images/3-2-f43a918fda.jpg" alt="alt text" width="90%">
+    <p>图6.9 LoRA</p>
+</div>
+<h4>（2）应用于 Transformer</h4>
+<p>在 Transformer 结构中，LoRA 技术主要应用在注意力模块的四个权重矩阵：<span class="math" role="math" aria-label="数学公式">W<sub>q</sub></span>、<span class="math" role="math" aria-label="数学公式">W<sub>k</sub></span>、<span class="math" role="math" aria-label="数学公式">W<sub>v</sub></span>、<span class="math" role="math" aria-label="数学公式">W<sub>0</sub></span>，而冻结 MLP 的权重矩阵。</p>
+<p>通过消融实验发现同时调整 <span class="math" role="math" aria-label="数学公式">W<sub>q</sub></span> 和 <span class="math" role="math" aria-label="数学公式">W<sub>v</sub></span> 会产生最佳结果。</p>
+<p>在上述条件下，可训练参数个数为：</p>
+<div class="math-display" role="math" aria-label="数学公式">Θ = 2 × L<sub>LoRA</sub> × d<sub>model</sub> × r</div>
+<p>其中，<span class="math" role="math" aria-label="数学公式">L<sub>LoRA</sub></span> 为应用 LoRA 的权重矩阵的个数，<span class="math" role="math" aria-label="数学公式">d<sub>model</sub></span> 为 Transformer 的输入输出维度，<span class="math" role="math" aria-label="数学公式">r</span> 为设定的 LoRA 秩。</p>
+<p>一般情况下，r 取到 4、8、16。</p>
+<h3>6.3.4 LoRA 的代码实现</h3>
+<p>目前一般通过 peft 库来实现模型的 LoRA 微调。peft 库是 huggingface 开发的第三方库，其中封装了包括 LoRA、Adapt Tuning、P-tuning 等多种高效微调方法，可以基于此便捷地实现模型的 LoRA 微调。</p>
+<p>本文简单解析 peft 库中的 LoRA 微调代码，简单分析 LoRA 微调的代码实现。</p>
+<h4>（1）实现流程</h4>
+<p>LoRA 微调的内部实现流程主要包括以下几个步骤：</p>
+<ol>
+<li>确定要使用 LoRA 的层。peft 库目前支持调用 LoRA 的层包括：nn.Linear、nn.Embedding、nn.Conv2d 三种。</li>
+</ol>
+<ol>
+<li>对每一个要使用 LoRA 的层，替换为 LoRA 层。所谓 LoRA 层，实则是在该层原结果基础上增加了一个旁路，通过低秩分解（即矩阵 <span class="math" role="math" aria-label="数学公式">A</span> 和矩阵 <span class="math" role="math" aria-label="数学公式">B</span>）来模拟参数更新。</li>
+</ol>
+<ol>
+<li>冻结原参数，进行微调，更新 LoRA 层参数。</li>
+</ol>
+<h4>（2）确定 LoRA 层</h4>
+<p>在进行 LoRA 微调时，首先需要确定 LoRA 微调参数，其中一个重要参数即是 target_modules。target_modules 一般是一个字符串列表，每一个字符串是需要进行 LoRA 的层名称，例如：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>target_modules = [&quot;q_proj&quot;,&quot;v_proj&quot;]</code></pre></div>
+<p>这里的 q_proj 即为注意力机制中的 <span class="math" role="math" aria-label="数学公式">W<sub>q</sub></span>， v_proj 即为注意力机制中的 <span class="math" role="math" aria-label="数学公式">W<sub>v</sub></span>。我们可以根据模型架构和任务要求自定义需要进行 LoRA 操作的层。</p>
+<p>在创建 LoRA 模型时，会获取该参数，然后在原模型中找到对应的层，该操作主要通过使用 re 对层名进行正则匹配实现：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 找到模型的各个组件中，名字里带&quot;q_proj&quot;，&quot;v_proj&quot;的
+target_module_found = re.fullmatch(self.peft_config.target_modules, key)
+# 这里的 key，是模型的组件名</code></pre></div>
+<h4>（3）替换 LoRA 层</h4>
+<p>对于找到的每一个目标层，会创建一个新的 LoRA 层进行替换。</p>
+<p>LoRA 层在具体实现上，是定义了一个基于 Lora 基类的 Linear 类，该类同时继承了 nn.Linear 和 LoraLayer。LoraLayer 即是 Lora 基类，其主要构造了 LoRA 的各种超参：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class LoraLayer:
+    def __init__(
+        self,
+        r: int, # LoRA 的秩
+        lora_alpha: int, # 归一化参数
+        lora_dropout: float, # LoRA 层的 dropout 比例
+        merge_weights: bool, # eval 模式中，是否将 LoRA 矩阵的值加到原权重矩阵上
+    ):
+        self.r = r
+        self.lora_alpha = lora_alpha
+        # Optional dropout
+        if lora_dropout &gt; 0.0:
+            self.lora_dropout = nn.Dropout(p=lora_dropout)
+        else:
+            self.lora_dropout = lambda x: x
+        # Mark the weight as unmerged
+        self.merged = False
+        self.merge_weights = merge_weights
+        self.disable_adapters = False
+</code></pre></div>
+<p>nn.Linear 就是 Pytorch 的线性层实现。Linear 类就是具体的 LoRA 层，其主要实现如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class Linear(nn.Linear, LoraLayer):
+    # LoRA 层
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        r: int = 0,
+        lora_alpha: int = 1,
+        lora_dropout: float = 0.0,
+        fan_in_fan_out: bool = False, 
+        merge_weights: bool = True,
+        **kwargs,
+    ):
+        # 继承两个基类的构造函数
+        nn.Linear.__init__(self, in_features, out_features, **kwargs)
+        LoraLayer.__init__(self, r=r, lora_alpha=lora_alpha, lora_dropout=lora_dropout, merge_weights=merge_weights)
+
+        self.fan_in_fan_out = fan_in_fan_out
+        # Actual trainable parameters
+        if r &gt; 0:
+            # 参数矩阵 A
+            self.lora_A = nn.Linear(in_features, r, bias=False)
+            # 参数矩阵 B
+            self.lora_B = nn.Linear(r, out_features, bias=False)
+            # 归一化系数
+            self.scaling = self.lora_alpha / self.r
+            # 冻结原参数，仅更新 A 和 B
+            self.weight.requires_grad = False
+        # 初始化 A 和 B
+        self.reset_parameters()
+        if fan_in_fan_out:
+            self.weight.data = self.weight.data.T
+</code></pre></div>
+<p>替换时，直接将原层的 weight 和 bias 复制给新的 LoRA 层，再将新的 LoRA 层分配到指定设备即可。</p>
+<h4>（4）训练</h4>
+<p>实现了 LoRA 层的替换后，进行微调训练即可。由于在 LoRA 层中已冻结原参数，在训练中只有 A 和 B 的参数会被更新，从而实现了高效微调。训练的整体过程与原 Fine-tune 类似，此处不再赘述。由于采用了 LoRA 方式，forward 函数也会对应调整：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>    def forward(self, x: torch.Tensor):
+        if self.disable_adapters:
+            if self.r &gt; 0 and self.merged:
+                self.weight.data -= (
+                    transpose(self.lora_B.weight @ self.lora_A.weight, self.fan_in_fan_out) * self.scaling
+                )
+                self.merged = False
+
+            return F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
+        &#39;&#39;&#39;主要分支&#39;&#39;&#39;
+        elif self.r &gt; 0 and not self.merged:
+            result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
+            if self.r &gt; 0:
+                result += self.lora_B(self.lora_A(self.lora_dropout(x))) * self.scaling
+            return result
+        else:
+            return F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
+</code></pre></div>
+<p>上述代码由于考虑到参数合并问题，有几个分支，此处我们仅阅读第二个分支即 elif 分支即可。基于 LoRA 的前向计算过程如前文公式所示，首先计算原参数与输入的乘积，再加上 A、B 分别与输入的乘积即可。</p>
+<h3>6.3.5 使用 peft 实现 LoRA 微调</h3>
+<p>peft 进行了很好的封装，支持我们便捷、高效地对大模型进行微调。此处以第二节的 LLM SFT 为例，简要介绍如何使用 peft 对大模型进行微调。如果是应用在 RLHF 上，整体思路是一致的。</p>
+<p>首先加载所需使用库：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import torch.nn as nn
+from transformers import AutoTokenizer, AutoModel
+from peft import get_peft_model, LoraConfig, TaskType, PeftModel
+from transformers import Trainer</code></pre></div>
+<p>其次加载原模型与原 tokenizer，此处和第二节一致：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 加载基座模型
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
+model = AutoModel.from_pretrained(
+    MODEL_PATH, trust_remote_code=True
+)</code></pre></div>
+<p>接着，设定 peft 参数：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            inference_mode=False,
+            r=8,
+            lora_alpha=32,
+            lora_dropout=0.1,
+        )</code></pre></div>
+<p>注意，对不同的模型，LoRA 参数可能有所区别。例如，对于 ChatGLM，无需指定 target_modeules，peft 可以自行找到；对于 BaiChuan，就需要手动指定。task_type 是模型的任务类型，大模型一般都是 CAUSAL_LM 即传统语言模型。</p>
+<p>然后获取 LoRA 模型：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>model = get_peft_model(model, peft_config)</code></pre></div>
+<p>此处的 get_peft_model 的底层操作，即为上文分析的具体实现。</p>
+<p>最后使用 transformers 提供的 Trainer 进行训练即可，训练占用的显存就会有大幅度的降低：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset= IterableWrapper(train_dataset),
+    tokenizer=tokenizer
+)
+trainer.train()</code></pre></div>
+<p>如果是应用在 DPO、KTO 上，则也相同的加入 LoRA 参数并通过 <code>get_peft_model</code> 获取一个 LoRA 模型即可，其他的不需要进行任何修改。但要注意的是，LoRA 微调能够大幅度降低显卡占用，且在下游任务适配上能够取得较好的效果，但如果是需要学习对应知识的任务，LoRA 由于只调整低秩矩阵，难以实现知识的注入，一般效果不佳，因此不推荐使用 LoRA 进行模型预训练或后训练。</p>
+</div>
+<div class="section" id="llm-happy-training-src1-s4"><h2>6.4 偏好对齐</h2>
+<p>在前文中，我们已经完成了 Pretrain、SFT 以及高效微调三条训练主线。对于一个面向真实用户的大模型来说，这些步骤通常还不够。模型虽然已经具备了较强的语言建模能力和基础指令跟随能力，但在回答风格、安全性、帮助性和稳定性方面，仍然需要进一步的后训练过程来进行约束和校正，这一步一般统称为偏好对齐。</p>
+<h3>6.4.1 为什么需要偏好对齐</h3>
+<p>Pretrain 更关注语言规律和世界知识的学习，SFT 更关注让模型学会遵循指令，而偏好对齐则更强调“什么样的回答更符合人类预期”。例如，在问答、代码生成或复杂推理任务中，模型不仅要给出答案，还要尽量做到表达清晰、内容安全、推理过程稳定，并尽量避免答非所问或有害输出。</p>
+<p>从训练流程上看，偏好对齐承接在 SFT 之后，是 Post-Training 中非常关键的一环。其核心思路不是让模型继续单纯地拟合文本，而是让模型学会在多个候选回答之间更偏向人类更喜欢的输出。</p>
+<h3>6.4.2 主流方法概览</h3>
+<p>目前常见的偏好对齐方法主要包括以下几类：</p>
+<ul>
+<li><strong>RLHF</strong>：先构建偏好数据与奖励模型，再通过强化学习更新策略模型，是最经典的偏好对齐路线。</li>
+<li><strong>DPO</strong>：直接利用偏好数据优化模型，无需显式训练奖励模型，训练流程相对更简洁。</li>
+<li><strong>KTO</strong>：同样属于直接偏好优化方法，更强调让模型对“好回答”和“不好回答”形成稳定区分。</li>
+</ul>
+<p>这些方法虽然细节不同，但都依赖于高质量的偏好数据，且通常建立在 SFT 模型之上。</p>
+<h3>6.4.3 与本章前文的衔接</h3>
+<p>从工程实现角度看，偏好对齐并不是一个完全独立的新体系，而是建立在本章前面几节内容之上的：</p>
+<ol>
+<li>在 <code>6.1</code> 中，我们已经掌握了如何基于 Transformers 初始化模型、处理数据并组织训练流程。</li>
+<li>在 <code>6.2</code> 中，我们已经完成了 SFT 数据构造和监督训练，这一步通常就是偏好对齐前的起点模型。</li>
+<li>在 <code>6.3</code> 中，我们介绍了 LoRA/QLoRA 与 <code>peft</code> 的接入方式，这些方法同样可以用于 DPO、KTO 等偏好对齐任务，以降低训练成本。</li>
+</ol>
+<p>因此，当你进一步实践偏好对齐时，真正新增的核心内容主要集中在偏好数据组织、奖励建模方式以及偏好损失函数的设计上，而模型加载、参数高效训练和大多数工程配置都可以复用前文的思路。</p>
+<h3>6.4.4 学习与实践建议</h3>
+<p>如果你是第一次系统学习大模型训练，建议先完整掌握本章的 Pretrain、SFT 与 PEFT 内容，再继续阅读偏好对齐专题补充材料 [<code>6.4 偏好对齐</code>](./6.4%5BWIP%5D%20偏好对齐.md)。在实践层面，推荐优先从 DPO 这类更轻量的偏好优化方法入手，再逐步理解奖励模型和 RLHF 的完整链路。这样可以在不显著增加工程复杂度的前提下，建立对后训练流程的整体认识。</p>
+<p><strong>参考资料</strong></p>
+<p>[1] Neil Houlsby, Andrei Giurgiu, Stanislaw Jastrzebski, Bruna Morrone, Quentin de Laroussilhe, Andrea Gesmundo, Mona Attariyan, and Sylvain Gelly. (2019). <em>Parameter-Efficient Transfer Learning for NLP.</em> arXiv preprint arXiv:1902.00751.</p>
+<p>[2] Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and Weizhu Chen. (2021). <em>LoRA: Low-Rank Adaptation of Large Language Models.</em> arXiv preprint arXiv:2106.09685.</p>
+<p>[3] Armen Aghajanyan, Luke Zettlemoyer, and Sonal Gupta. (2020). <em>Intrinsic Dimensionality Explains the Effectiveness of Language Model Fine-Tuning.</em> arXiv preprint arXiv:2012.13255.</p>
+<p>[4] Xiang Lisa Li 和 Percy Liang. (2021). <em>Prefix-Tuning: Optimizing Continuous Prompts for Generation.</em> arXiv preprint arXiv:2101.00190.</p>
+</div></div>
+<div class="happy-source-file"><div class="source-file-label">来源文件 · docs/chapter6/6.4[WIP] 偏好对齐.md</div><p>在我们进入强化学习的细节之前，让我们先看看它的起源。强化学习（Reinforcement Learning，简称RL）其实并不是什么新鲜事物。它的理论基础可以追溯到20世纪初的行为心理学，尤其是Edward Thorndike和B.F. Skinner对于动物学习的研究。Thorndike提出了“效果律”，即如果一个行为带来积极的结果，那么这种行为重复发生的概率会增加。Skinner则进一步发展了这种思想，提出操作性条件作用学说，通过奖励和惩罚来塑造行为。</p>
+<p>计算机科学领域的强化学习是从这些心理学原理生发出来的。在20世纪80年代，随着计算能力的提升和数学理论的发展，人们开始尝试将这些生物心理学的学习概念应用于机器和计算机程序，从而发展出了现代意义上的强化学习。</p>
+<div class="section" id="llm-happy-training-src2-s1"><h2>6.4.1 强化学习的基本原理</h2>
+<p>现在，我们进入核心部分——强化学习的基本原理。</p>
+<ul>
+<li>状态（State） ：这是一个系统在某一时刻的具体状况。比如在一个棋盘游戏中，状态可以表示棋盘上所有棋子的当前排列情况。对于一个自动驾驶汽车来说，状态可能包括汽车的速度、位置，以及周围障碍物的位置等。</li>
+<li>动作（Action） ：动作是智能体在给定状态下可执行的操作。以自行车为例，动作可能包括前进、停止、转弯等。在一个复杂的系统中，动作集可以非常庞大。</li>
+<li>奖励（Reward） ：这是智能体在执行某个动作后获得的反馈，通常是一个数值。奖励可以是立即的，也可以是延后的。一个好的动作可能会得到正奖励，而不好的动作可能会得到负奖励。</li>
+<li>策略（Policy） ：策略是一套指导智能体如何选择动作的规则。简单来说，策略就是告诉智能体在每个状态下应该做什么。</li>
+<li>价值函数（Value Function） ：这是一种对策略的评估工具，旨在预测从当前状态出发，长期来看能够获得的总奖励。值函数帮助智能体不仅考虑当前步骤的奖励，而且能更好地权衡短期和长期的收益。</li>
+<li>模型（Model） ：在有些强化学习系统中，我们会建立一个环境模型，帮助智能体预见其动作的结果。这在很多复杂计算情况下非常有用。</li>
+</ul>
+<p><figure class="happy-figure"><img src="@asset/happy-llm/docs/images/6-images/7.1-1-540d395728.png" alt="Reinforcement Learning" loading="lazy"><figcaption>Reinforcement Learning</figcaption></figure></p>
+<p>这些元素共同作用，帮助智能体通过不断地在虚拟环境中试错来学习最佳的行动策略。在强化学习中，智能体是学习和决策的主体。它通过以下步骤与环境进行交互：</p>
+<ol>
+<li>观察状态 ：智能体首先观察当前的状态（State）。</li>
+<li>选择动作 ：根据观察到的状态和预先确定的策略，智能体选择一个动作（Action）。</li>
+<li>执行动作 ：智能体执行所选的动作。</li>
+<li>接收奖励和新状态 ：执行动作后，智能体从环境中接收到相应的奖励（Reward）和更新后的新状态（State）。</li>
+<li>更新策略 ：智能体使用获得的奖励信息来调整策略，以便在未来获得更好的结果。</li>
+</ol>
+<p>将这个过程不断重复，智能体在反复的交互中不断优化其策略，目标是让它在给定的任务中表现得越来越好。</p>
+</div>
+<div class="section" id="llm-happy-training-src2-s2"><h2>6.4.2 强化学习的目标</h2>
+<p>强化学习的目标十分明确：<em><strong>通过在给定环境中反复试探和学习，使得智能体能够选择一系列动作从而最大化其总累计奖励。</strong></em> 这听起来可能有些抽象，我们可以用玩游戏来比喻。在游戏中，玩家的目标是通过一系列操作（比如走路、跳跃、打怪）来赢得高分数或完成关卡。在强化学习中，这种高分或成功通过关卡的概念对应于“最大化奖励”。</p>
+<p>在数学上，这个目标可以表示为训练一个策略 <span class="math" role="math" aria-label="数学公式">π</span>，使得在所有状态 <span class="math" role="math" aria-label="数学公式">s</span> 下，智能体选择的动作能够使得回报 <span class="math" role="math" aria-label="数学公式">R(τ)</span> 的期望值最大化。具体来说，我们希望最大化以下期望值：</p>
+<div class="math-display" role="math" aria-label="数学公式">E(R(τ))<sub>τ ∼ P<sub>θ</sub>(τ)</sub> = ∑<sub>τ</sub> R(τ) P<sub>θ</sub>(τ)</div>
+<p>其中：</p>
+<ul>
+<li><span class="math" role="math" aria-label="数学公式">E(R(τ))<sub>τ ∼ P<sub>θ</sub>(τ)</sub></span>：表示在策略 <span class="math" role="math" aria-label="数学公式">P<sub>θ</sub>(τ)</span> 下轨迹 <span class="math" role="math" aria-label="数学公式">τ</span> 的回报 <span class="math" role="math" aria-label="数学公式">R(τ)</span> 的期望值。</li>
+<li><span class="math" role="math" aria-label="数学公式">R(τ)</span>：轨迹 <span class="math" role="math" aria-label="数学公式">τ</span> 的回报，即从起始状态到终止状态获得的所有奖励的总和。</li>
+<li><span class="math" role="math" aria-label="数学公式">τ</span>：表示一条轨迹，即智能体在环境中的状态和动作序列。</li>
+<li><span class="math" role="math" aria-label="数学公式">P<sub>θ</sub>(τ)</span>：在参数 <span class="math" role="math" aria-label="数学公式">θ</span> 下生成轨迹 <span class="math" role="math" aria-label="数学公式">τ</span> 的概率，通常由策略或策略网络确定。</li>
+<li><span class="math" role="math" aria-label="数学公式">θ</span>：策略的参数，控制着策略 <span class="math" role="math" aria-label="数学公式">P<sub>θ</sub></span> 的行为。</li>
+</ul>
+<p>为了找到这个策略，我们使用梯度上升的方法，不断更新策略参数 <span class="math" role="math" aria-label="数学公式">θ</span>，使得 <span class="math" role="math" aria-label="数学公式">E(R(τ))<sub>τ ∼ P<sub>θ</sub>(τ)</sub></span> 不断增大。</p>
+<p>这种学习方式非常有效，因为它不依赖于大量的标注数据，而是通过对环境直接进行交互和反馈进行学习。这使得强化学习在许多需要适应和决策的复杂任务中，比如机器人控制、自动驾驶、金融交易乃至游戏中，都展现出了巨大的潜力。</p>
+<p>而强化学习在大模型中的应用，比如 AlphaGo、AlphaZero 等，更是让人们看到了强化学习在复杂任务中的强大能力。这些模型通过强化学习的方法，不断优化策略，最终在围棋、象棋等游戏中击败了人类顶尖选手，展现出了强化学习在复杂任务中的巨大潜力。</p>
+<p>强化学习也可以用于偏好对齐问题，比如可以让大模型学习模仿人类的交流方式，也会用于自动驾驶等领域。强化学习的应用领域非常广泛，未来也会有更多的应用场景。</p>
+</div>
+<div class="section" id="llm-happy-training-src2-s3"><h2>6.4.3 奖励模型</h2>
+<p>在自然语言处理领域，大语言模型（如Llama 系列、Qwen系列等）已经展现了强大的文本理解和生成能力。然而，这些预训练模型并不总是能直接满足特定的业务需求和人类价值观。为此，人们通常需要对预训练模型进行“指令微调”（Instruction Tuning），即向模型提供特定的指令（prompts）和示例，使其在对话、问答、文本生成等任务中表现得更符合人类期望。</p>
+<p>在完成初步的指令微调后，我们还想要使模型的回答不仅正确，还能最大程度上满足人类的审美、价值观和安全标准。为此，引入了强化学习与人类反馈（Reinforcement Learning from Human Feedback, RLHF）的概念。在 RLHF 中，我们会先从人类标注者那里获得对模型回答的偏好（例如，给出多个模型回答，让人类标注者对它们进行排名），然后通过这些反馈来指导模型学习，从而不断提高模型生成内容与人类偏好的契合度。</p>
+<p>为了在 RLHF 流程中自动对模型的回答进行“打分”（赋予奖励），我们需要构建一个专门的奖励模型（Reward Model）。这个奖励模型会根据人类标注的数据进行训练，并在实际部署中独立对模型输出进行自动评分，从而减少持续人工参与的成本和延迟。</p>
+</div>
+<div class="section" id="llm-happy-training-src2-s4"><h2>6.4.4 数据集构建</h2>
+<p>在构建奖励模型（Reward Model）之前，我们首先需要准备高质量的人类反馈数据集。此数据集的核心目标是为每条给定的提示（prompt）提供多个候选回答（completion），并由人类标注者对这些回答进行细致的评定与排序。通过对回答的对比和筛选，我们得以为机器模型提供明确的参考标准，帮助其进一步学习在给定任务下如何生成更符合人类期望的输出。</p>
+<p>可以按照以下步骤进行数据收集：</p>
+<ol>
+<li>收集初始回答：首先，我们需要从一个已经过基本微调的“大模型”（往往是具有一定指令理解和生成能力的预训练模型）中，为一组精心设计的提示生成多条回答。这些回答将作为后续人类标注工作的基础。</li>
+</ol>
+<ol>
+<li>人工标注与评估：拥有多条候选回答后，我们邀请专业标注人员或众包标注者对每条回答的质量进行评价。这些评估通常会基于一系列预先设计的评价标准，如回答的准确性、完整性、上下文相关性、语言流畅度以及是否遵循道德与安全准则。对不同回答的比较与排序帮助我们识别最佳和最差的回答，从而形成有价值的训练数据。</li>
+</ol>
+<ol>
+<li>数据格式化与整理：标注完成后，我们将数据进行整理与格式化，通常采用 JSON、CSV 或其他便于计算机处理的结构化数据格式。数据集中需明确标识每个问题（prompt）、其对应的多个回答（completions），以及人类标注者对这些回答的选择（如标记为 &quot;chosen&quot; 的最佳答案与 &quot;rejected&quot; 的较差答案）。这些标记信息可直接作为奖励模型学习的监督信号，使其在训练中自动倾向于生成高质量回答。</li>
+</ol>
+<p>下面是一个简单的数据示例，其中展示了两个问题（question）及其对应的回答和人类评价结果。通过 &quot;chosen&quot; 与 &quot;rejected&quot; 字段的对比，我们可以直观地看出哪条回答更为优质。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">json</span></div><pre><code>[
+    {
+        &quot;question&quot;: &quot;Python中的列表是什么？&quot;,
+        &quot;chosen&quot;: &quot;Python中的列表是一种有序的可变容器，允许存储多个元素，并且可以通过索引访问。&quot;,
+        &quot;rejected&quot;: &quot;Python中的列表用于存储数据。&quot;
+    },
+    {
+        &quot;question&quot;: &quot;Python中的元组是什么？&quot;,
+        &quot;chosen&quot;: &quot;Python中的元组是一种有序的不可变容器，允许存储多个元素，并且一旦创建就不能修改。&quot;,
+        &quot;rejected&quot;: &quot;Python中的元组用于存储数据。&quot;
+    }
+]</code></pre></div>
+<p>在上述示例中，人类标注者认为 &quot;chosen&quot; 字段下的回答相对于对应的 &quot;rejected&quot; 回答在描述、准确性和信息量等方面都更为优质。例如，对于列表的定义，&quot;chosen&quot; 答复更清晰地解释了列表的特征（有序、可变、支持索引访问），而非仅仅停留在“用于存储数据”这种笼统描述。</p>
+</div>
+<div class="section" id="llm-happy-training-src2-s5"><h2>7.2.2 奖励模型训练</h2>
+<p>我们可以借助大模型强化学习框架 TRL（Transformer Reinforcement Learning）来训练奖励模型。TRL 是一个基于强化学习的训练框架，旨在通过人类反馈指导模型生成更符合人类期望的回答。在 TRL 中，我们会将奖励模型作为一个独立的组件，用于评估模型生成的回答，并根据评估结果给予奖励或惩罚。</p>
+</div></div>
+<div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/why-fine-tune-small-large-language-models/readme.md</div><p>大家在日常使用Deepseek-R1或者是阿里新发布的Qwen3模型，他们的模型都是能力很强，所提供的API服也都可以满足大家的日常或者是公司开发所需。但大家也可以想一个简单的问题几个简单的问题，如下：</p>
+<ol>
+<li>公司的数据是够敏感，是否需要保密？</li>
+<li>日常使用大模型的任务是否很困难，对推理链是否刚需？</li>
+<li>任务调用的大模型API并发量是多少？每日资金消耗有多少？</li>
+</ol>
+<p>对于问题1，如果公司数据敏感，那我建议不要调用供应商提供的大模型API。就算供应商保证不会拿你们数据做训练，但你们的数据还是泄漏了（会有不必要的风险），建议本地部署大模型。</p>
+<p>对于问题2，如果使用大模型的场景问题很困难并且刚需推理链，那可以使用供应商的API，这样可以保证推理链的上下文不会爆显存。如果问题很简单，没有刚需推理链，那建议本地部署小模型即可。</p>
+<p>对于问题3，如果任务很简单，且调用的大模型API并发量很高，那我建议微调一个特定任务的小模型，本地部署。这样可以满足高并发，并且可以减少资金消耗。（本地部署，默认硬件环境单卡4090）</p>
+<p>看到这里，想必大家已经思考完了以上三个问题，心中有了答案。那我给出一个小小的案例。</p>
+<div class="section" id="llm-happy-training-src3-s1"><h2>微调模型的需求性</h2>
+<p>假如你的公司有一个从投诉的文本中抽取用户信息的任务。比如，你需要从以下文本中抽取用户姓名、住址、邮箱、投诉的问题等等。</p>
+<blockquote>这只是一个小小的案例，数据也是我用大模型批量制造的。真正的投诉数据不会这么“干净、整洁”。</blockquote>
+<p>INPUT：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>龙琳，宁夏回族自治区璐市城东林街g座 955491，邮箱 nafan@example.com。小区垃圾堆积成山，晚上噪音扰人清梦，停车难上加难，简直无法忍受！</code></pre></div>
+<p>OUTPUT：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">json</span></div><pre><code>{
+    &quot;name&quot;: &quot;龙琳&quot;,
+    &quot;address&quot;: &quot;宁夏回族自治区璐市城东林街g座 955491&quot;,
+    &quot;email&quot;: &quot;nafan@example.com&quot;,
+    &quot;question&quot;: &quot;小区垃圾堆积成山，晚上噪音扰人清梦，停车难上加难，简直无法忍受！&quot;
+}</code></pre></div>
+<p>那你当然可以调用 Deepseek最强大的模型R1，也可以调用阿里最新发布最强大的模型 Qwen3-235B-A22B等等，这些模型的信息抽取效果也很非常的棒。</p>
+<p>但有个问题，如果你有几百万条这样的数据要处理，全部调用最新的，最好的大模型可能需要消耗几万块钱。并且，如果这些投诉数据，比如电信投诉数据，电网投诉数据，这些数据是敏感的不可以直接放到外网的。</p>
+<p>所以，综合数据敏感，和资金消耗。最好的选择就是微调一个小模型（如Qwen3-0.6B），既可以保证高并发，可以保证数据不泄漏，保证模型抽取的效果，还可以省钱！！！</p>
+<p>那下面，用一个小案例带大家实操一下，微调Qwen3-0.6B小模型完成文本信息抽取任务。</p>
+</div>
+<div class="section" id="llm-happy-training-src3-s2"><h2>配置环境 下载数据</h2>
+<blockquote>Colab 文件地址：https://colab.research.google.com/drive/18ByY11KVhIy6zWx1uKUjSzqeHTme-TtU?usp=drive_link</blockquote>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>!pip install datasets swanlab -q</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>!wget --no-check-certificate &#39;https://docs.google.com/uc?export=download&amp;id=1a0sf5C209CLW5824TJkUM4olMy0zZWpg&#39; -O fake_sft.json</code></pre></div>
+</div>
+<div class="section" id="llm-happy-training-src3-s3"><h2>处理数据</h2>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>from datasets import Dataset
+import pandas as pd
+from transformers import AutoTokenizer, AutoModelForCausalLM, DataCollatorForSeq2Seq, TrainingArguments, Trainer, GenerationConfig
+from peft import LoraConfig, TaskType, get_peft_model
+import torch</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 将JSON文件转换为CSV文件
+df = pd.read_json(&#39;fake_sft.json&#39;)
+ds = Dataset.from_pandas(df)
+ds[:3]</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>model_id = &quot;Qwen/Qwen3-0.6B&quot;</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=False)
+tokenizer</code></pre></div>
+<p>对大语言模型进行 <code>supervised-finetuning</code>（<code>sft</code>，有监督微调）的数据格式如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">json</span></div><pre><code>{
+  &quot;instruction&quot;: &quot;回答以下用户问题，仅输出答案。&quot;,
+  &quot;input&quot;: &quot;1+1等于几?&quot;,
+  &quot;output&quot;: &quot;2&quot;
+}</code></pre></div>
+<p>其中，<code>instruction</code> 是用户指令，告知模型其需要完成的任务；<code>input</code> 是用户输入，是完成用户指令所必须的输入内容；<code>output</code> 是模型应该给出的输出。</p>
+<p>有监督微调的目标是让模型具备理解并遵循用户指令的能力。因此，在构建数据集时，我们应针对我们的目标任务，针对性构建数据。比如，如果我们的目标是通过大量人物的对话数据微调得到一个能够 role-play 甄嬛对话风格的模型，因此在该场景下的数据示例如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">json</span></div><pre><code>{
+  &quot;instruction&quot;: &quot;你父亲是谁？&quot;,
+  &quot;input&quot;: &quot;&quot;,
+  &quot;output&quot;: &quot;家父是大理寺少卿甄远道。&quot;
+}</code></pre></div>
+<p><code>Qwen3</code> 采用的 <code>Chat Template</code>格式如下：</p>
+<p>由于 <code>Qwen3</code> 是混合推理模型，因此可以手动选择开启思考模式</p>
+<p>不开启 <code>thinking mode</code></p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>messages = [
+    {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;You are a helpful AI&quot;},
+    {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;How are you?&quot;},
+    {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;I&#39;m fine, think you. and you?&quot;},
+]
+
+text = tokenizer.apply_chat_template(
+    messages,
+    tokenize=False,
+    add_generation_prompt=True,
+    enable_thinking=False
+)
+print(text)</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>&lt;|im_start|&gt;system
+You are a helpful AI&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+How are you?&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+I&#39;m fine, think you. and you?&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;</code></pre></div>
+<p><code>LoRA</code>（<code>Low-Rank Adaptation</code>）训练的数据是需要经过格式化、编码之后再输入给模型进行训练的，我们需要先将输入文本编码为 <code>input_ids</code>，将输出文本编码为 <code>labels</code>，编码之后的结果是向量。我们首先定义一个预处理函数，这个函数用于对每一个样本，同时编码其输入、输出文本并返回一个编码后的字典：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def process_func(example):
+    MAX_LENGTH = 1024 # 设置最大序列长度为1024个token
+    input_ids, attention_mask, labels = [], [], [] # 初始化返回值
+    # 适配chat_template
+    instruction = tokenizer(
+        f&quot;&lt;s&gt;&lt;|im_start|&gt;system\n{example[&#39;system&#39;]}&lt;|im_end|&gt;\n&quot;
+        f&quot;&lt;|im_start|&gt;user\n{example[&#39;instruction&#39;] + example[&#39;input&#39;]}&lt;|im_end|&gt;\n&quot;
+        f&quot;&lt;|im_start|&gt;assistant\n&lt;think&gt;\n\n&lt;/think&gt;\n\n&quot;,
+        add_special_tokens=False
+    )
+    response = tokenizer(f&quot;{example[&#39;output&#39;]}&quot;, add_special_tokens=False)
+    # 将instructio部分和response部分的input_ids拼接，并在末尾添加eos token作为标记结束的token
+    input_ids = instruction[&quot;input_ids&quot;] + response[&quot;input_ids&quot;] + [tokenizer.pad_token_id]
+    # 注意力掩码，表示模型需要关注的位置
+    attention_mask = instruction[&quot;attention_mask&quot;] + response[&quot;attention_mask&quot;] + [1]
+    # 对于instruction，使用-100表示这些位置不计算loss（即模型不需要预测这部分）
+    labels = [-100] * len(instruction[&quot;input_ids&quot;]) + response[&quot;input_ids&quot;] + [tokenizer.pad_token_id]
+    if len(input_ids) &gt; MAX_LENGTH:  # 超出最大序列长度截断
+        input_ids = input_ids[:MAX_LENGTH]
+        attention_mask = attention_mask[:MAX_LENGTH]
+        labels = labels[:MAX_LENGTH]
+    return {
+        &quot;input_ids&quot;: input_ids,
+        &quot;attention_mask&quot;: attention_mask,
+        &quot;labels&quot;: labels
+    }
+</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>tokenized_id = ds.map(process_func, remove_columns=ds.column_names)
+tokenized_id</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>tokenizer.decode(tokenized_id[0][&#39;input_ids&#39;])</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>tokenizer.decode(list(filter(lambda x: x != -100, tokenized_id[1][&quot;labels&quot;])))</code></pre></div>
+</div>
+<div class="section" id="llm-happy-training-src3-s4"><h2>加载模型</h2>
+<p>加载模型并配置LoraConfig</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>model = AutoModelForCausalLM.from_pretrained(model_id, device_map=&quot;auto&quot;,torch_dtype=torch.bfloat16)
+model</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>Qwen3ForCausalLM(
+  (model): Qwen3Model(
+    (embed_tokens): Embedding(151936, 1024)
+    (layers): ModuleList(
+      (0-27): 28 x Qwen3DecoderLayer(
+        (self_attn): Qwen3Attention(
+          (q_proj): Linear(in_features=1024, out_features=2048, bias=False)
+          (k_proj): Linear(in_features=1024, out_features=1024, bias=False)
+          (v_proj): Linear(in_features=1024, out_features=1024, bias=False)
+          (o_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (q_norm): Qwen3RMSNorm((128,), eps=1e-06)
+          (k_norm): Qwen3RMSNorm((128,), eps=1e-06)
+        )
+        (mlp): Qwen3MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3072, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3072, bias=False)
+          (down_proj): Linear(in_features=3072, out_features=1024, bias=False)
+          (act_fn): SiLU()
+        )
+        (input_layernorm): Qwen3RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3RMSNorm((1024,), eps=1e-06)
+      )
+    )
+    (norm): Qwen3RMSNorm((1024,), eps=1e-06)
+    (rotary_emb): Qwen3RotaryEmbedding()
+  )
+  (lm_head): Linear(in_features=1024, out_features=151936, bias=False)
+)</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>model.enable_input_require_grads() # 开启梯度检查点时，要执行该方法</code></pre></div>
+</div>
+<div class="section" id="llm-happy-training-src3-s5"><h2>Lora Config</h2>
+<p><code>LoraConfig</code>这个类中可以设置很多参数，比较重要的如下</p>
+<ul>
+<li><code>task_type</code>：模型类型，现在绝大部分 <code>decoder_only</code> 的模型都是因果语言模型 <code>CAUSAL_LM</code></li>
+<li><code>target_modules</code>：需要训练的模型层的名字，主要就是 <code>attention</code>部分的层，不同的模型对应的层的名字不同</li>
+<li><code>r</code>：<code>LoRA</code> 的秩，决定了低秩矩阵的维度，较小的 <code>r</code> 意味着更少的参数</li>
+<li><code>lora_alpha</code>：缩放参数，与 <code>r</code> 一起决定了 <code>LoRA</code> 更新的强度。实际缩放比例为<code>lora_alpha/r</code>，在当前示例中是 <code>32 / 8 = 4</code> 倍</li>
+<li><code>lora_dropout</code>：应用于 <code>LoRA</code> 层的 <code>dropout rate</code>，用于防止过拟合</li>
+</ul>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>from peft import LoraConfig, TaskType, get_peft_model
+
+config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    target_modules=[&quot;q_proj&quot;, &quot;k_proj&quot;, &quot;v_proj&quot;, &quot;o_proj&quot;, &quot;gate_proj&quot;, &quot;up_proj&quot;, &quot;down_proj&quot;],
+    inference_mode=False, # 训练模式
+    r=8, # Lora 秩
+    lora_alpha=32, # Lora alaph，具体作用参见 Lora 原理
+    lora_dropout=0.1# Dropout 比例
+)
+config</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>model = get_peft_model(model, config)
+config</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>model.print_trainable_parameters()  # 模型参数训练量只有0.8395%</code></pre></div>
+<blockquote>trainable params: 5,046,272 || all params: 601,096,192 || trainable%: 0.8395</blockquote>
+</div>
+<div class="section" id="llm-happy-training-src3-s6"><h2>Training Arguments</h2>
+<ul>
+<li><code>output_dir</code>：模型的输出路径</li>
+<li><code>per_device_train_batch_size</code>：每张卡上的 <code>batch_size</code></li>
+<li><code>gradient_accumulation_steps</code>: 梯度累计</li>
+<li><code>num_train_epochs</code>：顾名思义 <code>epoch</code></li>
+</ul>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>args = TrainingArguments(
+    output_dir=&quot;Qwen3_instruct_lora&quot;,
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=4,
+    logging_steps=1,
+    num_train_epochs=3,
+    save_steps=50,
+    learning_rate=1e-4,
+    save_on_each_node=True,
+    gradient_checkpointing=True,
+    report_to=&quot;none&quot;,
+)</code></pre></div>
+</div>
+<div class="section" id="llm-happy-training-src3-s7"><h2>SwanLab 简介</h2>
+<p><a href="https://github.com/swanhubx/swanlab" target="_blank" rel="noreferrer">SwanLab</a> 是一个开源的模型训练记录工具，面向 AI 研究者，提供了训练可视化、自动日志记录、超参数记录、实验对比、多人协同等功能。在 <code>SwanLab</code> 上，研究者能基于直观的可视化图表发现训练问题，对比多个实验找到研究灵感，并通过在线链接的分享与基于组织的多人协同训练，打破团队沟通的壁垒。</p>
+<p><strong>为什么要记录训练</strong></p>
+<p>相较于软件开发，模型训练更像一个实验科学。一个品质优秀的模型背后，往往是成千上万次实验。研究者需要不断尝试、记录、对比，积累经验，才能找到最佳的模型结构、超参数与数据配比。在这之中，如何高效进行记录与对比，对于研究效率的提升至关重要。</p>
+<p><code>(2) Use an existing SwanLab account</code> 并使用 private API Key 登录</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import swanlab
+from swanlab.integration.transformers import SwanLabCallback
+
+# 实例化SwanLabCallback
+swanlab_callback = SwanLabCallback(
+    project=&quot;Qwen3-Lora&quot;,  # 注意修改
+    experiment_name=&quot;Qwen3-8B-LoRA-experiment&quot;  # 注意修改
+)</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import swanlab
+from swanlab.integration.transformers import SwanLabCallback
+
+# 实例化SwanLabCallback
+swanlab_callback = SwanLabCallback(
+    project=&quot;Qwen3-Lora&quot;,
+    experiment_name=&quot;Qwen3-0.6B-extarct-lora-2&quot;
+)</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>trainer = Trainer(
+    model=model,
+    args=args,
+    train_dataset=tokenized_id,
+    data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True),
+    callbacks=[swanlab_callback]
+)</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>trainer.train()</code></pre></div>
+</div>
+<div class="section" id="llm-happy-training-src3-s8"><h2>测试文本</h2>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>prompt = &quot;龙琳   ，宁夏回族自治区璐市城东林街g座 955491，nafan@example.com。小区垃圾堆积成山，晚上噪音扰人清梦，停车难上加难，简直无法忍受！太插件了阿萨德看见啊啥的健康仨都会撒娇看到撒谎的、&quot;
+
+messages = [
+    {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;将文本中的name、address、email、question提取出来，以json格式输出，字段为name、address、email、question，值为文本中提取出来的内容。&quot;},
+    {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: prompt}
+]
+
+inputs = tokenizer.apply_chat_template(messages,
+                                       add_generation_prompt=True,
+                                       tokenize=True,
+                                       return_tensors=&quot;pt&quot;,
+                                       return_dict=True,
+                                       enable_thinking=False).to(&#39;cuda&#39;)
+
+gen_kwargs = {&quot;max_length&quot;: 2500, &quot;do_sample&quot;: True, &quot;top_k&quot;: 1}
+with torch.no_grad():
+    outputs = model.generate(**inputs, **gen_kwargs)
+    outputs = outputs[:, inputs[&#39;input_ids&#39;].shape[1]:]
+    print(tokenizer.decode(outputs[0], skip_special_tokens=True))</code></pre></div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">json</span></div><pre><code>{
+    &quot;name&quot;: &quot;龙琳&quot;,
+    &quot;address&quot;: &quot;宁夏回族自治区璐市城东林街g座 955491&quot;,
+    &quot;email&quot;: &quot;nafan@example.com&quot;,
+    &quot;question&quot;: &quot;小区垃圾堆积成山，晚上噪音扰人清梦，停车难上加难，简直无法忍受！太插件了阿萨德看见啊啥的健康仨都会撒娇看到撒谎的、&quot;
+}</code></pre></div>
+</div></div><div class="footer">Happy-LLM 融合内容 · 建议结合左侧路径和术语卡交叉阅读</div></div></section>

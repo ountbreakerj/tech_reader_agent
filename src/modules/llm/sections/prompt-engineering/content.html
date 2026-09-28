@@ -1,0 +1,103 @@
+<section class="llm-mod llm-m-prompt-engineering" id="llm-prompt-engineering"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>✍️ 模块0：Prompt Engineering</h1>
+  <p>与大模型对话的艺术与科学</p>
+</div><div class="section" id="llm-prompt-engineering-s1">
+    <h2>Prompt基础</h2>
+    
+    <p>Prompt是与大模型交互的输入文本，其质量直接决定输出质量。</p>
+    <h3>Prompt四大组成要素</h3>
+    <table>
+    <tr><th>要素</th><th>说明</th><th>示例</th></tr>
+    <tr><td>指令 (Instruction)</td><td>告诉模型要做什么</td><td>将以下文本翻译成英文</td></tr>
+<tr><td>上下文 (Context)</td><td>提供背景信息</td><td>你是一位资深Python开发者</td></tr>
+<tr><td>输入 (Input)</td><td>待处理的数据</td><td>自然语言处理是AI的分支...</td></tr>
+<tr><td>输出格式 (Format)</td><td>指定输出结构</td><td>以JSON格式输出</td></tr>
+
+  </table>
+    <h3>Zero-shot vs Few-shot</h3>
+    <div class="compare">
+    <div class="compare-card left"><h4>Zero-shot</h4><ul><li>不提供示例</li><li>直接给出任务指令</li><li>依赖模型预训练知识</li><li>适合简单任务</li></ul></div>
+    <div class="compare-card right"><h4>Few-shot</h4><ul><li>提供2-5个示例</li><li>让模型从示例中学习模式</li><li>显著提升复杂任务效果</li><li>示例选择很关键</li></ul></div>
+  </div>
+  </div><div class="section" id="llm-prompt-engineering-s2">
+    <h2>Prompt设计原则</h2>
+    
+    <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>清晰具体</strong><br>避免模糊指令。差："写点东西" → 好："写一篇200字的产品介绍"</div>
+  </div><div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>角色设定</strong><br>给模型一个角色："你是一位资深数据科学家"</div>
+  </div><div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>分步骤指令</strong><br>复杂任务拆分为步骤："第一步...第二步..."</div>
+  </div><div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>指定输出格式</strong><br>"以Markdown表格输出" / "输出JSON" / "用中文回答"</div>
+  </div><div class="step">
+    <div class="step-num">5</div>
+    <div class="step-content"><strong>提供示例</strong><br>给出输入输出示例，让模型理解期望</div>
+  </div><div class="step">
+    <div class="step-num">6</div>
+    <div class="step-content"><strong>迭代优化</strong><br>根据输出不断调整Prompt，直到满意</div>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 Prompt Engineering的核心是<strong>明确性</strong>：你越清楚地表达需求，模型越能准确执行。</p>
+  </div>
+  </div><div class="section" id="llm-prompt-engineering-s3">
+    <h2>高级技巧</h2>
+    
+    <h3>文本摘要Prompt模板</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>prompt = """
+请对以下文本进行摘要，要求：
+1. 摘要不超过100字
+2. 保留关键数据和结论
+3. 使用中文
+
+原文：{text}
+"""
+
+# 使用OpenAI API
+from openai import OpenAI
+client = OpenAI()
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": prompt.format(text=article)}],
+)</code></pre>
+  </div>
+    <h3>信息抽取Prompt</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>prompt = """
+从以下文本中提取结构化信息，以JSON格式输出：
+{"company": "公司名", "revenue": "营收", "year": "年份"}
+
+文本：{text}
+"""
+
+# 输出示例：
+# {"company": "阿里巴巴", "revenue": "9411亿元", "year": "2024"}</code></pre>
+  </div>
+  </div><div class="section" id="llm-prompt-engineering-s4">
+    <h2>常见陷阱与最佳实践</h2>
+    
+    <table>
+    <tr><th>陷阱</th><th>表现</th><th>解决方案</th></tr>
+    <tr><td>Prompt注入</td><td>用户输入覆盖系统指令</td><td>输入验证、分隔符、指令防护</td></tr>
+<tr><td>Token限制</td><td>输入太长被截断</td><td>分段处理、摘要后输入</td></tr>
+<tr><td>幻觉</td><td>模型编造不存在的事实</td><td>提供上下文、要求引用来源</td></tr>
+<tr><td>格式不稳定</td><td>有时输出JSON有时输出文本</td><td>明确格式要求+后处理校验</td></tr>
+
+  </table>
+    <div class="callout callout-warn">
+    <p>⚠️ 永远不要完全信任LLM的输出，尤其是涉及事实性内容时。始终需要人工验证或RAG增强。</p>
+  </div>
+  </div>
+</div></section>

@@ -1,0 +1,938 @@
+{
+  "generatedAt": "2026-09-14T08:22:35.486Z",
+  "modules": [
+    {
+      "key": "book",
+      "route": "#/book",
+      "title": "深入理解 AI Agent",
+      "subtitle": "设计原理与工程实践 · 全书十章",
+      "config": "src/modules/book/module.json",
+      "content": [
+        {
+          "id": "bk-intro",
+          "file": "src/modules/book/chapters/bk-intro/content.html"
+        },
+        {
+          "id": "bk-ch1",
+          "file": "src/modules/book/chapters/bk-ch1/content.html"
+        },
+        {
+          "id": "bk-ch2",
+          "file": "src/modules/book/chapters/bk-ch2/content.html"
+        },
+        {
+          "id": "bk-ch3",
+          "file": "src/modules/book/chapters/bk-ch3/content.html"
+        },
+        {
+          "id": "bk-ch4",
+          "file": "src/modules/book/chapters/bk-ch4/content.html"
+        },
+        {
+          "id": "bk-ch5",
+          "file": "src/modules/book/chapters/bk-ch5/content.html"
+        },
+        {
+          "id": "bk-ch6",
+          "file": "src/modules/book/chapters/bk-ch6/content.html"
+        },
+        {
+          "id": "bk-ch7",
+          "file": "src/modules/book/chapters/bk-ch7/content.html"
+        },
+        {
+          "id": "bk-ch8",
+          "file": "src/modules/book/chapters/bk-ch8/content.html"
+        },
+        {
+          "id": "bk-ch9",
+          "file": "src/modules/book/chapters/bk-ch9/content.html"
+        },
+        {
+          "id": "bk-ch10",
+          "file": "src/modules/book/chapters/bk-ch10/content.html"
+        },
+        {
+          "id": "bk-after",
+          "file": "src/modules/book/chapters/bk-after/content.html"
+        },
+        {
+          "id": "bk-refs",
+          "file": "src/modules/book/chapters/bk-refs/content.html"
+        }
+      ],
+      "styles": [],
+      "tocAnchors": [
+        "bk-intro",
+        "bk-intro-s1",
+        "bk-intro-s2",
+        "bk-intro-s3",
+        "bk-intro-s4",
+        "bk-ch1",
+        "bk-ch1-s1",
+        "bk-ch1-s1-1",
+        "bk-ch1-s1-2",
+        "bk-ch1-s1-3",
+        "bk-ch1-s1-4",
+        "bk-ch1-s1-5",
+        "bk-ch1-s2",
+        "bk-ch1-s2-6",
+        "bk-ch1-s2-7",
+        "bk-ch1-s2-8",
+        "bk-ch1-s2-9",
+        "bk-ch1-s2-10",
+        "bk-ch1-s2-11",
+        "bk-ch1-s3",
+        "bk-ch1-s4",
+        "bk-ch1-s5",
+        "bk-ch2",
+        "bk-ch2-s1",
+        "bk-ch2-s2",
+        "bk-ch2-s2-1",
+        "bk-ch2-s2-2",
+        "bk-ch2-s2-3",
+        "bk-ch2-s2-4",
+        "bk-ch2-s2-5",
+        "bk-ch2-s3",
+        "bk-ch2-s3-6",
+        "bk-ch2-s3-7",
+        "bk-ch2-s3-8",
+        "bk-ch2-s3-9",
+        "bk-ch2-s3-10",
+        "bk-ch2-s4",
+        "bk-ch2-s4-11",
+        "bk-ch2-s4-12",
+        "bk-ch2-s4-13",
+        "bk-ch2-s4-14",
+        "bk-ch2-s4-15",
+        "bk-ch2-s4-16",
+        "bk-ch2-s4-17",
+        "bk-ch2-s5",
+        "bk-ch2-s5-18",
+        "bk-ch2-s5-19",
+        "bk-ch2-s5-20",
+        "bk-ch2-s5-21",
+        "bk-ch2-s6",
+        "bk-ch2-s6-22",
+        "bk-ch2-s6-23",
+        "bk-ch2-s6-24",
+        "bk-ch2-s6-25",
+        "bk-ch2-s7",
+        "bk-ch2-s7-26",
+        "bk-ch2-s7-27",
+        "bk-ch2-s7-28",
+        "bk-ch2-s7-29",
+        "bk-ch2-s7-30",
+        "bk-ch2-s7-31",
+        "bk-ch2-s8",
+        "bk-ch2-s9",
+        "bk-ch3",
+        "bk-ch3-s1",
+        "bk-ch3-s1-1",
+        "bk-ch3-s1-2",
+        "bk-ch3-s1-3",
+        "bk-ch3-s1-4",
+        "bk-ch3-s1-5",
+        "bk-ch3-s1-6",
+        "bk-ch3-s1-7",
+        "bk-ch3-s1-8",
+        "bk-ch3-s2",
+        "bk-ch3-s2-9",
+        "bk-ch3-s2-10",
+        "bk-ch3-s2-11",
+        "bk-ch3-s2-12",
+        "bk-ch3-s3",
+        "bk-ch3-s3-13",
+        "bk-ch3-s3-14",
+        "bk-ch3-s3-15",
+        "bk-ch3-s3-16",
+        "bk-ch3-s3-17",
+        "bk-ch3-s3-18",
+        "bk-ch3-s3-19",
+        "bk-ch3-s4",
+        "bk-ch3-s5",
+        "bk-ch4",
+        "bk-ch4-s1",
+        "bk-ch4-s2",
+        "bk-ch4-s2-1",
+        "bk-ch4-s2-2",
+        "bk-ch4-s2-3",
+        "bk-ch4-s3",
+        "bk-ch4-s4",
+        "bk-ch4-s4-4",
+        "bk-ch4-s4-5",
+        "bk-ch4-s4-6",
+        "bk-ch4-s5",
+        "bk-ch4-s5-7",
+        "bk-ch4-s6",
+        "bk-ch4-s7",
+        "bk-ch4-s8",
+        "bk-ch4-s9",
+        "bk-ch5",
+        "bk-ch5-s1",
+        "bk-ch5-s1-1",
+        "bk-ch5-s1-2",
+        "bk-ch5-s1-3",
+        "bk-ch5-s1-4",
+        "bk-ch5-s1-5",
+        "bk-ch5-s1-6",
+        "bk-ch5-s1-7",
+        "bk-ch5-s1-8",
+        "bk-ch5-s1-9",
+        "bk-ch5-s2",
+        "bk-ch5-s2-10",
+        "bk-ch5-s2-11",
+        "bk-ch5-s2-12",
+        "bk-ch5-s2-13",
+        "bk-ch5-s2-14",
+        "bk-ch5-s2-15",
+        "bk-ch5-s3",
+        "bk-ch5-s4",
+        "bk-ch6",
+        "bk-ch6-s1",
+        "bk-ch6-s2",
+        "bk-ch6-s2-1",
+        "bk-ch6-s2-2",
+        "bk-ch6-s2-3",
+        "bk-ch6-s2-4",
+        "bk-ch6-s2-5",
+        "bk-ch6-s2-6",
+        "bk-ch6-s2-7",
+        "bk-ch6-s2-8",
+        "bk-ch6-s3",
+        "bk-ch6-s3-9",
+        "bk-ch6-s3-10",
+        "bk-ch6-s3-11",
+        "bk-ch6-s3-12",
+        "bk-ch6-s3-13",
+        "bk-ch6-s3-14",
+        "bk-ch6-s4",
+        "bk-ch6-s4-15",
+        "bk-ch6-s4-16",
+        "bk-ch6-s4-17",
+        "bk-ch6-s4-18",
+        "bk-ch6-s4-19",
+        "bk-ch6-s5",
+        "bk-ch6-s5-20",
+        "bk-ch6-s5-21",
+        "bk-ch6-s5-22",
+        "bk-ch6-s5-23",
+        "bk-ch6-s5-24",
+        "bk-ch6-s5-25",
+        "bk-ch6-s5-26",
+        "bk-ch6-s6",
+        "bk-ch6-s7",
+        "bk-ch7",
+        "bk-ch7-s1",
+        "bk-ch7-s1-1",
+        "bk-ch7-s1-2",
+        "bk-ch7-s2",
+        "bk-ch7-s2-3",
+        "bk-ch7-s2-4",
+        "bk-ch7-s3",
+        "bk-ch7-s3-5",
+        "bk-ch7-s3-6",
+        "bk-ch7-s4",
+        "bk-ch7-s4-7",
+        "bk-ch7-s4-8",
+        "bk-ch7-s4-9",
+        "bk-ch7-s4-10",
+        "bk-ch7-s4-11",
+        "bk-ch7-s4-12",
+        "bk-ch7-s5",
+        "bk-ch7-s5-13",
+        "bk-ch7-s5-14",
+        "bk-ch7-s5-15",
+        "bk-ch7-s5-16",
+        "bk-ch7-s6",
+        "bk-ch7-s6-17",
+        "bk-ch7-s6-18",
+        "bk-ch7-s6-19",
+        "bk-ch7-s6-20",
+        "bk-ch7-s7",
+        "bk-ch7-s8",
+        "bk-ch7-s9",
+        "bk-ch7-s9-21",
+        "bk-ch7-s9-22",
+        "bk-ch7-s9-23",
+        "bk-ch7-s9-24",
+        "bk-ch7-s10",
+        "bk-ch7-s10-25",
+        "bk-ch7-s10-26",
+        "bk-ch7-s10-27",
+        "bk-ch7-s10-28",
+        "bk-ch7-s10-29",
+        "bk-ch7-s10-30",
+        "bk-ch7-s11",
+        "bk-ch7-s11-31",
+        "bk-ch7-s12",
+        "bk-ch7-s13",
+        "bk-ch8",
+        "bk-ch8-s1",
+        "bk-ch8-s1-1",
+        "bk-ch8-s1-2",
+        "bk-ch8-s1-3",
+        "bk-ch8-s1-4",
+        "bk-ch8-s1-5",
+        "bk-ch8-s2",
+        "bk-ch8-s2-6",
+        "bk-ch8-s2-7",
+        "bk-ch8-s3",
+        "bk-ch8-s4",
+        "bk-ch8-s4-8",
+        "bk-ch8-s5",
+        "bk-ch8-s6",
+        "bk-ch8-s7",
+        "bk-ch8-s8",
+        "bk-ch8-s9",
+        "bk-ch8-s9-9",
+        "bk-ch8-s10",
+        "bk-ch8-s10-10",
+        "bk-ch8-s10-11",
+        "bk-ch8-s10-12",
+        "bk-ch8-s11",
+        "bk-ch8-s11-13",
+        "bk-ch8-s11-14",
+        "bk-ch8-s12",
+        "bk-ch8-s12-15",
+        "bk-ch8-s12-16",
+        "bk-ch8-s12-17",
+        "bk-ch8-s12-18",
+        "bk-ch8-s13",
+        "bk-ch8-s13-19",
+        "bk-ch8-s13-20",
+        "bk-ch8-s14",
+        "bk-ch8-s14-21",
+        "bk-ch8-s14-22",
+        "bk-ch8-s14-23",
+        "bk-ch8-s15",
+        "bk-ch8-s16",
+        "bk-ch8-s17",
+        "bk-ch9",
+        "bk-ch9-s1",
+        "bk-ch9-s2",
+        "bk-ch9-s2-1",
+        "bk-ch9-s2-2",
+        "bk-ch9-s2-3",
+        "bk-ch9-s2-4",
+        "bk-ch9-s2-5",
+        "bk-ch9-s3",
+        "bk-ch9-s3-6",
+        "bk-ch9-s3-7",
+        "bk-ch9-s3-8",
+        "bk-ch9-s4",
+        "bk-ch9-s5",
+        "bk-ch10",
+        "bk-ch10-s1",
+        "bk-ch10-s1-1",
+        "bk-ch10-s1-2",
+        "bk-ch10-s2",
+        "bk-ch10-s3",
+        "bk-ch10-s4",
+        "bk-ch10-s4-3",
+        "bk-ch10-s4-4",
+        "bk-ch10-s4-5",
+        "bk-ch10-s4-6",
+        "bk-ch10-s4-7",
+        "bk-ch10-s4-8",
+        "bk-ch10-s5",
+        "bk-ch10-s5-9",
+        "bk-ch10-s5-10",
+        "bk-ch10-s5-11",
+        "bk-ch10-s5-12",
+        "bk-ch10-s5-13",
+        "bk-ch10-s5-14",
+        "bk-ch10-s6",
+        "bk-ch10-s6-15",
+        "bk-ch10-s6-16",
+        "bk-ch10-s6-17",
+        "bk-ch10-s6-18",
+        "bk-ch10-s6-19",
+        "bk-ch10-s6-20",
+        "bk-ch10-s7",
+        "bk-ch10-s8",
+        "bk-after",
+        "bk-after-s1",
+        "bk-after-s2",
+        "bk-refs",
+        "bk-refs-s1",
+        "bk-refs-s2",
+        "bk-refs-s3",
+        "bk-refs-s4",
+        "bk-refs-s5",
+        "bk-refs-s6",
+        "bk-refs-s7",
+        "bk-refs-s8",
+        "bk-refs-s9",
+        "bk-refs-s10"
+      ]
+    },
+    {
+      "key": "dsh",
+      "route": "#/dsh",
+      "title": "DSH Harness",
+      "subtitle": "DeepSeek Harness · 交互式学习手册",
+      "config": "src/modules/dsh/module.json",
+      "content": [
+        {
+          "id": "dsh-home",
+          "file": "src/modules/dsh/home.html"
+        },
+        {
+          "id": "dsh",
+          "file": "src/modules/dsh/content.html"
+        }
+      ],
+      "styles": [
+        "src/modules/dsh/dsh.css"
+      ],
+      "tocAnchors": [
+        "dsh-home",
+        "s0",
+        "s1",
+        "s2",
+        "s3",
+        "s4",
+        "s5",
+        "s6",
+        "s7",
+        "s8",
+        "s9",
+        "s10",
+        "s11",
+        "s12",
+        "s13"
+      ]
+    },
+    {
+      "key": "harness",
+      "route": "#/harness",
+      "title": "Harness",
+      "subtitle": "Codex 与 DSH 的运行原理",
+      "config": "src/modules/harness/module.json",
+      "content": [
+        {
+          "id": "harness-home",
+          "file": "src/modules/harness/content.html"
+        }
+      ],
+      "styles": [
+        "src/modules/harness/harness.css"
+      ],
+      "tocAnchors": [
+        "harness-home",
+        "harness-meaning",
+        "harness-compare"
+      ]
+    },
+    {
+      "key": "codex-harness",
+      "route": "#/codex-harness",
+      "title": "Codex Harness",
+      "subtitle": "用 Python 深入状态、并发与失败处理",
+      "config": "src/modules/codex-harness/module.json",
+      "content": [
+        {
+          "id": "cx-home",
+          "file": "src/modules/codex-harness/content.html"
+        }
+      ],
+      "styles": [
+        "src/modules/codex-harness/codex-harness.css"
+      ],
+      "tocAnchors": [
+        "cx-home",
+        "cx-loop",
+        "cx-context",
+        "cx-tools",
+        "cx-permissions",
+        "cx-history",
+        "cx-compact",
+        "cx-extensions",
+        "cx-example",
+        "cx-stream",
+        "cx-process",
+        "cx-retry",
+        "cx-lab",
+        "cx-source-map"
+      ]
+    },
+    {
+      "key": "lg",
+      "route": "#/langgraph",
+      "title": "LangGraph Sub-Agents 实战教程",
+      "subtitle": "从零构建多 Agent 工作流",
+      "config": "src/modules/langgraph/module.json",
+      "content": [
+        {
+          "id": "langgraph",
+          "file": "src/modules/langgraph/content.html"
+        }
+      ],
+      "styles": [
+        "src/modules/langgraph/langgraph.css"
+      ],
+      "tocAnchors": [
+        "lg-home",
+        "lg-s1",
+        "lg-s2",
+        "lg-menu-core",
+        "s3-1",
+        "s3-2",
+        "s3-3",
+        "s3-4",
+        "s3-5",
+        "s3-6",
+        "s-cheat-lc",
+        "s-cheat-lg",
+        "lg-s4",
+        "lg-menu-practice",
+        "prac-s1",
+        "prac-s2",
+        "prac-s3-1",
+        "prac-s3-2",
+        "prac-s3-3",
+        "prac-s3-4",
+        "prac-s3-5",
+        "prac-s3-6",
+        "prac-lc",
+        "prac-lg",
+        "prac-s4",
+        "lg-menu-codegen",
+        "s5-1",
+        "s5-2",
+        "s5-3",
+        "s5-4",
+        "s5-5",
+        "s5-6",
+        "s5-7",
+        "s5-8",
+        "lg-menu-advanced",
+        "s-adv-1",
+        "s-adv-2",
+        "s-adv-3",
+        "s-adv-4",
+        "s-adv-5",
+        "s-adv-6",
+        "lg-menu-cases",
+        "s-case-1",
+        "s-case-2",
+        "s-case-3",
+        "lg-s7"
+      ]
+    },
+    {
+      "key": "llm",
+      "route": "#/llm",
+      "title": "LLM 训练与应用",
+      "subtitle": "系统学习指南 · 65 个模块 · 八大领域 · Happy-LLM 融合版",
+      "config": "src/modules/llm/module.json",
+      "content": [
+        {
+          "id": "llm-home",
+          "file": "src/modules/llm/sections/home/content.html"
+        },
+        {
+          "id": "llm-mysql",
+          "file": "src/modules/llm/sections/mysql/content.html"
+        },
+        {
+          "id": "llm-postgresql",
+          "file": "src/modules/llm/sections/postgresql/content.html"
+        },
+        {
+          "id": "llm-milvus",
+          "file": "src/modules/llm/sections/milvus/content.html"
+        },
+        {
+          "id": "llm-db-selection",
+          "file": "src/modules/llm/sections/db-selection/content.html"
+        },
+        {
+          "id": "llm-db-integration",
+          "file": "src/modules/llm/sections/db-integration/content.html"
+        },
+        {
+          "id": "llm-langchain-basics",
+          "file": "src/modules/llm/sections/langchain-basics/content.html"
+        },
+        {
+          "id": "llm-lcel",
+          "file": "src/modules/llm/sections/lcel/content.html"
+        },
+        {
+          "id": "llm-langgraph-core",
+          "file": "src/modules/llm/sections/langgraph-core/content.html"
+        },
+        {
+          "id": "llm-agent-tools",
+          "file": "src/modules/llm/sections/agent-tools/content.html"
+        },
+        {
+          "id": "llm-hitl-memory",
+          "file": "src/modules/llm/sections/hitl-memory/content.html"
+        },
+        {
+          "id": "llm-streaming-deploy",
+          "file": "src/modules/llm/sections/streaming-deploy/content.html"
+        },
+        {
+          "id": "llm-data-cleaning",
+          "file": "src/modules/llm/sections/data-cleaning/content.html"
+        },
+        {
+          "id": "llm-dataset",
+          "file": "src/modules/llm/sections/dataset/content.html"
+        },
+        {
+          "id": "llm-architecture",
+          "file": "src/modules/llm/sections/architecture/content.html"
+        },
+        {
+          "id": "llm-transformer-panorama",
+          "file": "src/modules/llm/sections/transformer-panorama/content.html"
+        },
+        {
+          "id": "llm-classic-arch",
+          "file": "src/modules/llm/sections/classic-arch/content.html"
+        },
+        {
+          "id": "llm-modern-arch",
+          "file": "src/modules/llm/sections/modern-arch/content.html"
+        },
+        {
+          "id": "llm-model-selection",
+          "file": "src/modules/llm/sections/model-selection/content.html"
+        },
+        {
+          "id": "llm-training",
+          "file": "src/modules/llm/sections/training/content.html"
+        },
+        {
+          "id": "llm-hyperparameter",
+          "file": "src/modules/llm/sections/hyperparameter/content.html"
+        },
+        {
+          "id": "llm-monitoring",
+          "file": "src/modules/llm/sections/monitoring/content.html"
+        },
+        {
+          "id": "llm-distributed",
+          "file": "src/modules/llm/sections/distributed/content.html"
+        },
+        {
+          "id": "llm-fine-tuning",
+          "file": "src/modules/llm/sections/fine-tuning/content.html"
+        },
+        {
+          "id": "llm-alignment",
+          "file": "src/modules/llm/sections/alignment/content.html"
+        },
+        {
+          "id": "llm-evaluation",
+          "file": "src/modules/llm/sections/evaluation/content.html"
+        },
+        {
+          "id": "llm-eval-advanced",
+          "file": "src/modules/llm/sections/eval-advanced/content.html"
+        },
+        {
+          "id": "llm-deployment",
+          "file": "src/modules/llm/sections/deployment/content.html"
+        },
+        {
+          "id": "llm-rag-fundamentals",
+          "file": "src/modules/llm/sections/rag-fundamentals/content.html"
+        },
+        {
+          "id": "llm-retrieval",
+          "file": "src/modules/llm/sections/retrieval/content.html"
+        },
+        {
+          "id": "llm-hybrid",
+          "file": "src/modules/llm/sections/hybrid/content.html"
+        },
+        {
+          "id": "llm-reranking",
+          "file": "src/modules/llm/sections/reranking/content.html"
+        },
+        {
+          "id": "llm-rag-pipeline",
+          "file": "src/modules/llm/sections/rag-pipeline/content.html"
+        },
+        {
+          "id": "llm-domain-rag",
+          "file": "src/modules/llm/sections/domain-rag/content.html"
+        },
+        {
+          "id": "llm-advanced-rag",
+          "file": "src/modules/llm/sections/advanced-rag/content.html"
+        },
+        {
+          "id": "llm-multimodal-rag",
+          "file": "src/modules/llm/sections/multimodal-rag/content.html"
+        },
+        {
+          "id": "llm-rag-eval",
+          "file": "src/modules/llm/sections/rag-eval/content.html"
+        },
+        {
+          "id": "llm-rag-production",
+          "file": "src/modules/llm/sections/rag-production/content.html"
+        },
+        {
+          "id": "llm-sentiment",
+          "file": "src/modules/llm/sections/sentiment/content.html"
+        },
+        {
+          "id": "llm-text-gen",
+          "file": "src/modules/llm/sections/text-gen/content.html"
+        },
+        {
+          "id": "llm-enterprise-qa",
+          "file": "src/modules/llm/sections/enterprise-qa/content.html"
+        },
+        {
+          "id": "llm-nlp-intro",
+          "file": "src/modules/llm/sections/nlp-intro/content.html"
+        },
+        {
+          "id": "llm-word-embedding",
+          "file": "src/modules/llm/sections/word-embedding/content.html"
+        },
+        {
+          "id": "llm-rnn-evolution",
+          "file": "src/modules/llm/sections/rnn-evolution/content.html"
+        },
+        {
+          "id": "llm-attention-mechanism",
+          "file": "src/modules/llm/sections/attention-mechanism/content.html"
+        },
+        {
+          "id": "llm-transformer-deep",
+          "file": "src/modules/llm/sections/transformer-deep/content.html"
+        },
+        {
+          "id": "llm-bert-family",
+          "file": "src/modules/llm/sections/bert-family/content.html"
+        },
+        {
+          "id": "llm-nlp-paradigms",
+          "file": "src/modules/llm/sections/nlp-paradigms/content.html"
+        },
+        {
+          "id": "llm-prompt-engineering",
+          "file": "src/modules/llm/sections/prompt-engineering/content.html"
+        },
+        {
+          "id": "llm-chain-of-thought",
+          "file": "src/modules/llm/sections/chain-of-thought/content.html"
+        },
+        {
+          "id": "llm-prompt-vs-finetune",
+          "file": "src/modules/llm/sections/prompt-vs-finetune/content.html"
+        },
+        {
+          "id": "llm-function-calling",
+          "file": "src/modules/llm/sections/function-calling/content.html"
+        },
+        {
+          "id": "llm-agent-concepts",
+          "file": "src/modules/llm/sections/agent-concepts/content.html"
+        },
+        {
+          "id": "llm-agent-frameworks",
+          "file": "src/modules/llm/sections/agent-frameworks/content.html"
+        },
+        {
+          "id": "llm-ts-context",
+          "file": "src/modules/llm/sections/ts-context/content.html"
+        },
+        {
+          "id": "llm-ts-memory",
+          "file": "src/modules/llm/sections/ts-memory/content.html"
+        },
+        {
+          "id": "llm-ts-tools",
+          "file": "src/modules/llm/sections/ts-tools/content.html"
+        },
+        {
+          "id": "llm-ts-train-eval",
+          "file": "src/modules/llm/sections/ts-train-eval/content.html"
+        },
+        {
+          "id": "llm-happy-transformer",
+          "file": "src/modules/llm/sections/happy-transformer/content.html"
+        },
+        {
+          "id": "llm-build-from-scratch",
+          "file": "src/modules/llm/sections/build-from-scratch/content.html"
+        },
+        {
+          "id": "llm-happy-training",
+          "file": "src/modules/llm/sections/happy-training/content.html"
+        },
+        {
+          "id": "llm-happy-rag-agent",
+          "file": "src/modules/llm/sections/happy-rag-agent/content.html"
+        },
+        {
+          "id": "llm-agentic-rl",
+          "file": "src/modules/llm/sections/agentic-rl/content.html"
+        },
+        {
+          "id": "llm-happy-extras",
+          "file": "src/modules/llm/sections/happy-extras/content.html"
+        },
+        {
+          "id": "llm-happy-images",
+          "file": "src/modules/llm/sections/happy-images/content.html"
+        },
+        {
+          "id": "llm-minimind",
+          "file": "src/modules/llm/sections/minimind/content.html"
+        }
+      ],
+      "styles": [
+        "src/modules/llm/sections/mysql/style.css",
+        "src/modules/llm/sections/postgresql/style.css",
+        "src/modules/llm/sections/milvus/style.css",
+        "src/modules/llm/sections/db-selection/style.css",
+        "src/modules/llm/sections/db-integration/style.css",
+        "src/modules/llm/sections/langchain-basics/style.css",
+        "src/modules/llm/sections/lcel/style.css",
+        "src/modules/llm/sections/langgraph-core/style.css",
+        "src/modules/llm/sections/agent-tools/style.css",
+        "src/modules/llm/sections/hitl-memory/style.css",
+        "src/modules/llm/sections/streaming-deploy/style.css",
+        "src/modules/llm/sections/data-cleaning/style.css",
+        "src/modules/llm/sections/dataset/style.css",
+        "src/modules/llm/sections/architecture/style.css",
+        "src/modules/llm/sections/classic-arch/style.css",
+        "src/modules/llm/sections/modern-arch/style.css",
+        "src/modules/llm/sections/model-selection/style.css",
+        "src/modules/llm/sections/training/style.css",
+        "src/modules/llm/sections/hyperparameter/style.css",
+        "src/modules/llm/sections/monitoring/style.css",
+        "src/modules/llm/sections/distributed/style.css",
+        "src/modules/llm/sections/fine-tuning/style.css",
+        "src/modules/llm/sections/alignment/style.css",
+        "src/modules/llm/sections/evaluation/style.css",
+        "src/modules/llm/sections/eval-advanced/style.css",
+        "src/modules/llm/sections/deployment/style.css",
+        "src/modules/llm/sections/rag-fundamentals/style.css",
+        "src/modules/llm/sections/retrieval/style.css",
+        "src/modules/llm/sections/hybrid/style.css",
+        "src/modules/llm/sections/reranking/style.css",
+        "src/modules/llm/sections/rag-pipeline/style.css",
+        "src/modules/llm/sections/domain-rag/style.css",
+        "src/modules/llm/sections/advanced-rag/style.css",
+        "src/modules/llm/sections/multimodal-rag/style.css",
+        "src/modules/llm/sections/rag-eval/style.css",
+        "src/modules/llm/sections/rag-production/style.css",
+        "src/modules/llm/sections/sentiment/style.css",
+        "src/modules/llm/sections/text-gen/style.css",
+        "src/modules/llm/sections/enterprise-qa/style.css",
+        "src/modules/llm/sections/nlp-intro/style.css",
+        "src/modules/llm/sections/word-embedding/style.css",
+        "src/modules/llm/sections/rnn-evolution/style.css",
+        "src/modules/llm/sections/attention-mechanism/style.css",
+        "src/modules/llm/sections/transformer-deep/style.css",
+        "src/modules/llm/sections/bert-family/style.css",
+        "src/modules/llm/sections/nlp-paradigms/style.css",
+        "src/modules/llm/sections/prompt-engineering/style.css",
+        "src/modules/llm/sections/chain-of-thought/style.css",
+        "src/modules/llm/sections/prompt-vs-finetune/style.css",
+        "src/modules/llm/sections/function-calling/style.css",
+        "src/modules/llm/sections/agent-concepts/style.css",
+        "src/modules/llm/sections/agent-frameworks/style.css",
+        "src/modules/llm/sections/happy-source/style.css",
+        "src/modules/llm/shared.css",
+        "src/modules/llm/technical-sections.css",
+        "src/modules/llm/sections/minimind/style.css"
+      ],
+      "tocAnchors": [
+        "llm-home",
+        "llm-menu-databases",
+        "llm-mysql",
+        "llm-postgresql",
+        "llm-milvus",
+        "llm-db-selection",
+        "llm-db-integration",
+        "llm-menu-langchain",
+        "llm-langchain-basics",
+        "llm-langchain-basics-s7",
+        "llm-lcel",
+        "llm-langgraph-core",
+        "llm-agent-tools",
+        "llm-hitl-memory",
+        "llm-streaming-deploy",
+        "llm-menu-training",
+        "llm-data-cleaning",
+        "llm-dataset",
+        "llm-architecture",
+        "llm-transformer-panorama",
+        "llm-classic-arch",
+        "llm-modern-arch",
+        "llm-model-selection",
+        "llm-training",
+        "llm-hyperparameter",
+        "llm-monitoring",
+        "llm-distributed",
+        "llm-fine-tuning",
+        "llm-alignment",
+        "llm-evaluation",
+        "llm-eval-advanced",
+        "llm-deployment",
+        "llm-menu-rag",
+        "llm-rag-fundamentals",
+        "llm-retrieval",
+        "llm-hybrid",
+        "llm-reranking",
+        "llm-rag-pipeline",
+        "llm-domain-rag",
+        "llm-advanced-rag",
+        "llm-multimodal-rag",
+        "llm-rag-eval",
+        "llm-rag-production",
+        "llm-menu-projects",
+        "llm-sentiment",
+        "llm-text-gen",
+        "llm-enterprise-qa",
+        "llm-menu-nlp",
+        "llm-nlp-intro",
+        "llm-word-embedding",
+        "llm-rnn-evolution",
+        "llm-attention-mechanism",
+        "llm-transformer-deep",
+        "llm-bert-family",
+        "llm-menu-prompt",
+        "llm-nlp-paradigms",
+        "llm-prompt-engineering",
+        "llm-chain-of-thought",
+        "llm-prompt-vs-finetune",
+        "llm-menu-agents",
+        "llm-function-calling",
+        "llm-agent-concepts",
+        "llm-agent-frameworks",
+        "llm-menu-stack",
+        "llm-ts-context",
+        "llm-ts-memory",
+        "llm-ts-tools",
+        "llm-ts-train-eval",
+        "llm-menu-happy",
+        "llm-happy-transformer",
+        "llm-build-from-scratch",
+        "llm-happy-training",
+        "llm-happy-rag-agent",
+        "llm-agentic-rl",
+        "llm-happy-extras",
+        "llm-happy-images",
+        "llm-menu-minimind",
+        "llm-minimind",
+        "llm-learning-paths"
+      ]
+    }
+  ],
+  "assets": 227
+}

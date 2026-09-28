@@ -1,0 +1,420 @@
+<section class="llm-mod llm-m-streaming-deploy" id="llm-streaming-deploy"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#059669;--hero-b:#1d4ed8;">
+  <h1>流式输出与部署</h1>
+  <p>实现流畅的流式体验和生产环境部署</p>
+</div>
+
+<!-- ==================== SECTION 1: 流式输出模式 ==================== -->
+<div class="section" id="llm-streaming-deploy-s1">
+  <h2>流式输出模式</h2>
+
+  <p>LangGraph 支持多种流式输出模式，通过 <code>stream_mode</code> 参数选择。不同的模式适用于不同的前端需求。</p>
+
+  <table>
+    <tr><th>模式</th><th>说明</th><th>输出格式</th><th>适用场景</th></tr>
+    <tr><td><code>"values"</code></td><td>每步返回完整 State</td><td><code>dict</code>（完整 State）</td><td>调试、查看每步完整输出</td></tr>
+    <tr><td><code>"updates"</code></td><td>每步只返回变化部分</td><td><code>{node_name: {field: value}}</code></td><td>增量更新 UI、日志记录</td></tr>
+    <tr><td><code>"messages"</code></td><td>LLM 逐 token 流式输出</td><td><code>(AIMessageChunk, metadata)</code></td><td>聊天界面实时显示回复</td></tr>
+    <tr><td><code>"custom"</code></td><td>自定义流式事件</td><td>自定义格式</td><td>需要精细控制输出格式</td></tr>
+  </table>
+
+  <h3>"updates" 模式 — 增量更新</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># "updates" 模式：每步只返回变化部分</span>
+<span class="kw">for</span> event <span class="kw">in</span> app.<span class="fn">stream</span>(input_state, config=config, stream_mode=<span class="str">"updates"</span>):
+    <span class="cmt"># event = {"node_name": {"field": "new_value"}}</span>
+    <span class="kw">for</span> node_name, updates <span class="kw">in</span> event.<span class="fn">items</span>():
+        <span class="fn">print</span>(<span class="str">f"[{node_name}] {updates}"</span>)
+
+<span class="cmt"># 示例输出：</span>
+<span class="cmt"># [detect_mood] {"mood": "happy"}</span>
+<span class="cmt"># [happy_reply] {"messages": [AIMessage(...)]}</span></code></pre>
+  </div>
+
+  <h3>"messages" 模式 — 逐 Token 流式</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># "messages" 模式：LLM 逐 token 流式输出</span>
+<span class="kw">for</span> msg, metadata <span class="kw">in</span> app.<span class="fn">stream</span>(
+    input_state, config=config, stream_mode=<span class="str">"messages"</span>
+):
+    <span class="cmt"># msg 是 AIMessageChunk 对象</span>
+    <span class="cmt"># metadata 包含节点名称等元信息</span>
+    <span class="kw">if</span> msg.content:
+        <span class="fn">print</span>(msg.content, end=<span class="str">""</span>, flush=<span class="kw">True</span>)
+
+<span class="cmt"># 示例输出（逐字显示）：</span>
+<span class="cmt"># 你 -> 好 -> ！ -> 今 -> 天 -> 天 -> 气 -> ...</span></code></pre>
+  </div>
+
+  <h3>组合多种模式</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 同时使用多种流式模式</span>
+<span class="kw">for</span> event <span class="kw">in</span> app.<span class="fn">stream</span>(
+    input_state, config=config,
+    stream_mode=[<span class="str">"updates"</span>, <span class="str">"messages"</span>]
+):
+    mode, data = event
+    <span class="kw">if</span> mode == <span class="str">"messages"</span>:
+        <span class="cmt"># 实时显示 LLM 生成的 token</span>
+        <span class="kw">if</span> data.content:
+            <span class="fn">print</span>(data.content, end=<span class="str">""</span>)
+    <span class="kw">elif</span> mode == <span class="str">"updates"</span>:
+        <span class="cmt"># 显示节点级别的状态更新</span>
+        <span class="fn">print</span>(<span class="str">f"\n[节点更新] {data}"</span>)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 2: astream_events ==================== -->
+<div class="section" id="llm-streaming-deploy-s2">
+  <h2>astream_events 详细用法</h2>
+
+  <p><code>astream_events</code> 提供了最细粒度的事件流，可以捕获管道中每个组件的执行细节。</p>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>如果 <code>stream</code> 是看"每道菜端上桌"，那 <code>astream_events</code> 就是看"厨师的每个操作步骤"——洗菜、切菜、下锅、翻炒、装盘，每一步都看得到。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">async</span> <span class="kw">def</span> <span class="fn">stream_events_demo</span>():
+    <span class="kw">async for</span> event <span class="kw">in</span> app.<span class="fn">astream_events</span>(
+        input_state,
+        config=config,
+        version=<span class="str">"v2"</span>
+    ):
+        kind = event[<span class="str">"event"</span>]
+        name = event.get(<span class="str">"name"</span>, <span class="str">""</span>)
+
+        <span class="kw">if</span> kind == <span class="str">"on_chat_model_stream"</span>:
+            <span class="cmt"># LLM 逐 token 输出</span>
+            content = event[<span class="str">"data"</span>][<span class="str">"chunk"</span>].content
+            <span class="kw">if</span> content:
+                <span class="fn">print</span>(content, end=<span class="str">""</span>, flush=<span class="kw">True</span>)
+
+        <span class="kw">elif</span> kind == <span class="str">"on_tool_start"</span>:
+            <span class="cmt"># 工具开始执行</span>
+            <span class="fn">print</span>(<span class="str">f"\n[调用工具] {name}"</span>)
+
+        <span class="kw">elif</span> kind == <span class="str">"on_tool_end"</span>:
+            <span class="cmt"># 工具执行完成</span>
+            result = event[<span class="str">"data"</span>][<span class="str">"output"</span>]
+            <span class="fn">print</span>(<span class="str">f"[工具结果] {result}"</span>)
+
+        <span class="kw">elif</span> kind == <span class="str">"on_chain_start"</span>:
+            <span class="fn">print</span>(<span class="str">f"[开始] {name}"</span>)
+
+        <span class="kw">elif</span> kind == <span class="str">"on_chain_end"</span>:
+            <span class="fn">print</span>(<span class="str">f"[完成] {name}"</span>)</code></pre>
+  </div>
+
+  <div class="callout callout-info">
+    <strong>事件类型：</strong><code>astream_events</code> 的事件类型包括：<code>on_chat_model_stream</code>（LLM token）、<code>on_tool_start</code>/<code>on_tool_end</code>（工具调用）、<code>on_chain_start</code>/<code>on_chain_end</code>（链执行）、<code>on_retriever_start</code>/<code>on_retriever_end</code>（检索）等。通过 <code>include_names</code> 参数可以过滤只关注的组件。
+  </div>
+</div>
+
+<!-- ==================== SECTION 3: Token-by-Token ==================== -->
+<div class="section" id="llm-streaming-deploy-s3">
+  <h2>Token-by-Token 流式显示</h2>
+
+  <p>在聊天应用中，用户期望看到 LLM 逐字生成回复的流畅体验。以下是实现方式：</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 方式一：使用 "messages" stream_mode（推荐）</span>
+<span class="kw">for</span> msg, metadata <span class="kw">in</span> app.<span class="fn">stream</span>(
+    {<span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"你好"</span>)]},
+    config=config,
+    stream_mode=<span class="str">"messages"</span>
+):
+    <span class="kw">if</span> <span class="fn">isinstance</span>(msg, <span class="cls">AIMessageChunk</span>) <span class="kw">and</span> msg.content:
+        <span class="fn">print</span>(msg.content, end=<span class="str">""</span>, flush=<span class="kw">True</span>)
+
+<span class="cmt"># 方式二：使用 create_agent 的流式输出</span>
+agent = <span class="fn">create_agent</span>(model=llm, tools=tools)
+<span class="kw">for</span> msg, metadata <span class="kw">in</span> agent.<span class="fn">stream</span>(
+    {<span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"查一下北京天气"</span>)]},
+    stream_mode=<span class="str">"messages"</span>
+):
+    <span class="cmt"># 过滤只显示最终回复（跳过工具调用的中间消息）</span>
+    <span class="kw">if</span> metadata.<span class="fn">get</span>(<span class="str">"langgraph_node"</span>) == <span class="str">"agent"</span>:
+        <span class="kw">if</span> <span class="fn">isinstance</span>(msg, <span class="cls">AIMessageChunk</span>) <span class="kw">and</span> msg.content:
+            <span class="fn">print</span>(msg.content, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>前端集成：</strong>在 Web 应用中，通常使用 Server-Sent Events (SSE) 将 token 流式推送到前端。LangGraph 的 <code>stream</code> 方法返回的迭代器天然适合转换为 SSE 格式。
+  </div>
+</div>
+
+<!-- ==================== SECTION 4: LangGraph Platform ==================== -->
+<div class="section" id="llm-streaming-deploy-s4">
+  <h2>LangGraph Platform 部署服务</h2>
+
+  <p>LangGraph Platform 是官方提供的托管部署平台，让你无需管理基础设施即可部署 LangGraph 应用。</p>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>一键部署</td><td>通过 CLI 或 GitHub 集成部署图应用</td></tr>
+    <tr><td>自动扩展</td><td>根据请求量自动扩缩容</td></tr>
+    <tr><td>内置 API</td><td>自动生成 REST API 端点（/invoke, /stream, /threads）</td></tr>
+    <tr><td>持久化存储</td><td>内置 Checkpoint 和 Thread 管理</td></tr>
+    <tr><td>Cron 调度</td><td>支持定时任务触发</td></tr>
+    <tr><td>内置监控</td><td>日志、追踪、错误监控</td></tr>
+  </table>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>安装 CLI</strong> — <code>pip install langgraph-cli</code></div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>配置 langgraph.json</strong> — 定义图和依赖</div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>本地测试</strong> — <code>langgraph dev</code></div>
+  </div>
+  <div class="step">
+    <div class="step-num">4</div>
+<div class="step-content"><strong>部署</strong> — <code>langgraph deploy</code> 或通过 LangSmith Deployment 控制台</div>
+  </div>
+</div>
+
+<!-- ==================== SECTION 5: langgraph-cli ==================== -->
+<div class="section" id="llm-streaming-deploy-s5">
+  <h2>langgraph-cli 开发服务器</h2>
+
+  <p><code>langgraph dev</code> 启动本地开发服务器，提供 API 端点和交互式测试界面。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">JSON</span>
+      
+    </div>
+    <pre><code><span class="cmt">// langgraph.json — 项目配置文件</span>
+{
+  <span class="str">"dependencies"</span>: [<span class="str">"./requirements.txt"</span>],
+  <span class="str">"graphs"</span>: {
+    <span class="str">"my_agent"</span>: <span class="str">"./agent.py:app"</span>
+  },
+  <span class="str">"env"</span>: <span class="str">".env"</span>
+}</code></pre>
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Bash</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 启动开发服务器</span>
+langgraph dev
+
+<span class="cmt"># 服务器启动后，访问 http://localhost:2024</span>
+<span class="cmt"># 自动生成的 API 端点：</span>
+<span class="cmt"># POST /invoke          — 同步调用</span>
+<span class="cmt"># POST /stream          — 流式调用</span>
+<span class="cmt"># POST /threads         — 创建线程</span>
+<span class="cmt"># GET  /threads/{id}    — 获取线程状态</span>
+<span class="cmt"># POST /threads/{id}/runs — 在线程中运行</span></code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+<strong>注意：</strong><code>langgraph dev</code> 仅用于本地开发测试。生产环境请使用 <code>langgraph deploy</code> 部署到 LangSmith Deployment，或使用下方的 FastAPI 自行集成。
+  </div>
+</div>
+
+<!-- ==================== SECTION 6: API 端点 ==================== -->
+<div class="section" id="llm-streaming-deploy-s6">
+  <h2>API 端点详解</h2>
+
+  <p>LangGraph Platform 自动生成的 REST API 遵循以下规范：</p>
+
+  <table>
+    <tr><th>端点</th><th>方法</th><th>说明</th><th>请求体示例</th></tr>
+    <tr><td><code>/invoke</code></td><td>POST</td><td>同步调用，等待完成</td><td><code>{"input": {...}, "config": {...}}</code></td></tr>
+    <tr><td><code>/stream</code></td><td>POST</td><td>流式调用，返回 SSE</td><td><code>{"input": {...}, "stream_mode": "messages"}</code></td></tr>
+    <tr><td><code>/threads</code></td><td>POST</td><td>创建新线程</td><td><code>{"metadata": {...}}</code></td></tr>
+    <tr><td><code>/threads/{id}/state</code></td><td>GET</td><td>获取线程当前状态</td><td>-</td></tr>
+    <tr><td><code>/threads/{id}/runs</code></td><td>POST</td><td>在线程中运行图</td><td><code>{"input": {...}}</code></td></tr>
+    <tr><td><code>/threads/{id}/history</code></td><td>GET</td><td>获取线程 checkpoint 历史</td><td>-</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Bash</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 同步调用</span>
+curl -X POST http://localhost:2024/invoke \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{
+    "input": {"messages": [{"role": "user", "content": "你好"}]},
+    "config": {"configurable": {"thread_id": "test-001"}}
+  }'</span>
+
+<span class="cmt"># 流式调用（SSE）</span>
+curl -X POST http://localhost:2024/stream \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{
+    "input": {"messages": [{"role": "user", "content": "你好"}]},
+    "stream_mode": "messages"
+  }'</span></code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 7: FastAPI 集成 ==================== -->
+<div class="section" id="llm-streaming-deploy-s7">
+  <h2>FastAPI 集成部署</h2>
+
+  <p>如果不想使用 LangGraph Platform，也可以用 FastAPI 自行搭建 API 服务。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># server.py — FastAPI 集成 LangGraph</span>
+<span class="kw">from</span> fastapi <span class="kw">import</span> <span class="cls">FastAPI</span>
+<span class="kw">from</span> fastapi.responses <span class="kw">import</span> <span class="cls">StreamingResponse</span>
+<span class="kw">from</span> pydantic <span class="kw">import</span> <span class="cls">BaseModel</span>
+<span class="kw">from</span> langchain_core.messages <span class="kw">import</span> <span class="cls">HumanMessage</span>
+<span class="kw">import</span> json
+
+app = <span class="cls">FastAPI</span>(title=<span class="str">"LangGraph API"</span>)
+
+<span class="cmt"># 假设 graph 已在 agent.py 中定义并编译</span>
+<span class="kw">from</span> agent <span class="kw">import</span> graph  <span class="cmt"># 你的 LangGraph 应用</span>
+
+<span class="kw">class</span> <span class="cls">ChatRequest</span>(<span class="cls">BaseModel</span>):
+    message: <span class="cls">str</span>
+    thread_id: <span class="cls">str</span> = <span class="str">"default"</span>
+
+<span class="cmt"># 同步调用端点</span>
+<span class="kw">@app</span>.<span class="fn">post</span>(<span class="str">"/chat"</span>)
+<span class="kw">async</span> <span class="kw">def</span> <span class="fn">chat</span>(req: <span class="cls">ChatRequest</span>):
+    config = {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: req.thread_id}}
+    result = <span class="kw">await</span> graph.<span class="fn">ainvoke</span>(
+        {<span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=req.message)]},
+        config=config
+    )
+    <span class="kw">return</span> {<span class="str">"reply"</span>: result[<span class="str">"messages"</span>][<span class="num">-1</span>].content}
+
+<span class="cmt"># 流式调用端点（SSE）</span>
+<span class="kw">@app</span>.<span class="fn">post</span>(<span class="str">"/chat/stream"</span>)
+<span class="kw">async</span> <span class="kw">def</span> <span class="fn">chat_stream</span>(req: <span class="cls">ChatRequest</span>):
+    config = {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: req.thread_id}}
+    input_state = {<span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=req.message)]}
+
+    <span class="kw">async</span> <span class="kw">def</span> <span class="fn">event_generator</span>():
+        <span class="kw">async for</span> msg, metadata <span class="kw">in</span> graph.<span class="fn">astream</span>(
+            input_state, config=config, stream_mode=<span class="str">"messages"</span>
+        ):
+            <span class="kw">if</span> <span class="fn">hasattr</span>(msg, <span class="str">"content"</span>) <span class="kw">and</span> msg.content:
+                data = json.<span class="fn">dumps</span>({<span class="str">"token"</span>: msg.content})
+                <span class="kw">yield</span> <span class="str">f"data: {data}\n\n"</span>
+        <span class="kw">yield</span> <span class="str">"data: [DONE]\n\n"</span>
+
+    <span class="kw">return</span> <span class="cls">StreamingResponse</span>(
+        <span class="fn">event_generator</span>(),
+        media_type=<span class="str">"text/event-stream"</span>
+    )</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>运行方式：</strong><code>uvicorn server:app --host 0.0.0.0 --port 8000</code>。前端使用 <code>EventSource</code> 或 <code>fetch</code> API 连接 <code>/chat/stream</code> 端点即可接收 token 流。
+  </div>
+</div>
+
+<!-- ==================== SECTION 8: 最佳实践 ==================== -->
+<div class="section" id="llm-streaming-deploy-s8">
+  <h2>生产环境最佳实践</h2>
+
+  <h3>1. 错误处理与重试</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 对 LLM 调用配置重试</span>
+llm = <span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>).<span class="fn">with_retry</span>(
+    stop_after_attempt=<span class="num">3</span>,
+    wait_exponential_jitter=<span class="kw">True</span>
+)
+
+<span class="cmt"># 对整个链配置回退模型</span>
+chain = prompt | llm.<span class="fn">with_fallbacks</span>([
+<span class="cls">ChatAnthropic</span>(model=<span class="str">"claude-sonnet-5"</span>)
+]) | parser</code></pre>
+  </div>
+
+  <h3>2. 限流与并发控制</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 批量调用时控制并发数</span>
+results = chain.<span class="fn">batch</span>(
+    inputs,
+    {<span class="str">"max_concurrency"</span>: <span class="num">5</span>}  <span class="cmt"># 最多同时5个请求</span>
+)
+
+<span class="cmt"># 在 FastAPI 中使用信号量限流</span>
+<span class="kw">import</span> asyncio
+semaphore = asyncio.<span class="cls">Semaphore</span>(<span class="num">10</span>)  <span class="cmt"># 最多10个并发</span>
+
+<span class="kw">@app</span>.<span class="fn">post</span>(<span class="str">"/chat"</span>)
+<span class="kw">async</span> <span class="kw">def</span> <span class="fn">chat</span>(req: <span class="cls">ChatRequest</span>):
+    <span class="kw">async with</span> semaphore:
+        <span class="kw">return</span> <span class="kw">await</span> graph.<span class="fn">ainvoke</span>(...)</code></pre>
+  </div>
+
+  <h3>3. 监控与日志</h3>
+
+  <table>
+    <tr><th>方面</th><th>建议</th><th>工具</th></tr>
+    <tr><td>链路追踪</td><td>记录每个节点的输入输出和耗时</td><td>LangSmith、OpenTelemetry</td></tr>
+    <tr><td>错误监控</td><td>捕获并告警 API 调用失败</td><td>Sentry、Datadog</td></tr>
+    <tr><td>成本监控</td><td>跟踪 token 消耗和 API 费用</td><td>LangSmith、自建仪表盘</td></tr>
+    <tr><td>质量评估</td><td>定期评估 Agent 输出质量</td><td>LangSmith Evaluation</td></tr>
+  </table>
+
+  <div class="callout callout-key">
+    <strong>生产检查清单：</strong>
+    <br>1. LLM 调用配置重试和超时
+    <br>2. 敏感操作使用 HITL 人工审核
+    <br>3. 使用持久化 Checkpoint（SqliteSaver 或 PostgresSaver）
+    <br>4. 前端使用流式输出提升用户体验
+    <br>5. 接入监控和告警系统
+    <br>6. 控制并发数和速率限制
+    <br>7. 定期评估和优化 Agent 质量
+  </div>
+</div>
+
+<div class="footer">
+  LangChain & LangGraph 教程系列 | 第6章：流式输出与部署
+</div>
+</div></section>

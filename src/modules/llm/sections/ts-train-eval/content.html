@@ -1,0 +1,153 @@
+<section class="llm-mod llm-m-tp llm-m-ts-train-eval" id="llm-ts-train-eval"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#be123c;--hero-b:#1d4ed8;">
+  <h1>📐 训练与评估技术栈详解</h1>
+  <p>第 7·8·9·10 章技术点的完整展开：Agent 评估指标、偏好优化、LoRA 与多 Agent 协作</p>
+</div>
+
+<div class="section" id="llm-ts-train-eval-s1">
+  <h2>Agent 评估：任务解剖与轨迹指标</h2>
+  <p>评估 Agent 和评估单轮 QA 有本质区别：正确的最终答案不等于正确的执行过程，而错误的执行过程即使碰巧得到正确答案，也是不可靠的 Agent。</p>
+  <h3>评估任务的四个组成部分</h3>
+  <ul>
+    <li><strong>初始状态</strong>：环境可重置到特定状态（沙箱、数据库快照）。</li>
+    <li><strong>用户目标</strong>：任务描述，可以是自然语言或结构化 spec。</li>
+    <li><strong>可用工具</strong>：工具集合及其行为定义。</li>
+    <li><strong>验证条件</strong>：程序化验证器（检查文件状态、测试通过率）或 LLM-as-a-Judge。</li>
+  </ul>
+  <h3>Pass@k 与 Pass^k</h3>
+  <p>这两个指标测量不同的东西：</p>
+  <ul>
+    <li><strong>Pass@k</strong>：k 次独立运行里至少一次成功的概率。衡量<strong>能力上限</strong>——模型在最好情况下能做到什么。<code>Pass@k = 1 - (1-p)^k</code></li>
+    <li><strong>Pass^k</strong>（也叫 Mean Pass@k）：k 次独立运行<strong>全部成功</strong>的概率。衡量<strong>业务可靠性</strong>——用户每次都能得到正确结果的概率。<code>Pass^k = p^k</code></li>
+  </ul>
+  <p>数字说话：单次成功率 90% 看起来很高，但 Pass^5 = 0.9^5 ≈ 59%——意味着 5 次任务里有 2 次会失败。生产系统应看 Pass^k，而不是 Pass@k。</p>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    P90[单次成功率 90%] --> PK1[Pass@1 = 90%<br/>能力上限]
+    P90 --> PK5[Pass^5 = 59%<br/>5次全对的概率]
+    P90 --> PK10[Pass^10 = 35%<br/>业务可靠性]
+</pre></div>
+</div>
+
+<div class="section" id="llm-ts-train-eval-s2">
+  <h2>LLM-as-a-Judge 与失败归因</h2>
+  <h3>LLM-as-a-Judge 的设计要点</h3>
+  <ul>
+    <li><strong>Rubric 设计</strong>：让模型按 1–5 打分几乎没有意义，分数的含义没有锚定。更可靠的方式：成对比较（A vs B 哪个更好），或二分类（这个答案是否满足了用户的核心需求）。</li>
+    <li><strong>位置偏差</strong>：在成对比较中，模型倾向于偏向列在前面的答案。缓解：随机化顺序，分两次比较（A vs B 和 B vs A）取平均。</li>
+    <li><strong>长度偏差</strong>：模型倾向于认为更长的回复更好。缓解：在 rubric 里明确说明评价的是质量而非长度。</li>
+    <li><strong>一致性校验</strong>：用 Cohen's Kappa 或 Krippendorff's Alpha 衡量 judge 与人工标注的一致性，通常需要 κ > 0.6 才能信任。</li>
+  </ul>
+  <h3>失败归因：定位第一个出错的步骤</h3>
+  <p>只看最终结果失败，无法指导改进——模型是在哪一步出错的？工具调用参数写错了？检索到的文档不相关？规划步骤遗漏了？</p>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    Task[任务] --> S1[步骤 1 规划]
+    S1 --> S2[步骤 2 检索]
+    S2 --> S3[步骤 3 工具调用]
+    S3 --> S4[步骤 4 生成回复]
+    S4 --> Fail[最终失败]
+    S2 -->|第一个出错| Wrong[检索结果不相关<br/>这里是根因]
+</pre></div>
+  <p>归因方法：对每一步的输入输出独立评分，找到第一个得分异常的步骤。这要求记录完整轨迹（每次工具调用的入参、返回值、模型的思考链），这也是为什么<strong>可观测性</strong>是评估基础设施的核心组件。</p>
+</div>
+
+<div class="section" id="llm-ts-train-eval-s3">
+  <h2>后训练四阶段全景</h2>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    PT[预训练<br/>预测下一个词<br/>从互联网学习世界知识] --> MT[Mid-training<br/>在目标分布继续学<br/>补特定领域知识]
+    MT --> SFT[SFT 监督微调<br/>模仿高质量示范<br/>学格式和风格]
+    SFT --> RL[强化学习<br/>在自己分布上探索<br/>从偏好信号优化]
+</pre></div>
+  <p><strong>SFT vs RL 的本质区别</strong>：SFT 是模仿——模型学习复制示范轨迹，容易学到正确的表面格式，但不能泛化到训练集之外的场景。RL 是探索——模型从自己的输出中获得反馈信号，可以发现新的策略，但需要可靠的奖励来源。</p>
+  <p>什么时候先做 Mid-training：当目标任务的知识完全不在预训练数据里时（小众语言、专有领域知识、最新事件），直接做 SFT/RL 会发现模型根本「不知道」正确答案，强化正确的格式没有意义。先用领域数据继续预训练，补充底层知识，再做 SFT/RL 对齐格式与偏好。</p>
+</div>
+
+<div class="section" id="llm-ts-train-eval-s4">
+  <h2>偏好优化家族：DPO、GRPO 与 ORPO</h2>
+  <h3>DPO（直接偏好优化）</h3>
+  <p>DPO 把「学习偏好」的问题重构成一个分类问题——不需要训练单独的 reward model，直接从 (chosen, rejected) 对的对数似然比中提取训练信号。直觉：如果模型对 chosen 的对数概率比 rejected 高 β 倍以上，就认为已经对齐了。实践中 DPO 训练稳定，是目前最常用的偏好优化基线。</p>
+  <h3>GRPO（组内相对偏好优化）</h3>
+  <p>GRPO 适合有<strong>可验证奖励</strong>的场景（代码是否通过测试、答案是否正确）。做法：对同一个 prompt 采样 G 个响应，计算每个响应相对于组内均值的优势，用这个相对优势训练模型。优势是 GRPO 省掉了 value model（PPO 需要的），训练代价更低，且天然适合二元可验证奖励（对/错）而不需要连续分值。</p>
+  <h3>ORPO</h3>
+  <p>ORPO 把 SFT 损失和偏好对齐损失合并成一步，OR（Odds Ratio）损失的正确公式带负号：</p>
+  <p><code>L_OR = -log σ(log(odds_θ(chosen) / odds_θ(rejected)))</code></p>
+  <p>注意负号不可省略，去掉后优化方向反了。</p>
+  <h3>PPO 的现状</h3>
+  <p>PPO 已移入 TRL 的 <code>trl.experimental.ppo</code>，官方标注将从 <code>trl.trainer</code> 移除。新版参数名改为 <code>processing_class</code>（不是 <code>tokenizer</code>），训练由 <code>trainer.train()</code> 驱动而非手动 <code>step()</code> 循环。生产场景更常用 DPO 或 GRPO。</p>
+</div>
+
+<div class="section" id="llm-ts-train-eval-s5">
+  <h2>LoRA 与参数高效微调</h2>
+  <p>LoRA（Low-Rank Adaptation）的核心思想：微调时不修改原始权重 W，而是学习一个低秩分解的增量 ΔW = AB，其中 A ∈ R^{d_in × r}，B ∈ R^{r × d_out}，r 远小于 d_in 和 d_out。</p>
+  <h3>可训练参数量计算</h3>
+  <p>每个 LoRA 层的参数量：<code>r × (d_in + d_out)</code>。对 Llama-3.1-8B（GQA 结构），q_proj 是 4096×4096，o_proj 是 4096×4096，k/v_proj 由于 GQA 是 4096×1024，r=8：</p>
+  <p><code>q_proj: 8 × (4096+4096) × 32层 = 2,097,152</code><br/>
+  <code>k_proj: 8 × (4096+1024) × 32层 = 1,310,720</code><br/>
+  <code>v_proj: 8 × (4096+1024) × 32层 = 1,310,720</code><br/>
+  <code>o_proj: 8 × (4096+4096) × 32层 = 2,097,152</code><br/>
+  <code>总计 ≈ 6,815,744 ≈ 6.8M 参数</code>，占全模型约 0.085%。</p>
+  <p>这就是为什么 LoRA 可以在单 24GB GPU 上微调 8B 模型——可训练参数只有约 7M，梯度和优化器状态的显存消耗微乎其微。</p>
+  <h3>r 和 alpha 的取值</h3>
+  <ul>
+    <li><strong>r</strong>（秩）：常用 8、16、32、64。r 越大表达能力越强，但可训练参数更多。对于格式和风格的对齐，r=8 通常足够；对于需要学习新知识的任务，r=32 或 64 更稳妥。</li>
+    <li><strong>alpha</strong>（缩放因子）：实际学习率缩放为 alpha/r，常见做法 alpha=2r（即 alpha=16 对 r=8）保持缩放比例不变，或固定 alpha=16/32。</li>
+    <li><strong>QLoRA</strong>：用 4-bit NF4 量化冻结原始权重，再在量化基础上做 LoRA，可以把 8B 模型的总显存需求压到 6–8GB，但训练速度比 bf16 LoRA 慢约 20–30%。</li>
+  </ul>
+</div>
+
+<div class="section" id="llm-ts-train-eval-s6">
+  <h2>多 Agent 协作：拓扑与失败模式</h2>
+  <h3>什么时候多 Agent 真的有价值</h3>
+  <p>多 Agent 不是免费的——协调开销、错误传播、调试复杂度都是真实代价。多 Agent 真正优于单 Agent 的条件：</p>
+  <ul>
+    <li>子任务可以<strong>真正并行</strong>（不共享可变状态，彼此不依赖）</li>
+    <li>每个子任务的上下文可以<strong>完全隔离</strong>（子 Agent 不需要整个主任务的历史）</li>
+    <li>任务规模超出单个上下文窗口的处理能力</li>
+  </ul>
+  <h3>三种协作拓扑</h3>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    subgraph "管理者模式"
+        M[管理者 Agent] --> W1[工作者 A]
+        M --> W2[工作者 B]
+        M --> W3[工作者 C]
+    end
+    subgraph "对等协作"
+        A1[Agent A] --> A2[Agent B]
+        A2 --> A1
+    end
+    subgraph "去中心化"
+        D1[Agent] --> D2[Agent]
+        D2 --> D3[Agent]
+        D3 --> D1
+    end
+</pre></div>
+  <h3>六种失败模式（附根因）</h3>
+  <ul>
+    <li><strong>并发写冲突</strong>：多个 Agent 同时修改同一文件。根因：共享可变状态没有加锁。修复：每个 Agent 只写自己的工作区，最后由合并者负责整合。</li>
+    <li><strong>错误级联放大</strong>：Agent A 的错误输出被 Agent B 当作事实，被 Agent C 放大。根因：下游 Agent 没有独立验证输入。修复：关键信息在传递前做格式和语义验证。</li>
+    <li><strong>同质趋同</strong>：让多个「独立」Agent 交叉审查，但它们用相同的提示词和模型，给出相同的错误。根因：没有真正的多样性。修复：用不同模型、不同提示词、不同解题角度。</li>
+    <li><strong>互相扯皮</strong>：两个 Agent 在循环里互相把锅推给对方，都不作为。根因：没有定义谁有最终决策权。修复：明确所有权边界，陷入循环时升级到管理者或人类。</li>
+    <li><strong>循环失控</strong>：Agent 陷入无限循环，没有终止条件。根因：缺少步数上限和进度检测。修复：强制步数预算 + 进度验证（每步之后检查是否比上一步更接近目标）。</li>
+    <li><strong>理解债</strong>：系统变复杂后，没有人（包括设计者）能说清楚单次失败是哪个 Agent 的问题。根因：可观测性不够，各 Agent 的输入输出没有记录。修复：在设计阶段就规划 trace 和 span，而不是等出了问题再加日志。</li>
+  </ul>
+</div>
+
+<div class="section" id="llm-ts-train-eval-s7">
+  <h2>可观测性与统计显著性</h2>
+  <h3>结构化 Trace</h3>
+  <p>Agent 的可观测性不是打日志，而是结构化的 span 树：每个工具调用是一个 span，包含入参、出参、耗时、token 消耗；多个 span 组成一次任务的 trace；trace 上附加任务结果（成功/失败/部分成功）和失败原因分类。这样才能做「哪个工具调用最慢」「哪类任务的失败率最高」的聚合分析。</p>
+  <p>工程实践：成本核算要在 span 级别（每个工具调用消耗多少 token，折合多少费用），而不只是任务级别——这样才能找到成本最高的瓶颈并优化。</p>
+  <h3>统计显著性</h3>
+  <p>小样本上的差异可能是噪声。假设两个版本的 Agent，A 成功率 72%，B 成功率 75%，差了 3 个百分点——在 100 个测试任务上这个差异通不过显著性检验（p > 0.05）。需要多少样本？以 80% 统计功效、p&lt;0.05 显著性检验 5% 差异为例，大约需要 500 个任务。</p>
+  <p>Bootstrap 置信区间：对测试集有放回抽样 1000 次，每次计算成功率，取 2.5%–97.5% 分位数作为 95% 置信区间。比 Z 检验更稳健，不依赖正态假设，适合 Agent 评估这种小样本高方差的场景。</p>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    Raw[100 个测试任务<br/>A:72% B:75%] --> Boot[Bootstrap 抽样 1000次]
+    Boot --> CI[95%置信区间<br/>A: 63-81%<br/>B: 66-83%]
+    CI --> Overlap[区间大量重叠<br/>差异不显著]
+</pre></div>
+</div>
+</div></section>

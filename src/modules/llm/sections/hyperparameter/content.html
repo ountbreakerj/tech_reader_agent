@@ -1,0 +1,278 @@
+<section class="llm-mod llm-m-hyperparameter" id="llm-hyperparameter"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#8b5cf6;">
+  <h1>🔧 超参数调优</h1>
+  <p>掌握关键超参数的设置和调优方法</p>
+</div>
+
+<div class="section" id="llm-hyperparameter-s1">
+  <h2>关键超参数概览</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>超参数就像是做菜的调料配比——盐放多少、油温多高、炒多久。调料配比对了，菜就好吃；配比错了，可能太咸或太生。超参数调优就是找到最佳的"调料配比"。
+  </div>
+
+  <h3>超参数优先级</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">文本</span></div>
+    <pre><code><span class="cmt"># 超参数调优优先级（从高到低）</span>
+
+<span class="num">1.</span> <span class="fn">学习率</span>（Learning Rate）     <span class="cmt">← 最重要，影响最大</span>
+   推荐范围: 1e-5 到 1e-3
+
+<span class="num">2.</span> <span class="fn">批量大小</span>（Batch Size）      <span class="cmt">← 影响稳定性和速度</span>
+   推荐范围: 4, 8, 16, 32
+
+<span class="num">3.</span> <span class="fn">训练轮数</span>（Epochs）          <span class="cmt">← 防止过拟合</span>
+   推荐范围: 3-10
+
+<span class="num">4.</span> <span class="fn">Warmup比例</span>                 <span class="cmt">← 训练初期的稳定</span>
+   推荐范围: 总步数的5%-10%
+
+<span class="num">5.</span> <span class="fn">权重衰减</span>（Weight Decay）    <span class="cmt">← 正则化</span>
+   推荐范围: 0.01-0.1
+
+<span class="num">6.</span> <span class="fn">Dropout率</span>                  <span class="cmt">← 防止过拟合</span>
+   推荐范围: 0.1-0.3</code></pre>
+  </div>
+
+  <h3>常见调优陷阱</h3>
+
+  <div class="callout callout-pitfall">
+    <strong>🚨 常见错误：</strong>
+    <ul>
+      <li>学习率太大 → 训练不收敛，损失剧烈震荡</li>
+      <li>学习率太小 → 训练极慢，可能陷入局部最优</li>
+      <li>Batch size太大 → 显存不足，泛化性能下降</li>
+      <li>训练轮数太多 → 过拟合，验证集性能下降</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-hyperparameter-s2">
+  <h2>学习率调优</h2>
+
+  <h3>LR Range Test</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> torch
+<span class="kw">import</span> matplotlib.pyplot <span class="kw">as</span> plt
+
+<span class="kw">def</span> <span class="fn">lr_range_test</span>(model, train_loader, optimizer, criterion,
+                   lr_start=<span class="num">1e-7</span>, lr_end=<span class="num">10</span>, num_steps=<span class="num">100</span>):
+    <span class="str">"""学习率范围测试：找到最佳学习率"""</span>
+    lrs = []
+    losses = []
+    best_loss = <span class="fn">float</span>(<span class="str">'inf'</span>)
+
+    <span class="cmt"># 设置初始学习率</span>
+    for pg <span class="kw">in</span> optimizer.param_groups:
+        pg[<span class="str">'lr'</span>] = lr_start
+
+    lr_multiplier = (lr_end / lr_start) ** (<span class="num">1</span> / num_steps)
+
+    <span class="kw">for</span> i, batch <span class="kw">in</span> <span class="fn">enumerate</span>(train_loader):
+        <span class="kw">if</span> i >= num_steps:
+            <span class="kw">break</span>
+
+        <span class="cmt"># 前向传播</span>
+        outputs = model(batch[<span class="str">"input_ids"</span>])
+        loss = criterion(outputs, batch[<span class="str">"labels"</span>])
+
+        <span class="cmt"># 记录</span>
+        lrs.append(optimizer.param_groups[<span class="num">0</span>][<span class="str">'lr'</span>])
+        losses.append(loss.item())
+
+        <span class="cmt"># 反向传播</span>
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        <span class="cmt"># 增大学习率</span>
+        <span class="kw">for</span> pg <span class="kw">in</span> optimizer.param_groups:
+            pg[<span class="str">'lr'</span>] *= lr_multiplier
+
+    <span class="cmt"># 绘制学习率-损失曲线</span>
+    plt.figure(figsize=(<span class="num">10</span>, <span class="num">4</span>))
+    plt.plot(lrs, losses)
+    plt.xlabel(<span class="str">'Learning Rate'</span>)
+    plt.ylabel(<span class="str">'Loss'</span>)
+    plt.xscale(<span class="str">'log'</span>)
+    plt.title(<span class="str">'LR Range Test'</span>)
+    plt.savefig(<span class="str">'lr_range_test.png'</span>)
+    plt.show()
+
+    <span class="cmt"># 最佳学习率：损失下降最快的地方</span>
+    <span class="kw">return</span> lrs[losses.index(<span class="fn">min</span>(losses))]</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 解读LR曲线：</strong>选择损失下降最快（曲线最陡）的地方对应的学习率，通常是最佳学习率的10倍作为最大值。
+  </div>
+</div>
+
+<div class="section" id="llm-hyperparameter-s3">
+  <h2>批量大小选择</h2>
+
+  <h3>批量大小的影响</h3>
+
+  <table>
+    <tr><th>批量大小</th><th>优点</th><th>缺点</th><th>适用场景</th></tr>
+    <tr><td><strong>小（4-8）</strong></td><td>泛化好，显存占用小</td><td>训练不稳定，速度慢</td><td>小数据集，显存有限</td></tr>
+    <tr><td><strong>中（16-32）</strong></td><td>平衡</td><td>平衡</td><td>大多数情况（推荐）</td></tr>
+    <tr><td><strong>大（64+）</strong></td><td>训练稳定，速度快</td><td>泛化差，显存占用大</td><td>大数据集，多GPU</td></tr>
+  </table>
+
+  <h3>有效批量大小</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># 梯度累积：模拟大batch size</span>
+accumulation_steps = <span class="num">4</span>  <span class="cmt"># 每4步更新一次</span>
+actual_batch_size = <span class="num">8</span> * accumulation_steps  <span class="cmt"># 等效batch_size=32</span>
+
+<span class="kw">for</span> i, batch <span class="kw">in</span> <span class="fn">enumerate</span>(train_loader):
+    outputs = model(batch[<span class="str">"input_ids"</span>])
+    loss = criterion(outputs, batch[<span class="str">"labels"</span>])
+    loss = loss / accumulation_steps  <span class="cmt"># 缩放损失</span>
+    loss.backward()
+
+    <span class="kw">if</span> (i + <span class="num">1</span>) % accumulation_steps == <span class="num">0</span>:
+        optimizer.step()
+        optimizer.zero_grad()</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-hyperparameter-s4">
+  <h2>Warmup策略</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>Warmup就像运动前的热身——刚开始用小步快走，逐渐加速到正常跑步速度。这样可以避免一开始就用太大的学习率导致训练不稳定。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> transformers <span class="kw">import</span> get_cosine_schedule_with_warmup
+
+<span class="cmt"># 余弦衰减 + Warmup（最常用）</span>
+num_epochs = <span class="num">3</span>
+num_training_steps = <span class="fn">len</span>(train_loader) * num_epochs
+num_warmup_steps = <span class="fn">int</span>(<span class="num">0.1</span> * num_training_steps)  <span class="cmt"># 10% Warmup</span>
+
+scheduler = get_cosine_schedule_with_warmup(
+    optimizer,
+    num_warmup_steps=num_warmup_steps,
+    num_training_steps=num_training_steps
+)
+
+<span class="cmt"># 在训练循环中调用scheduler</span>
+<span class="kw">for</span> epoch <span class="kw">in</span> <span class="fn">range</span>(num_epochs):
+    <span class="kw">for</span> batch <span class="kw">in</span> train_loader:
+        <span class="cmt"># ... 训练代码 ...</span>
+        scheduler.step()  <span class="cmt"># 更新学习率</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-hyperparameter-s4b">
+  <h2>WSD调度策略（2025-2026新趋势）</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 WSD（Warmup-Stable-Decay）调度：</strong>2025-2026年在大规模预训练中越来越流行的三阶段调度策略。DeepSeek V3/V4、MiniCPM等模型均采用了此策略。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">文本</span></div>
+    <pre><code><span class="cmt"># WSD调度策略的三个阶段</span>
+
+<span class="num">阶段1 - Warmup</span>：学习率从0线性增长到峰值
+   持续约总步数的5%-10%
+
+<span class="num">阶段2 - Stable</span>：学习率保持恒定
+   持续约总步数的80%-90%，占训练主体
+
+<span class="num">阶段3 - Decay</span>：学习率快速衰减到接近0
+   持续约总步数的5%-10%，可用余弦或线性衰减
+
+<span class="cmt"># 优势：Stable阶段可随时停止并进入Decay</span>
+<span class="cmt"># 适合不确定总训练量的场景（如按需扩展训练规模）</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-hyperparameter-s4c">
+  <h2>学习率与批量大小的关系</h2>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 线性缩放规则：</strong>当你改变批量大小时，学习率也需要相应调整。这是一个常被忽略但非常重要的经验法则。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">文本</span></div>
+    <pre><code><span class="cmt"># 线性缩放规则（Linear Scaling Rule）</span>
+<span class="cmt"># 当batch_size变为k倍时，学习率也应变为k倍</span>
+
+原始设置: batch_size=8,  lr=1e-4
+调整后:   batch_size=32, lr=4e-4   <span class="cmt"># batch_size变4倍，lr也变4倍</span>
+
+<span class="cmt"># Square Root缩放（更保守，某些场景更稳定）</span>
+lr_new = lr_base * sqrt(new_batch_size / base_batch_size)
+
+<span class="cmt"># 注意：缩放后需要重新调整warmup步数</span>
+<span class="cmt"># 大batch通常需要更长的warmup</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 实践建议：</strong>从较小的batch size和学习率开始，逐步增大。如果增大batch size后训练不稳定，尝试使用square root缩放而非线性缩放。
+  </div>
+</div>
+
+<div class="section" id="llm-hyperparameter-s4d">
+  <h2>muP：跨模型规模的超参数迁移</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 muP（Maximal Update Parametrization）：</strong>一种参数化方法，使得在小模型上调优的超参数可以直接迁移到大模型上使用，大幅降低大模型超参数搜索的成本。Cerebras、xAI等团队在训练大规模模型时已采用此方法。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># muP核心思想：调整参数更新的缩放方式</span>
+<span class="cmt"># 使得不同宽度的模型在相同超参数下行为一致</span>
+
+<span class="cmt"># 使用torch.optim中的实现（PyTorch 2.12+）</span>
+<span class="cmt"># 或使用muP官方库：pip install muP</span>
+
+<span class="cmt"># 关键区别：</span>
+<span class="cmt"># - 标准参数化：隐藏层宽度变化时，最优学习率也会变化</span>
+<span class="cmt"># - muP：通过调整初始化和学习率缩放，最优学习率保持不变</span>
+
+<span class="cmt"># 实践流程：</span>
+<span class="cmt"># 1. 在小模型（如125M）上用muP调优超参数</span>
+<span class="cmt"># 2. 将最优超参数直接应用到目标大模型（如7B、70B）</span>
+<span class="cmt"># 3. 仅需微调，无需重新搜索</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-hyperparameter-s5">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：超参数搜索</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>用Optuna进行超参数搜索。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 安装Optuna：<code>pip install optuna</code></p>
+      <p>② 定义搜索空间（学习率、batch size、dropout）</p>
+      <p>③ 运行10次试验</p>
+      <p>④ 找出最佳超参数组合</p>
+      <p>⑤ 用最佳参数重新训练并验证</p>
+    </div>
+  </div>
+</div>
+
+
+
+</div>
+
+</section>

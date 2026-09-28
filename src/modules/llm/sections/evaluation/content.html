@@ -1,0 +1,304 @@
+<section class="llm-mod llm-m-evaluation" id="llm-evaluation"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#0891b2;">
+  <h1>📊 模型评估</h1>
+  <p>掌握模型评估的全面方法</p>
+</div>
+
+<div class="section" id="llm-evaluation-s1">
+  <h2>评估指标详解</h2>
+
+  <h3>分类任务指标</h3>
+
+  <table>
+    <tr><th>指标</th><th>公式</th><th>适用场景</th></tr>
+    <tr><td><strong>准确率（Accuracy）</strong></td><td>正确数 / 总数</td><td>类别平衡时</td></tr>
+    <tr><td><strong>精确率（Precision）</strong></td><td>TP / (TP+FP)</td><td>关注假阳性</td></tr>
+    <tr><td><strong>召回率（Recall）</strong></td><td>TP / (TP+FN)</td><td>关注假阴性</td></tr>
+    <tr><td><strong>F1分数</strong></td><td>2 × P × R / (P+R)</td><td>精确率和召回率的平衡</td></tr>
+  </table>
+
+  <h3>生成任务指标</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> numpy <span class="kw">as</span> np
+<span class="kw">from</span> collections <span class="kw">import</span> Counter
+<span class="kw">import</span> math
+
+<span class="kw">def</span> <span class="fn">compute_perplexity</span>(loss):
+    <span class="str">"""计算困惑度（Perplexity）"""</span>
+    <span class="kw">return</span> np.exp(loss)
+
+<span class="cmt"># ============================================================</span>
+<span class="cmt"># BLEU：推荐直接使用成熟库，而非自行实现</span>
+<span class="cmt"># pip install sacrebleu   # 标准实现，论文引用首选</span>
+<span class="cmt"># pip install nltk         # NLTK也提供BLEU</span>
+<span class="cmt"># ============================================================</span>
+
+<span class="cmt"># 方式1：使用sacrebleu（推荐，可复现）</span>
+<span class="kw">import</span> sacrebleu
+bleu = sacrebleu.corpus_bleu(hypotheses, [references])
+<span class="fn">print</span>(bleu.score)  <span class="cmt"># BLEU分数</span>
+
+<span class="cmt"># 方式2：使用NLTK</span>
+<span class="kw">from</span> nltk.translate.bleu_score <span class="kw">import</span> sentence_bleu, SmoothingFunction
+score = sentence_bleu([ref_tokens], hyp_tokens,
+                       weights=(<span class="num">0.25</span>, <span class="num">0.25</span>, <span class="num">0.25</span>, <span class="num">0.25</span>),
+                       smoothing_function=SmoothingFunction().method1)
+
+<span class="cmt"># BLEU计算原理（供理解，实际请用上面的库）：</span>
+<span class="cmt"># 1. 计算1-gram到4-gram的修改精度（Modified Precision）</span>
+<span class="cmt">#    p_n = 匹配的n-gram数 / 候选文本中n-gram总数</span>
+<span class="cmt"># 2. 简短惩罚（Brevity Penalty）：</span>
+<span class="cmt">#    BP = min(1, e^(1 - r/c))  其中r=参考长度，c=候选长度</span>
+<span class="cmt"># 3. 最终BLEU = BP * exp( sum(w_n * log(p_n)) )  n=1..4</span></code></pre>
+  </div>
+
+  <h3>ROUGE-L（推荐使用库）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># ROUGE-L：基于最长公共子序列（LCS）的F-measure</span>
+<span class="cmt"># 注意：应基于token级别计算，而非字符级别</span>
+<span class="cmt"># pip install rouge-score</span>
+
+<span class="cmt"># 方式1：使用rouge-score库（推荐）</span>
+<span class="kw">from</span> rouge_score <span class="kw">import</span> rouge_scorer
+scorer = rouge_scorer.RougeScorer([<span class="str">'rougeL'</span>], use_stemmer=<span class="kw">True</span>)
+scores = scorer.score(reference_text, hypothesis_text)
+<span class="fn">print</span>(scores[<span class="str">'rougeL'</span>])  <span class="cmt"># 返回 precision, recall, fmeasure</span>
+
+<span class="cmt"># ROUGE-L计算原理（供理解）：</span>
+<span class="cmt"># 1. 在token级别计算参考文本和候选文本的最长公共子序列（LCS）</span>
+<span class="cmt"># 2. Recall = LCS长度 / 参考文本token数</span>
+<span class="cmt"># 3. Precision = LCS长度 / 候选文本token数</span>
+<span class="cmt"># 4. F-measure = 2 * P * R / (P + R)</span>
+<span class="cmt"># 注意：不是用difflib.SequenceMatcher.ratio()做字符级比对！</span></code></pre>
+  <h2>基准测试（Benchmarks）</h2>
+
+  <h3>经典基准（仍然重要）</h3>
+
+  <table>
+    <tr><th>基准</th><th>任务类型</th><th>评估内容</th></tr>
+    <tr><td><strong>MMLU</strong></td><td>多选题</td><td>57个学科的知识（逐步被MMLU-Pro替代）</td></tr>
+    <tr><td><strong>HumanEval</strong></td><td>代码生成</td><td>函数实现能力（逐步被EvalPlus替代）</td></tr>
+    <tr><td><strong>GSM8K</strong></td><td>数学推理</td><td>小学数学应用题</td></tr>
+    <tr><td><strong>TruthfulQA</strong></td><td>真实性</td><td>回答是否真实可信</td></tr>
+  </table>
+
+  <h3>2025-2026年主流基准（Open LLM Leaderboard v2标准）</h3>
+
+  <table>
+    <tr><th>基准</th><th>任务类型</th><th>评估内容</th><th>特点</th></tr>
+    <tr><td><strong>MMLU-Pro</strong></td><td>多选题（10选1）</td><td>升级版MMLU，更难更稳定</td><td>替代MMLU成为标准知识测试</td></tr>
+    <tr><td><strong>GPQA Diamond</strong></td><td>科学问答</td><td>研究生级别科学问题（约198题）</td><td>人类专家也仅约65%准确率</td></tr>
+    <tr><td><strong>MATH-500</strong></td><td>数学推理</td><td>标准化数学评估</td><td>涵盖代数到数论多个领域</td></tr>
+    <tr><td><strong>HumanEval+</strong></td><td>代码生成</td><td>扩展版HumanEval，更多测试用例</td><td>EvalPlus框架，更严格的代码测试</td></tr>
+    <tr><td><strong>LiveCodeBench</strong></td><td>实时代码</td><td>从竞赛平台持续收集的新题</td><td>抗数据污染，题目持续更新</td></tr>
+    <tr><td><strong>IFEval</strong></td><td>指令遵循</td><td>模型是否遵循具体指令约束</td><td>可验证的格式/内容约束</td></tr>
+    <tr><td><strong>SWE-Bench Verified</strong></td><td>软件工程</td><td>解决真实GitHub Issue</td><td>业界公认的代码能力黄金标准</td></tr>
+    <tr><td><strong>ARC-AGI</strong></td><td>抽象推理</td><td>抽象归纳推理能力</td><td>衡量"真正的智能"</td></tr>
+    <tr><td><strong>Chatbot Arena</strong></td><td>人类偏好</td><td>LMSYS ELO排名，真人盲测对比</td><td>最权威的用户体验评估</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># 使用lm-eval-harness进行基准测试</span>
+<span class="cmt"># pip install lm-eval</span>
+
+<span class="cmt"># 命令行方式</span>
+<span class="cmt"># lm_eval --model hf --model_args pretrained=your_model \</span>
+<span --model_args pretrained=your_model \</span>
+<span class="cmt">#   --tasks mmlu,gsm8k \</span>
+<span class="cmt">#   --device cuda:0</span>
+
+<span class="cmt"># Python方式</span>
+<span class="kw">from</span> lm_eval <span class="kw">import</span> evaluator, tasks
+
+results = evaluator.simple_evaluate(
+    model=<span class="str">"hf"</span>,
+    model_args=<span class="str">"pretrained=your_model"</span>,
+    tasks=[<span class="str">"mmlu"</span>, <span class="str">"gsm8k"</span>],
+    device=<span class="str">"cuda:0"</span>
+)
+
+<span class="fn">print</span>(results[<span class="str">"results"</span>])</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-evaluation-s3">
+  <h2>评估代码实现</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">import</span> torch
+<span class="kw">from</span> sklearn.metrics <span class="kw">import</span> accuracy_score, f1_score
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+<span class="kw">def</span> <span class="fn">evaluate_model</span>(model, test_loader, device):
+    <span class="str">"""完整评估流程"""</span>
+    model.<span class="fn">eval</span>()
+    all_preds = []
+    all_labels = []
+    total_loss = <span class="num">0</span>
+
+    <span class="kw">with</span> torch.no_grad():
+        <span class="kw">for</span> batch <span class="kw">in</span> test_loader:
+            input_ids = batch[<span class="str">"input_ids"</span>].to(device)
+            labels = batch[<span class="str">"labels"</span>].to(device)
+
+            outputs = model(input_ids, labels=labels)
+            loss = outputs.loss
+            logits = outputs.logits
+
+            total_loss += loss.item()
+            preds = torch.argmax(logits, dim=-<span class="num">1</span>)
+
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+    <span class="cmt"># 计算指标</span>
+    avg_loss = total_loss / <span class="fn">len</span>(test_loader)
+    perplexity = np.exp(avg_loss)
+    accuracy = accuracy_score(all_labels, all_preds)
+    f1 = f1_score(all_labels, all_preds, average=<span class="str">"weighted"</span>)
+
+    <span class="kw">return</span> {
+        <span class="str">"loss"</span>: avg_loss,
+        <span class="str">"perplexity"</span>: perplexity,
+        <span class="str">"accuracy"</span>: accuracy,
+        <span class="str">"f1_score"</span>: f1
+    }</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-evaluation-s3b">
+  <h2>LLM-as-Judge评估方法</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 LLM-as-Judge：</strong>用一个强大的LLM（如GPT-4、Claude）作为"裁判"来评估其他模型的输出质量。这种方法在2025-2026年已成为评估开放式对话质量的主流方法，MT-Bench、Arena-Hard、AlpacaEval 2.0均基于此。
+  </div>
+
+  <h3>主要框架</h3>
+
+  <table>
+    <tr><th>框架</th><th>评估方式</th><th>特点</th></tr>
+    <tr><td><strong>MT-Bench</strong></td><td>GPT-4打分（1-10分）</td><td>8类多轮对话，最初由LMSYS提出</td></tr>
+    <tr><td><strong>Arena-Hard</strong></td><td>与基座模型对比胜率</td><td>500个高难度prompt，与Chatbot Arena高度相关</td></tr>
+    <tr><td><strong>AlpacaEval 2.0</strong></td><td>长度控制胜率（LC Win Rate）</td><td>805个指令，防止模型通过冗长回答作弊</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># LLM-as-Judge示例：用GPT-4评估模型回答质量</span>
+<span class="kw">from</span> openai <span class="kw">import</span> OpenAI
+
+client = OpenAI()
+
+judge_prompt = <span class="str">"""请评估以下AI助手的回答质量（1-10分）。
+评估维度：有用性、准确性、安全性、语言流畅度。
+
+问题：{question}
+回答：{answer}
+
+请给出分数和简短理由。"""</span>
+
+<span class="kw">def</span> <span class="fn">llm_judge</span>(question, answer):
+    response = client.chat.completions.create(
+        model=<span class="str">"gpt-4"</span>,
+        messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>,
+                    <span class="str">"content"</span>: judge_prompt.format(
+                        question=question, answer=answer)}],
+        temperature=<span class="num">0</span>,  <span class="cmt"># 确定性评判</span>
+    )
+    <span class="kw">return</span> response.choices[<span class="num">0</span>].message.content</code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ LLM-as-Judge的局限性：</strong>
+    <ul>
+      <li><strong>位置偏见</strong>：倾向于偏好出现在特定位置的回答</li>
+      <li><strong>冗长偏见</strong>：倾向于给更长的回答更高分</li>
+      <li><strong>自我偏见</strong>：GPT-4可能偏好GPT-4风格的回答</li>
+      <li><strong>缓解方法</strong>：交换回答顺序取平均、使用长度控制、多裁判投票</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-evaluation-s3c">
+  <h2>数据污染与评估可靠性</h2>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 数据污染（Data Contamination）：</strong>如果模型的训练数据中包含了评估基准的测试集，那么评估结果就不可信——相当于"考试前看了答案"。这是2025-2026年LLM评估领域最关注的问题之一。
+  </div>
+
+  <h3>污染的常见形式</h3>
+
+  <ul>
+    <li><strong>直接包含</strong>：训练数据中直接包含MMLU、GSM8K等基准的题目和答案</li>
+    <li><strong>间接包含</strong>：包含讨论这些题目的博客、论坛帖子、教材</li>
+    <li><strong>近似包含</strong>：包含与基准题目非常相似的问题</li>
+  </ul>
+
+  <h3>应对措施</h3>
+
+  <ul>
+    <li><strong>使用动态基准</strong>：如LiveCodeBench（持续更新）、Chatbot Arena（实时对比）</li>
+    <li><strong>使用n-gram去污染工具</strong>：检测训练数据和测试集的重叠</li>
+    <li><strong>关注可验证任务</strong>：代码（可执行验证）、数学（可检查推导步骤）</li>
+    <li><strong>多基准交叉验证</strong>：不要只看单一基准，综合多个评估结果</li>
+  </ul>
+</div>
+
+<div class="section" id="llm-evaluation-s3d">
+  <h2>最新模型基准成绩参考（2025-2026）</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 注意：</strong>以下成绩来自各模型官方报告和第三方评测，仅作参考。不同评测条件（prompt格式、采样参数）可能导致结果差异。
+  </div>
+
+  <table>
+    <tr><th>模型</th><th>SWE-Bench Verified</th><th>GPQA Diamond</th><th>LiveCodeBench</th><th>Chatbot Arena ELO</th></tr>
+    <tr><td><strong>DeepSeek V4-Pro</strong></td><td>80.6%</td><td>90.1%</td><td>93.5%</td><td>Top tier</td></tr>
+    <tr><td><strong>Claude Opus 5</strong></td><td>未核实</td><td>93.6%</td><td>-</td><td>Top tier</td></tr>
+    <tr><td><strong>Fable 5</strong></td><td>未核实</td><td>-</td><td>-</td><td>Top tier</td></tr>
+    <tr><td><strong>GPT-5.5</strong></td><td>-</td><td>-</td><td>-</td><td>Top tier</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>💡 解读建议：</strong>
+    <ul>
+      <li>没有任何单一基准能全面反映模型能力——需要综合多个维度</li>
+      <li>SWE-Bench Verified是当前代码能力最权威的指标</li>
+      <li>Chatbot Arena的ELO排名最能反映真实用户体验</li>
+      <li>注意区分"官方自报"和"第三方复现"的成绩</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-evaluation-s4">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：模型评估Pipeline</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>构建完整的模型评估Pipeline。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 在测试集上评估微调后的模型</p>
+      <p>② 使用sacrebleu计算BLEU，使用rouge-score计算ROUGE-L</p>
+      <p>③ 使用lm-eval-harness运行MMLU-Pro和GSM8K基准测试</p>
+      <p>④ 对比不同模型在同一测试集上的表现</p>
+      <p>⑤ 生成评估报告，讨论可能的数据污染风险</p>
+    </div>
+  </div>
+</div>
+
+
+
+</div>
+</div>
+</section>

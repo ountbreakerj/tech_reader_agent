@@ -1,0 +1,25 @@
+{
+  "key": "codex-harness",
+  "route": "#/codex-harness",
+  "scopeId": "mod-codex-harness",
+  "title": "Codex Harness",
+  "subtitle": "用 Python 深入状态、并发与失败处理",
+  "styles": ["codex-harness.css"],
+  "content": [{"id": "cx-home", "file": "content.html"}],
+  "toc": [
+    {"id": "cx-home", "t": "Codex 模块目录"},
+    {"id": "cx-loop", "t": "01 · 一次任务怎么跑"},
+    {"id": "cx-context", "t": "02 · 模型每次看到什么"},
+    {"id": "cx-tools", "t": "03 · 工具怎么找到并执行"},
+    {"id": "cx-permissions", "t": "04 · 权限和沙箱怎么分工"},
+    {"id": "cx-history", "t": "05 · 历史怎么记录和恢复"},
+    {"id": "cx-compact", "t": "06 · 上下文太长怎么办"},
+    {"id": "cx-extensions", "t": "07 · 怎么接入新能力"},
+    {"id": "cx-example", "t": "08 · 跟着一次修复走完"},
+    {"id": "cx-stream", "t": "09 · 流式响应与并发工具"},
+    {"id": "cx-process", "t": "10 · 长命令与终端会话"},
+    {"id": "cx-retry", "t": "11 · 模型连接与断线重试"},
+    {"id": "cx-lab", "t": "12 · 从测试反推设计"},
+    {"id": "cx-source-map", "t": "源码地图与阅读顺序"}
+  ]
+}

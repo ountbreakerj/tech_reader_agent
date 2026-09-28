@@ -1,0 +1,74 @@
+
+.llm-m-advanced-rag .module-wrapper *, .llm-m-advanced-rag .module-wrapper *::before, .llm-m-advanced-rag .module-wrapper *::after { box-sizing: border-box; }
+.llm-m-advanced-rag h1 { font-size: 1.875rem;
+            
+            border-bottom: 2px solid #4a9eff;
+            padding-bottom: 0.5rem;
+            margin-top: 2rem; }
+.llm-m-advanced-rag h2 { font-size: 1.5rem;
+            
+            border-bottom: 1px solid #2a2a3a;
+            padding-bottom: 0.4rem;
+            margin-top: 2.5rem; }
+.llm-m-advanced-rag h3 { font-size: 1.2rem;
+            
+            margin-top: 1.5rem; }
+.llm-m-advanced-rag a { text-decoration: none; }
+.llm-m-advanced-rag a:hover { text-decoration: underline; }
+.llm-m-advanced-rag p { margin: 0.6rem 0; }
+.llm-m-advanced-rag ul, .llm-m-advanced-rag ol { padding-left: 1.5rem; }
+.llm-m-advanced-rag li { margin: 0.3rem 0; }
+.llm-m-advanced-rag table { border-collapse: collapse;
+            width: 100%;
+            margin: 1rem 0;
+            font-size: 0.92rem; }
+.llm-m-advanced-rag th, .llm-m-advanced-rag td { border: 1px solid #2a2a3a;
+            padding: 0.6rem 0.8rem;
+            text-align: left; }
+.llm-m-advanced-rag th { font-weight: 600; }
+.llm-m-advanced-rag pre { padding: 1rem 1.2rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 0.88rem;
+            line-height: 1.6;
+            margin: 1rem 0; }
+.llm-m-advanced-rag code { padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.88em;
+            font-family: 'Fira Code', 'Consolas', monospace; }
+.llm-m-advanced-rag pre code { padding: 0; }
+.llm-m-advanced-rag .callout { border-left: 4px solid;
+            padding: 0.8rem 1rem;
+            margin: 1rem 0;
+            border-radius: 0 6px 6px 0;
+            font-size: 0.93rem; }
+.llm-m-advanced-rag .callout-title { font-weight: 700;
+            margin-bottom: 0.3rem; }
+.llm-m-advanced-rag .flow-diagram { border: 1px solid #2a2a3a;
+            border-radius: 8px;
+            padding: 1.2rem;
+            margin: 1rem 0;
+            text-align: center;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.85rem;
+            line-height: 2;
+            
+            overflow-x: auto;
+            white-space: pre; }
+.llm-m-advanced-rag .tag { display: inline-block;
+            padding: 0.1rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            margin: 0 0.15rem; }
+.llm-m-advanced-rag .exercise-box { border: 1px solid #3a3a5a;
+            border-radius: 8px;
+            padding: 1.2rem 1.4rem;
+            margin: 0.8rem 0; }
+.llm-m-advanced-rag .exercise-box h4 { margin: 0 0 0.5rem; }
+.llm-m-advanced-rag footer { margin-top: 3rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #2a2a3a;
+            text-align: center;
+            
+            font-size: 0.85rem; }

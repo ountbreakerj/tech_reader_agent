@@ -1,0 +1,66 @@
+
+.llm-m-multimodal-rag .module-wrapper * { margin: 0; padding: 0; box-sizing: border-box; }
+.llm-m-multimodal-rag h1 { font-size: 1.875rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem; }
+.llm-m-multimodal-rag h2 { font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--lc-border); }
+.llm-m-multimodal-rag h3 { font-size: 1.2rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem; }
+.llm-m-multimodal-rag p { margin-bottom: 1rem; }
+.llm-m-multimodal-rag ul, .llm-m-multimodal-rag ol { margin-bottom: 1rem; padding-left: 1.5rem; }
+.llm-m-multimodal-rag li { margin-bottom: 0.4rem; }
+.llm-m-multimodal-rag .subtitle { font-size: 1.05rem; margin-bottom: 2rem; }
+.llm-m-multimodal-rag table { width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+  font-size: 0.92rem; }
+.llm-m-multimodal-rag th { font-weight: 600;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--lc-border);
+  text-align: left; }
+.llm-m-multimodal-rag td { padding: 0.6rem 0.8rem;
+  border: 1px solid var(--lc-border);
+  vertical-align: top; }
+.llm-m-multimodal-rag pre { padding: 1rem 1.2rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin-bottom: 1.5rem;
+  font-size: 0.88rem;
+  line-height: 1.6; }
+.llm-m-multimodal-rag code { font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  
+  
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.88em; }
+.llm-m-multimodal-rag pre code { padding: 0; }
+.llm-m-multimodal-rag .callout { padding: 1rem 1.2rem;
+  border-radius: 6px;
+  margin-bottom: 1.5rem;
+  font-size: 0.95rem; }
+.llm-m-multimodal-rag .callout-blue { border-left: 4px solid #3b82f6; }
+.llm-m-multimodal-rag .callout-green { border-left: 4px solid #22c55e; }
+.llm-m-multimodal-rag .callout-yellow { border-left: 4px solid #eab308; }
+.llm-m-multimodal-rag .callout-purple { border-left: 4px solid #a855f7; }
+.llm-m-multimodal-rag .callout strong { display: block; margin-bottom: 0.3rem; }
+.llm-m-multimodal-rag .arch-table td { text-align: center; font-size: 0.9rem; }
+.llm-m-multimodal-rag .arrow-cell { border: none !important;  font-size: 1.4rem;  padding: 0.3rem; }
+.llm-m-multimodal-rag .tag { display: inline-block;
+  
+  
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.82rem;
+  margin-right: 0.3rem; }
+.llm-m-multimodal-rag .exercise-box { border: 2px solid #f59e0b;
+  border-radius: 8px;
+  padding: 1.2rem 1.5rem;
+  margin-bottom: 1rem; }
+.llm-m-multimodal-rag .exercise-box h4 { margin-bottom: 0.5rem; }

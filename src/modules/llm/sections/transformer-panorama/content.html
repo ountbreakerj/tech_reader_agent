@@ -1,0 +1,251 @@
+<section class="llm-mod llm-m-tp llm-m-transformer-panorama" id="llm-transformer-panorama"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>🔬 Transformer 全景详解</h1>
+  <p>从 Tokenization 到 KV Cache，系统理解现代大模型的完整架构与推理机制</p>
+</div>
+
+<div class="section" id="llm-transformer-panorama-s1">
+  <h2>整体架构：从 Token 到 Logits</h2>
+  <p>Transformer 的完整通路可以分成五个阶段：输入编码、位置信息注入、多层 Transformer Block 变换、最终归一化、以及输出投影（lm_head）到词表概率。</p>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    A[原始文本] --> B[Tokenizer BPE分词]
+    B --> C[Token IDs序列]
+    C --> D[Embedding矩阵查表<br/>得到稠密向量]
+    D --> E[加入位置编码<br/>RoPE或绝对位置]
+    E --> F[Transformer Block 1<br/>Multi-Head Self-Attention + FFN]
+    F --> G[Transformer Block 2]
+    G --> H[... 重复 N 层 ...]
+    H --> I[最终 RMSNorm / LayerNorm]
+    I --> J[lm_head 线性投影到词表]
+    J --> K[Softmax 得到 next-token 概率]
+</pre></div>
+  <p>现代 LLM（GPT 系、Llama 系）几乎全部采用 <strong>仅 Decoder</strong> 架构：去掉了原始 Transformer 的 Encoder 和 Cross-Attention，因为在无监督预训练场景下不需要固定的条件序列，单 Decoder + Causal Mask 就能从左到右自回归生成。BERT 系列则保留了 Encoder 路径做双向理解。</p>
+  <p>Embedding 矩阵的维度是 <code>vocab_size × d_model</code>（Llama-3.1-8B 为 128256 × 4096 ≈ 5.3 亿参数），输出 lm_head 通常与它共享权重（<strong>tied embeddings</strong>），这样既省了一大块参数，又保证了输入嵌入与输出投影在同一语义空间。</p>
+</div>
+
+<div class="section" id="llm-transformer-panorama-s2">
+  <h2>Tokenization：BPE 与词表</h2>
+  <p>模型不直接处理字符，而是将文本切分为子词单元（subword）。最主流的方案是 <strong>Byte-Pair Encoding（BPE）</strong>：从单字节起步，反复合并出现频率最高的相邻对，直到词表达到目标大小。现代变体 BBPE（Byte-level BPE）确保任意 UTF-8 字节都有对应 token，彻底消除「未知词」问题。</p>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    A[原始语料] --> B[计算字节对频率]
+    B --> C[合并最高频对]
+    C --> D{词表达到<br/>目标大小?}
+    D -->|否| B
+    D -->|是| E[保存合并规则<br/>和词表文件]
+    E --> F[推理时按规则<br/>贪心切分新文本]
+</pre></div>
+  <p>中文一个汉字通常占 2–3 个 token（UTF-8 编码 3 字节，多数模型把高频汉字合并为单 token），英文单词约 0.75 个 token。这意味着同等语义内容，中文比英文多消耗约 1.5–2 倍 token，影响上下文窗口和成本。</p>
+  <p>tokenizer 文件（<code>tokenizer.json</code> + <code>tokenizer_config.json</code>）记录了合并规则和特殊 token（如 BOS、EOS、PAD）。<strong>模型只认识训练时见过的 token 序列</strong>，切换 tokenizer 就等于换了一门语言——模型权重完全失效，这是为什么 tokenizer 版本必须和模型权重对应。</p>
+</div>
+
+<div class="section" id="llm-transformer-panorama-s3">
+  <h2>Self-Attention：逐步拆解</h2>
+  <p>自注意力的核心直觉：对序列中每个位置，动态计算它与所有其他位置的相关性权重，然后用这些权重对所有位置的「值」做加权求和。</p>
+  <h3>Q / K / V 三个投影各扮演什么角色</h3>
+  <p>输入序列 <code>x ∈ ℝ^{N×d}</code> 经过三组独立的线性变换得到 Q（Query）、K（Key）、V（Value）——<strong>不是三者相等，而是同一输入经三个不同权重矩阵投影</strong>：</p>
+  <ul>
+    <li><strong>Q（查询）</strong>：当前位置想找什么信息</li>
+    <li><strong>K（键）</strong>：每个位置能提供什么信息</li>
+    <li><strong>V（值）</strong>：实际要聚合的内容</li>
+  </ul>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    X[输入 x<br/>N x d] --> WQ[权重矩阵 W_Q]
+    X --> WK[权重矩阵 W_K]
+    X --> WV[权重矩阵 W_V]
+    WQ --> Q[Q 矩阵<br/>N x d_k]
+    WK --> K[K 矩阵<br/>N x d_k]
+    WV --> V[V 矩阵<br/>N x d_v]
+</pre></div>
+  <h3>点积打分 → 缩放 → Softmax → 加权求和</h3>
+  <p>相似度打分：<code>scores = Q × K^T</code>，形状 <code>N × N</code>，每个元素是两个向量的点积。</p>
+  <p><strong>为什么要除以 √d_k？</strong> 点积的方差随维度 d_k 线性增长（两个均值 0、方差 1 的随机向量，点积的方差是 d_k）。不缩放时，高维空间的点积会很大，将 softmax 推向饱和区（梯度几乎为 0），训练无法收敛。除以 √d_k 把方差拉回 1。</p>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    QK[Q x K^T<br/>形状 N x N] --> S[除以 sqrt d_k<br/>缩放分数]
+    S --> M[加 Causal Mask<br/>未来位置设为 -inf]
+    M --> SM[Softmax<br/>每行归一化]
+    SM --> W[注意力权重<br/>N x N 每行和为1]
+    W --> Out[W x V<br/>加权求和 N x d_v]
+</pre></div>
+  <h3>Causal Mask</h3>
+  <p>纯 Decoder 模型生成时，位置 i 只能看到位置 0…i 的信息（否则训练和推理不一致）。实现方式是在 softmax 之前把上三角部分置为 <code>-∞</code>，经 softmax 后这些位置的权重变为 0。</p>
+  <h3>正确的 PyTorch 实现（多头）</h3>
+  <p>常见错误：先对 <code>[N, d_model]</code> 的张量调用 <code>head_dim × head_dim</code> 的 Linear，再 reshape 分头——维度不匹配会直接 <code>RuntimeError</code>。正确做法是先 reshape 分头，再做投影，或者用 <code>d_model × d_model</code> 的 Linear 做一次变换后再 reshape。</p>
+  <pre><code>import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int):
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.h = num_heads
+        self.d_k = d_model // num_heads
+        # 用 d_model -> d_model 的 Linear，而不是 head_dim -> head_dim
+        self.W_q = nn.Linear(d_model, d_model, bias=False)
+        self.W_k = nn.Linear(d_model, d_model, bias=False)
+        self.W_v = nn.Linear(d_model, d_model, bias=False)
+        self.W_o = nn.Linear(d_model, d_model, bias=False)
+
+    def forward(self, x: torch.Tensor, mask=None):
+        B, N, D = x.shape
+        # 投影后再 reshape 分头
+        q = self.W_q(x).reshape(B, N, self.h, self.d_k).transpose(1, 2)  # B,h,N,d_k
+        k = self.W_k(x).reshape(B, N, self.h, self.d_k).transpose(1, 2)
+        v = self.W_v(x).reshape(B, N, self.h, self.d_k).transpose(1, 2)
+        # 点积注意力，einsum 下标要让序列维共享（q 用 l，k/v 用 s）
+        # 等价于 torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+        scores = torch.einsum("bhql,bhsl->bhqs", q, k) / math.sqrt(self.d_k)
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, float("-inf"))
+        attn = F.softmax(scores, dim=-1)
+        out = torch.einsum("bhqs,bhsd->bhqd", attn, v)  # B,h,N,d_k
+        out = out.transpose(1, 2).reshape(B, N, D)       # B,N,D
+        return self.W_o(out)
+</code></pre>
+</div>
+
+<div class="section" id="llm-transformer-panorama-s4">
+  <h2>Multi-Head Attention：多视角并行理解</h2>
+  <p>单头注意力的缺陷：Q/K/V 均来自同一输入，点积矩阵 QK^T 在训练初期容易对角线激活最强（即位置 i 最关注自己），弱化了对其他重要位置的聚焦。多头把 d_model 切分成 h 份，每个头独立学习不同的关注模式：</p>
+  <ul>
+    <li>头 1 可能学习语法主谓关系</li>
+    <li>头 2 可能学习指代消解（代词指向名词）</li>
+    <li>头 3 可能学习句子级别的局部结构</li>
+  </ul>
+  <p>拼接后再过一个输出投影 <code>W_o</code>，允许各头的信息混合。参数量：<code>4 × d_model²</code>（Q、K、V、O 各一个 d_model×d_model 矩阵）。</p>
+  <h3>MHA → MQA → GQA：KV Cache 与参数的权衡</h3>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    MHA[MHA<br/>每个头有独立 K V]
+    MQA[MQA 多查询注意力<br/>所有头共享 1 组 K V]
+    GQA[GQA 分组查询注意力<br/>G 组 K V 各对应 h/G 个 Q 头]
+    MHA -->|减少 K V 参数| GQA
+    GQA -->|极限| MQA
+</pre></div>
+  <p>KV Cache 大小与 K/V 的头数线性相关。设批大小 B、序列长 L、层数 layer、K/V 头数 n_kv、每头维度 d：</p>
+  <p><code>KV Cache 字节 = 2 × B × L × layer × n_kv × d × dtype_bytes</code></p>
+  <p>Llama-3.1-8B（GQA，8 个 KV 头，每头 128 维，32 层，bf16）：批大小 1、序列 8192 时约 <code>2×1×8192×32×8×128×2 ≈ 1.07 GB</code>。Llama-3.1-70B（8 个 KV 头，128 维，80 层）同条件约 <code>2×1×8192×80×8×128×2 ≈ 2.68 GB</code>。</p>
+</div>
+
+<div class="section" id="llm-transformer-panorama-s5">
+  <h2>位置编码：让模型感知序列顺序</h2>
+  <p>自注意力的 QK^T 只关心向量内容，不关心位置——打乱输入顺序，注意力分数完全不变。必须额外注入位置信息。</p>
+  <h3>进化路径</h3>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    A[原始正弦位置编码<br/>绝对位置 固定函数] --> B[可学习绝对编码<br/>GPT-2 BERT]
+    B --> C[相对位置编码<br/>T5 bias]
+    C --> D[RoPE 旋转位置编码<br/>2021 苏剑林 arXiv 2104.09864]
+    C --> E[ALiBi 线性注意力偏置<br/>直接加惩罚项]
+    D --> F[主流 LLM Llama系<br/>Qwen系 Mistral系]
+</pre></div>
+  <h3>RoPE 的旋转直觉</h3>
+  <p>RoPE（旋转位置编码，arXiv 2104.09864，2021 年 4 月）的核心思想：用旋转矩阵把位置信息编码进 Q 和 K，而不是加进输入 x。对位置 m 的 query 和位置 n 的 key，它们的点积只依赖相对距离 m−n，而不是绝对位置——这使得 RoPE 在推理长度超过训练长度时有较好的外推能力。</p>
+  <p>具体做法：把向量按维度两两分组，对第 i 组施加旋转角 <code>θᵢ = m / 10000^(2i/d)</code>。旋转矩阵只改变方向，不改变模长，因此不引入额外的数值不稳定性。</p>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    Q[Query 向量] --> R[对每个二维子空间<br/>乘以旋转矩阵 R_theta_m]
+    K[Key 向量] --> S[对每个二维子空间<br/>乘以旋转矩阵 R_theta_n]
+    R --> D[点积 RQ · RK = f 相对距离 m-n]
+    S --> D
+</pre></div>
+  <h3>长度外推</h3>
+  <p>NTK-aware scaling（线性缩放基础频率）和 YaRN 是两种主流的 RoPE 外推方法，本质上都是调整旋转频率，让模型在推理时能处理比训练时更长的序列，但都需要少量继续预训练才能完全恢复性能。</p>
+  <p>ALiBi 的做法更直接：在注意力分数上加一个与相对距离成比例的负偏置，不改变参数，外推效果在一定范围内不弱于 RoPE，但推理速度略低（需要额外的 bias 计算）。</p>
+</div>
+
+<div class="section" id="llm-transformer-panorama-s6">
+  <h2>FFN 与 MoE：信息转换与稀疏激活</h2>
+  <p>每个 Transformer Block 包含注意力层和前馈网络（FFN）两部分。FFN 的参数量占 Transformer Block 的约 2/3，是模型存储知识的主要场所。</p>
+  <h3>FFN 结构</h3>
+  <p>标准 FFN 是两层线性变换，中间有激活函数。常见尺寸：d_model → 4×d_model → d_model。</p>
+  <ul>
+    <li><strong>ReLU</strong>（原始 Transformer）：简单但稀疏，负值直接归零</li>
+    <li><strong>GELU</strong>（BERT、GPT-2）：平滑近似，训练更稳定</li>
+    <li><strong>SwiGLU</strong>（Llama、PaLM）：<code>x · σ(x) ⊙ W·x</code>，两路相乘，实验表明比 GELU 在 LLM 训练上更好；中间维度通常是 2/3 × 4d（约 2.67d）保持参数量不变</li>
+  </ul>
+  <h3>MoE：用稀疏激活扩大模型容量</h3>
+  <p><strong>关键事实</strong>：MoE 中每层用多个独立的 FFN（即「专家」）替换单一 FFN，注意力层、LayerNorm、embedding 等全部共享。专家不是完整的 Transformer block。</p>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    X[输入 token 向量] --> Router[路由网络<br/>计算每个专家的得分]
+    Router --> Top2[Top-2 路由<br/>选择得分最高的 2 个专家]
+    Top2 --> E1[专家 1 FFN]
+    Top2 --> E2[专家 2 FFN]
+    E1 --> WSum[加权求和]
+    E2 --> WSum
+    WSum --> Out[本层输出]
+</pre></div>
+  <p>Mixtral 8×7B：每层 8 个专家 FFN，每个 token 激活 top-2，总参数约 46.7B（8 个 7B 专家 FFN + 所有共享层），每次推理激活约 12.9B。这就是为什么总参 46.7B 而非 56B——注意力层与 7 个未激活专家的参数不参与计算。</p>
+</div>
+
+<div class="section" id="llm-transformer-panorama-s7">
+  <h2>残差连接与归一化</h2>
+  <h3>Post-LN vs Pre-LN</h3>
+  <p>原始 Transformer（《Attention Is All You Need》第 3.1 节）使用 Post-LN：</p>
+  <p><code>x = LayerNorm(x + SubLayer(x))</code></p>
+  <p>这里 LayerNorm 包住了残差相加之后的整个结果——「后置归一化」的含义正是如此。另一种常见错误写法 <code>x + LayerNorm(SubLayer(x))</code> 既非 Post-LN 也非 Pre-LN，是不存在的变体。</p>
+  <p>现代 LLM 几乎全部改用 Pre-LN（也叫 Pre-Norm）：</p>
+  <p><code>x = x + SubLayer(LayerNorm(x))</code></p>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    PostLN[Post-LN 原始 Transformer<br/>x = LayerNorm x + SubLayer x]
+    PreLN[Pre-LN 现代 LLM<br/>x = x + SubLayer LayerNorm x]
+    PostLN -->|训练不稳定<br/>深层梯度消失| Issue
+    PreLN -->|梯度稳定<br/>不需要 warmup| Stable
+</pre></div>
+  <p>Pre-LN 的优势：梯度在残差路径上直通到早期层，无需精心设计学习率 warmup；但输出层方差会随深度累积，最终层通常需要额外的 LayerNorm。</p>
+  <h3>RMSNorm</h3>
+  <p>LayerNorm 需要计算均值和方差，RMSNorm 只计算均方根（去掉了均值中心化步骤）：<code>RMSNorm(x) = x / RMS(x) × γ</code>。在实践中效果相当，但计算量约少 10–30%（取决于实现），Llama、Mistral 系列广泛采用。</p>
+</div>
+
+<div class="section" id="llm-transformer-panorama-s8">
+  <h2>推理机制：Prefill、Decode 与 KV Cache</h2>
+  <p>这一节直接回答《深入理解 AI Agent》第 2 章的核心疑问：<strong>为什么改动前缀会让缓存失效？</strong></p>
+  <h3>两个阶段</h3>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    P[Prefill 阶段<br/>并行处理输入 prompt] --> K[计算并缓存所有 token 的 K V]
+    K --> D[Decode 阶段<br/>每步生成一个 token]
+    D --> DK[只计算新 token 的 K V<br/>追加到 KV Cache]
+    DK --> D
+</pre></div>
+  <ul>
+    <li><strong>Prefill</strong>：一次性处理整个 prompt，计算密集（GPU 利用率高），主要延迟来源是内存带宽和计算量，结果是 prompt 中每个 token 的 K/V 向量存储在 KV Cache 里。</li>
+    <li><strong>Decode</strong>：每步只处理刚生成的一个 token，读取 KV Cache 里已有的 K/V，追加新 token 的 K/V，生成下一个 token。计算量极小，瓶颈是 KV Cache 的内存读带宽。</li>
+  </ul>
+  <h3>KV Cache 显存计算</h3>
+  <p>设批大小 B、序列总长 L、层数 layer、KV 头数 n_kv、每头维度 d_head、数据类型字节数 dtype_bytes（bf16 = 2）：</p>
+  <p><code>KV Cache 字节 = 2 × B × L × layer × n_kv × d_head × dtype_bytes</code></p>
+  <p>（系数 2 来自 K 和 V 各一份）</p>
+  <p>具体数字：Llama-3.1-70B（80 层，8 个 KV 头，128 维/头，bf16），批大小 1，序列 32768 token：</p>
+  <p><code>2 × 1 × 32768 × 80 × 8 × 128 × 2 ≈ 10.7 GB</code></p>
+  <h3>为什么改前缀导致缓存失效</h3>
+  <p>KV Cache 是<strong>位置绑定</strong>的——第 i 个 token 的 K/V 向量是在「已经看到了位置 0…i-1 所有信息」的条件下计算的。如果前缀改变了，后续所有 token 的因果上下文都改变了，它们的 K/V 不再正确，必须重新计算。</p>
+  <p>这就是 Agent 上下文设计的核心架构约束：<strong>把稳定内容（系统提示、工具定义、用户画像）放前面，把易变内容（用户最新消息、工具结果）放后面</strong>。前缀命中率直接决定推理成本——一旦在系统提示里加入时间戳，每次请求都要重算整个 prompt，Prefix Cache 毫无意义。</p>
+  <h3>Prefix Cache（跨请求缓存）</h3>
+  <p>Prefix Cache 是在 KV Cache 基础上的进一步优化：服务端把高频前缀的 KV Cache 在多个请求之间复用（Anthropic 的 prompt caching、vLLM 的 automatic prefix caching）。当多个请求共享相同的系统提示时，服务端只需计算一次，后续请求直接命中缓存。命中节省的成本与前缀长度成正比，典型优化 50–90% 的 TTFT（Time To First Token）。</p>
+</div>
+
+<div class="section" id="llm-transformer-panorama-s9">
+  <h2>计算复杂度与注意力优化</h2>
+  <p>自注意力的时间复杂度是 <code>O(N²·d)</code>：每个 token 要与其他所有 token 做点积，结果是 N×N 的注意力矩阵。对于长序列（N = 128k），这个矩阵本身就有 128k² = 16G 个元素，根本放不进 GPU 的 SRAM（通常只有几十 MB）。</p>
+  <h3>Flash Attention：同样的数学，更少的内存搬运</h3>
+  <p>Flash Attention 不改变注意力的数学结果，而是重排计算顺序：将 Q/K/V 分成小块（tiles），在 SRAM 内完成块内的所有计算，使用「online softmax」技巧在不存储完整 N×N 矩阵的情况下完成归一化。</p>
+  <div class="diagram"><pre class="mermaid">
+graph TB
+    Naive[标准实现<br/>写 N x N 矩阵到 HBM<br/>再读回做 softmax]
+    FA[Flash Attention<br/>分 tile 在 SRAM 内计算<br/>不写 N x N 到 HBM]
+    Naive -->|HBM 读写次数 O N^2| Slow
+    FA -->|HBM 读写次数 O N| Fast
+</pre></div>
+  <p>瓶颈不是 FLOP，而是 HBM 带宽。Flash Attention 将 HBM 访问量从 O(N²) 降到 O(N)，速度提升 2–4 倍，显存从 O(N²) 降到 O(N)，使百万 token 上下文成为可能。PyTorch 现在通过 <code>F.scaled_dot_product_attention()</code> 自动使用 Flash Attention，旧接口 <code>torch.backends.cuda.sdp_kernel()</code> 已弃用，应改用 <code>torch.nn.attention.sdpa_kernel</code>。</p>
+  <h3>其他长上下文优化</h3>
+  <p><strong>PagedAttention</strong>：将 KV Cache 分成页（pages）管理，减少显存碎片，是 vLLM 的核心技术。<strong>Continuous batching</strong>：不等到一批请求全部完成才发起下一批，而是逐 step 调度，极大提升 GPU 利用率。这两个技术是生产推理服务的基础，对模型本身透明。</p>
+</div>
+</div></section>

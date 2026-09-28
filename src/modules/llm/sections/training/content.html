@@ -1,0 +1,292 @@
+<section class="llm-mod llm-m-training" id="llm-training"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#059669;">
+  <h1>⚙️ 训练基础原理</h1>
+  <p>深入理解模型训练的核心机制</p>
+</div>
+
+<div class="section" id="llm-training-s1">
+  <h2>前向传播与反向传播</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>前向传播就像做题——输入题目，经过思考（神经网络计算），给出答案。反向传播就像对答案——计算错误有多大（损失），然后倒推每个步骤应该怎样改进（梯度）。
+  </div>
+
+  <h3>核心流程</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> torch
+<span class="kw">import</span> torch.nn <span class="kw">as</span> nn
+
+<span class="cmt"># 前向传播</span>
+<span class="kw">def</span> <span class="fn">forward_pass</span>(model, input_data):
+    <span class="str">"""前向传播：输入 → 模型 → 输出"""</span>
+    output = model(input_data)
+    <span class="kw">return</span> output
+
+<span class="cmt"># 计算损失</span>
+<span class="kw">def</span> <span class="fn">compute_loss</span>(output, target):
+    <span class="str">"""计算预测值和真实值的差距"""</span>
+    loss_fn = nn.CrossEntropyLoss()
+    loss = loss_fn(output, target)
+    <span class="kw">return</span> loss
+
+<span class="cmt"># 反向传播</span>
+<span class="kw">def</span> <span class="fn">backward_pass</span>(loss, model):
+    <span class="str">"""反向传播：计算梯度"""</span>
+    loss.backward()  <span class="cmt"># 自动计算所有参数的梯度</span>
+
+<span class="cmt"># 更新参数</span>
+<span class="kw">def</span> <span class="fn">update_params</span>(model, optimizer):
+    <span class="str">"""根据梯度更新参数"""</span>
+    optimizer.step()    <span class="cmt"># 执行参数更新</span>
+    optimizer.zero_grad()  <span class="cmt"># 清空梯度，为下一轮准备</span></code></pre>
+  </div>
+
+  <h3>PyTorch自动微分</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># PyTorch的autograd会自动计算梯度</span>
+x = torch.randn(<span class="num">3</span>, requires_grad=<span class="kw">True</span>)
+y = x ** <span class="num">2</span> + <span class="num">2</span> * x
+z = y.sum()
+
+z.backward()  <span class="cmt"># 自动计算dz/dx</span>
+<span class="fn">print</span>(x.grad)  <span class="cmt"># 输出: tensor([4.3984, 3.8434, 2.1584]) = 2*x + 2</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-training-s2">
+  <h2>损失函数</h2>
+
+  <h3>常用损失函数</h3>
+
+  <table>
+    <tr><th>损失函数</th><th>适用场景</th><th>PyTorch实现</th></tr>
+    <tr><td><strong>交叉熵损失</strong></td><td>分类任务（最常用）</td><td><code>nn.CrossEntropyLoss()</code></td></tr>
+    <tr><td><strong>MSE损失</strong></td><td>回归任务</td><td><code>nn.MSELoss()</code></td></tr>
+    <tr><td><strong>对比损失</strong></td><td>相似度学习</td><td><code>nn.CosineEmbeddingLoss()</code></td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># 交叉熵损失（分类任务标准选择）</span>
+criterion = nn.CrossEntropyLoss()
+
+<span class="cmt"># 示例</span>
+logits = torch.randn(<span class="num">8</span>, <span class="num">10</span>)  <span class="cmt"># batch_size=8, num_classes=10</span>
+labels = torch.randint(<span class="num">0</span>, <span class="num">10</span>, (<span class="num">8</span>,))  <span class="cmt"># 真实标签</span>
+
+loss = criterion(logits, labels)
+<span class="fn">print</span>(<span class="str">f"损失值: <span class="var">{loss.item():.4f}</span>"</span>)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-training-s3">
+  <h2>优化器详解</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>优化器就像是下山的策略——损失函数是山谷，我们要找到最低点。SGD是随机下山，Adam则像是聪明的登山者，知道该往哪个方向走、走多远。
+  </div>
+
+  <h3>优化器对比</h3>
+
+  <table>
+    <tr><th>优化器</th><th>特点</th><th>学习率</th><th>适用场景</th></tr>
+    <tr><td><strong>SGD</strong></td><td>简单，收敛慢</td><td>0.01-0.1</td><td>研究、简单模型</td></tr>
+    <tr><td><strong>Adam</strong></td><td>自适应学习率，收敛快</td><td>1e-4到1e-3</td><td>最常用</td></tr>
+    <tr><td><strong>AdamW</strong></td><td>权重衰减修正</td><td>1e-4到1e-3</td><td>大模型训练（推荐）</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># AdamW优化器（大模型训练推荐）</span>
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=<span class="num">2e-5</span>,              <span class="cmt"># 学习率</span>
+    weight_decay=<span class="num">0.01</span>,     <span class="cmt"># 权重衰减（L2正则化）</span>
+    betas=(<span class="num">0.9</span>, <span class="num">0.999</span>),  <span class="cmt"># 动量参数</span>
+    eps=<span class="num">1e-8</span>              <span class="cmt"># 数值稳定性</span>
+)
+
+<span class="cmt"># 学习率调度器（Warmup + Cosine Decay）</span>
+<span class="kw">from</span> transformers <span class="kw">import</span> get_cosine_schedule_with_warmup
+
+num_training_steps = <span class="num">10000</span>
+num_warmup_steps = <span class="num">1000</span>
+
+scheduler = get_cosine_schedule_with_warmup(
+    optimizer,
+    num_warmup_steps=num_warmup_steps,
+    num_training_steps=num_training_steps
+)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 学习率设置经验：</strong>
+    <ul>
+      <li>预训练：1e-4 到 5e-4</li>
+      <li>微调：1e-5 到 5e-5</li>
+      <li>QLoRA微调：2e-4 到 3e-4</li>
+    </ul>
+  </div>
+
+  <h3>学习率调度策略对比</h3>
+
+  <table>
+    <tr><th>策略</th><th>流程</th><th>使用场景</th></tr>
+    <tr><td><strong>Warmup + Cosine Decay</strong></td><td>先线性升温，再余弦衰减</td><td>最常用，GPT/LLaMA等均使用</td></tr>
+    <tr><td><strong>WSD (Warmup-Stable-Decay)</strong></td><td>先升温，保持稳定学习率，最后快速衰减</td><td>MiniCPM, Phi-3使用，训练中途可灵活截断</td></tr>
+    <tr><td><strong>Linear Decay</strong></td><td>线性降低学习率至零</td><td>简单任务</td></tr>
+  </table>
+
+  <div class="callout callout-info">
+    <strong>📖 WSD调度器详解：</strong>WSD（Warmup-Stable-Decay）将训练分为三个阶段——Warmup升温、Stable保持恒定学习率、Decay快速衰减。其最大优势是<strong>训练中途可灵活截断</strong>：在Stable阶段的任意时间点停止训练，都能获得一个可用的模型（只需补一个短Decay阶段）。MiniCPM和Phi-3的实践证明WSD效果不亚于Cosine Decay。
+  </div>
+</div>
+
+<div class="section" id="llm-training-s4">
+  <h2>混合精度训练</h2>
+
+  <p>混合精度训练使用FP16/BF16和FP32混合计算，显著加速训练并减少显存占用。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># PyTorch 2.x+ 推荐写法（旧版 torch.cuda.amp 已废弃）</span>
+<span class="kw">from</span> torch.amp <span class="kw">import</span> autocast, GradScaler
+
+<span class="cmt"># 指定设备类型为 'cuda'</span>
+scaler = GradScaler(<span class="str">"cuda"</span>)
+
+<span class="kw">for</span> batch <span class="kw">in</span> dataloader:
+    optimizer.zero_grad()
+
+    <span class="cmt"># 混合精度前向传播</span>
+    <span class="kw">with</span> autocast(<span class="str">"cuda"</span>, dtype=torch.bfloat16):  <span class="cmt"># 推荐BF16</span>
+        outputs = model(batch[<span class="str">"input_ids"</span>])
+        loss = criterion(outputs, batch[<span class="str">"labels"</span>])
+
+    <span class="cmt"># 混合精度反向传播</span>
+    scaler.scale(loss).backward()
+
+    <span class="cmt"># 梯度裁剪（防止梯度爆炸，LLM训练必备）</span>
+    scaler.unscale_(optimizer)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=<span class="num">1.0</span>)
+
+    scaler.step(optimizer)
+    scaler.update()</code></pre>
+  </div>
+
+  <table>
+    <tr><th>精度</th><th>显存占用</th><th>训练速度</th><th>精度损失</th><th>特点</th></tr>
+    <tr><td>FP32</td><td>基准</td><td>基准</td><td>无</td><td>最稳定，显存最大</td></tr>
+    <tr><td>FP16</td><td>减半</td><td>提升1.5-2倍</td><td>轻微</td><td>动态范围小，需要loss scaling</td></tr>
+    <tr><td>BF16</td><td>减半</td><td>提升1.5-2倍</td><td>更小</td><td><strong>推荐</strong>：动态范围与FP32相同，无需loss scaling</td></tr>
+  </table>
+
+  <div class="callout callout-key">
+    <strong>🔑 BF16 vs FP16 实用区别：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li><strong>BF16</strong>（Brain Float 16）：8位指数 + 7位尾数，动态范围与FP32相同，<strong>不容易溢出</strong>，不需要loss scaling。Ampere及以后的GPU支持（RTX 30系/40系/50系）</li>
+      <li><strong>FP16</strong>：5位指数 + 10位尾数，动态范围小，容易出现梯度上溢/下溢，<strong>必须配合GradScaler</strong>使用</li>
+      <li><strong>实践建议</strong>：如果GPU支持BF16（几乎2020年后的GPU都支持），优先使用BF16，训练更稳定</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-training-s4a">
+  <h2>梯度裁剪</h2>
+
+  <p>LLM训练中，梯度爆炸是导致训练崩溃的常见原因。<strong>梯度裁剪（Gradient Clipping）</strong>是稳定训练的必备技术。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># 梯度裁剪：限制梯度范数不超过阈值</span>
+<span class="cmt"># 这是LLM训练的标准操作，几乎所有大模型训练都使用</span>
+
+loss.backward()
+
+<span class="cmt"># 计算所有参数梯度的全局范数，如果超过max_norm则等比缩放</span>
+grad_norm = torch.nn.utils.clip_grad_norm_(
+    model.parameters(),
+    max_norm=<span class="num">1.0</span>       <span class="cmt"># 常用值：0.5~1.0</span>
+)
+
+optimizer.step()
+optimizer.zero_grad()
+
+<span class="cmt"># 监控梯度范数（用于调试训练不稳定问题）</span>
+<span class="fn">print</span>(<span class="str">f"梯度范数: <span class="var">{grad_norm:.4f}</span>"</span>)  <span class="cmt"># 如果持续接近max_norm，说明训练不稳定</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 梯度裁剪经验：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li>预训练：通常设 <code>max_norm=1.0</code></li>
+      <li>微调：通常设 <code>max_norm=0.5~1.0</code></li>
+      <li>如果训练loss突然飙升（loss spike），适当降低max_norm</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-training-s4b">
+  <h2>分布式训练框架</h2>
+
+  <p>当模型参数量超过单卡显存时，需要使用分布式训练框架将训练任务分配到多张GPU上。</p>
+
+  <table>
+    <tr><th>框架</th><th>开发者</th><th>核心策略</th><th>适用场景</th></tr>
+    <tr><td><strong>DeepSpeed ZeRO</strong></td><td>微软</td><td>将优化器状态/梯度/参数分片到多卡</td><td>单机多卡到大规模集群</td></tr>
+    <tr><td><strong>FSDP2</strong></td><td>PyTorch原生</td><td>全分片数据并行，PyTorch 2.x内置</td><td>PyTorch生态无缝集成</td></tr>
+    <tr><td><strong>Megatron-LM</strong></td><td>NVIDIA</td><td>张量并行+流水线并行+数据并行</td><td>超大模型训练（100B+）</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># DeepSpeed ZeRO Stage 2 配置示例</span>
+<span class="cmt"># ds_config.json:</span>
+{
+    <span class="str">"train_batch_size"</span>: <span class="num">32</span>,
+    <span class="str">"gradient_accumulation_steps"</span>: <span class="num">4</span>,
+    <span class="str">"fp16"</span>: { <span class="str">"enabled"</span>: <span class="kw">true</span> },
+    <span class="str">"zero_optimization"</span>: {
+        <span class="str">"stage"</span>: <span class="num">2</span>,
+        <span class="str">"offload_optimizer"</span>: { <span class="str">"device"</span>: <span class="str">"cpu"</span> }
+    }
+}
+
+<span class="cmt"># PyTorch FSDP2 启动（PyTorch 2.x+）</span>
+<span class="kw">from</span> torch.distributed.fsdp <span class="kw">import</span> FullyShardedDataParallel <span class="kw">as</span> FSDP
+model = FSDP(model)  <span class="cmt"># 自动分片参数、梯度和优化器状态</span></code></pre>
+  </div>
+
+  <div class="callout callout-info">
+    <strong>📖 选择建议：</strong>单机2-4卡用 <strong>FSDP2</strong>（PyTorch原生，配置简单）；多机大规模训练用 <strong>DeepSpeed ZeRO</strong>（更灵活）；超大模型用 <strong>Megatron-LM</strong>（张量并行性能最强）。
+  </div>
+</div>
+
+<div class="section" id="llm-training-s5">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：完整训练循环</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>实现一个完整的模型训练循环。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 定义一个简单的分类模型</p>
+      <p>② 实现前向传播、损失计算、反向传播、参数更新</p>
+      <p>③ 记录训练损失和验证准确率</p>
+      <p>④ 实现Early Stopping</p>
+      <p>⑤ 对比Adam和SGD的收敛速度</p>
+    </div>
+  </div>
+</div>
+
+
+
+</div>
+
+</section>

@@ -1,0 +1,34 @@
+.codex-harness-scope .cx-meta { font-size: 12px; color: var(--text-dim); }
+.codex-harness-scope .cx-meta code { font-size: 12px; }
+.codex-harness-scope .cx-chapter { padding-top: 30px; margin-top: 38px; border-top: 1px solid var(--border); }
+.codex-harness-scope .cx-kicker { color: var(--h-green); font-size: 12px; font-weight: 600; margin: 0 0 6px; }
+.codex-harness-scope .cx-question { font-weight: 600; color: var(--text-strong); }
+.codex-harness-scope .cx-takeaway { border-left: 3px solid var(--h-green); padding: 4px 0 4px 16px; margin: 22px 0; }
+.codex-harness-scope .cx-takeaway p { margin: 0; }
+.codex-harness-scope code { font-size: 13px; overflow-wrap: anywhere; color: var(--h-blue); }
+.codex-harness-scope .code-block-wrapper { margin: 18px 0; border: 1px solid #313244; border-radius: 6px; overflow: hidden; }
+.codex-harness-scope .code-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 14px; background: #181825; color: #a6adc8; font-size: 12px; }
+.codex-harness-scope pre { background: #1e1e2e; color: #cdd6f4; font-size: 13px; line-height: 1.6; overflow-x: auto; padding: 16px; margin: 0; }
+.codex-harness-scope pre code { color: inherit; font-size: inherit; overflow-wrap: normal; }
+.codex-harness-scope .copy-btn { min-width: 48px; min-height: 32px; font-size: 12px; border: 1px solid #45475a; border-radius: 4px; color: #cdd6f4; background: #1e1e2e; cursor: pointer; }
+.codex-harness-scope details { margin: 18px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.codex-harness-scope summary { padding: 14px 2px; cursor: pointer; color: var(--h-green); font-weight: 600; }
+.codex-harness-scope details[open] { padding-bottom: 14px; }
+.codex-harness-scope details > :not(summary) { margin-left: 16px; margin-right: 8px; }
+.codex-harness-scope .cx-source { font-size: 13px; margin-top: 18px; color: var(--text-dim); }
+.codex-harness-scope .cx-source a { text-decoration: underline; text-underline-offset: 3px; }
+.codex-harness-scope .cx-source code { font-size: 12px; }
+.codex-harness-scope .cx-chapter-nav { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 18px; margin-top: 26px; font-size: 13px; }
+.codex-harness-scope .cx-chapter-nav a { padding: 8px 0; }
+.codex-harness-scope .cx-diagram { margin: 24px 0; }
+.codex-harness-scope .cx-diagram-open { display: block; width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.codex-harness-scope .cx-diagram img { display: block; width: 100%; height: auto; background: #f8faf9; border-radius: 6px; }
+.codex-harness-scope figcaption { margin-top: 8px; color: var(--text-dim); font-size: 12px; }
+.codex-harness-scope .cx-steps { padding-left: 22px; }
+.codex-harness-scope .cx-steps li { padding-left: 5px; margin: 16px 0; }
+.codex-harness-scope .cx-steps li::marker { color: var(--h-green); font-weight: 700; }
+.codex-harness-scope .cx-steps p { margin: 4px 0 0; }
+@media (max-width: 600px) {
+  .codex-harness-scope pre, .codex-harness-scope code { font-size: 11.5px; line-height: 1.5; }
+  .codex-harness-scope .cx-chapter { padding-top: 24px; margin-top: 28px; }
+}

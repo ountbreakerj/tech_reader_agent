@@ -1,0 +1,70 @@
+<section id="sec-h-lec-08" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 08 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-08">第 08 讲 · 用功能清单约束 Agent 该做什么</h1>
+    <p>让 agent 做一个电商网站，跑完之后它告诉你"做完了"。但打开代码一看：用户认证有了，购物车的结算按钮点了没反应，支付流程根本没接上。根源在于：没有告诉过它"做完"的具体标准。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>功能清单是 Harness 原语</h2>
+    <p>功能清单（feature list）在很多人眼里就是个备忘录，写下来怕忘了，写完扔在一边。但在 harness 的世界里，功能清单是整个 harness 的<strong>基础结构</strong>。调度器靠它选任务，验证器靠它判完成，交接器靠它生成报告。没有它，这些组件就没有可以依赖的共识。</p>
+    <p>文档是给人看的，原语是给系统用的。文档可以被忽略，原语不能被绕过。功能清单作为 harness 原语，承担的是数据库级别的约束角色，agent 不能绕过它。具体来说，功能清单服务四个 harness 组件：</p>
+    <ul>
+      <li><strong>调度器</strong>：读状态，选下一个 <code>not_started</code> 的功能</li>
+      <li><strong>验证器</strong>：执行验证命令，判断是否允许状态转移</li>
+      <li><strong>交接报告器</strong>：从功能清单自动生成会话交接摘要</li>
+      <li><strong>进度追踪器</strong>：统计各状态分布，提供项目健康度指标</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>三元组结构与状态机</h2>
+    <p>每个功能项包含三个要素，缺一不可：</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">要素</th><th scope="col">作用</th><th scope="col">示例</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">行为描述</th><td>告诉 agent 做什么</td><td>POST /cart/items with {product_id, quantity} returns 201</td></tr>
+        <tr><th scope="row">验证命令</th><td>告诉 agent 怎么算做完</td><td>curl -X POST ... | jq .status == 201</td></tr>
+        <tr><th scope="row">当前状态</th><td>告诉 agent 现在到哪了</td><td>not_started / active / blocked / passing</td></tr>
+      </tbody>
+    </table></div>
+    <p>状态转移由 harness 控制，agent 不能直接把状态改成 <code>passing</code>。它只能提交验证请求，harness 执行验证命令，根据结果决定是否允许状态转移。<code>passing</code> 是通过验证命令执行成功后的唯一升级路径，不可逆。</p>
+    <div class="codeblock">
+      <pre><code>{
+  "id": "F03",
+  "behavior": "POST /cart/items with {product_id, quantity} returns 201",
+  "verification": "curl -X POST http://localhost:3000/api/cart/items ...",
+  "state": "passing",
+  "evidence": "commit abc123, test output log"
+}</code></pre></div>
+  </section>
+
+  <section class="harness-section">
+    <h2>结构化 vs 备忘录</h2>
+    <p>一个电商平台的开发任务，10 个功能项，对比两种追踪方式：</p>
+    <p><strong>备忘录模式</strong>：3 个会话后，笔记变成"做了用户认证和商品列表、购物车基本完成但还有 bug、支付没开始"。新会话需要 20 分钟推断状态，最终重复实现了已完成的功能。</p>
+    <p><strong>结构化模式</strong>：新会话读取功能清单，3 分钟内知道 F01–F05 是 <code>passing</code>，F06 是 <code>active</code>，F07–F10 是 <code>not_started</code>。直接从 F06 继续，零重复。Anthropic 的工程实践数据表明，好的进度记录可以减少 60–80% 的会话启动诊断时间。</p>
+    <p>定量结果：使用结构化功能清单的项目，功能完成率比自由形式高 45%，零重复实现。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>粒度与规则</h2>
+    <p>每个功能项应该是"一次会话能完成"的范围。"用户可以添加商品到购物车"是一个好粒度，"实现购物车"太粗，"创建 Cart 模型的 name 字段"太细。在 AGENTS.md 里写清楚规则：</p>
+    <div class="codeblock">
+      <pre><code>## 功能清单规则
+- 功能清单文件: /docs/features.md
+- 每次只激活一个功能项（WIP = 1）
+- 功能项验证命令必须通过才能标为 passing
+- 不要手动修改功能清单的状态，由验证脚本自动更新</code></pre></div>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-07">← 第 07 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-09">第 09 讲 →</a>
+  </nav>
+</section>

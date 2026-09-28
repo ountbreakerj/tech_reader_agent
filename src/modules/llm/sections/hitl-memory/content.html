@@ -1,0 +1,400 @@
+<section class="llm-mod llm-m-hitl-memory" id="llm-hitl-memory"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#b45309;--hero-b:#1d4ed8;">
+  <h1>人机交互与持久化</h1>
+  <p>interrupt、Checkpoint、长期记忆与线程管理</p>
+</div>
+
+<!-- ==================== SECTION 1: HITL 概述 ==================== -->
+<div class="section" id="llm-hitl-memory-s1">
+  <h2>为什么需要 Human-in-the-Loop</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>自动驾驶汽车——大部分时候自动行驶，但在复杂路口、施工区域、突发状况时，系统会提示"请人类接管方向盘"。HITL 就是这个"人类接管"机制，让 AI Agent 在关键决策点暂停，等待人类审核或提供额外信息。
+  </div>
+
+  <p>在生产环境中，完全自主的 Agent 存在风险。HITL 让你在以下场景中保持控制：</p>
+
+  <table>
+    <tr><th>场景</th><th>风险</th><th>解决方案</th></tr>
+    <tr><td>发送邮件/消息</td><td>内容错误、发错人</td><td>发送前暂停，人工确认内容和收件人</td></tr>
+    <tr><td>数据库写操作</td><td>数据损坏</td><td>执行前暂停，人工审核 SQL 语句</td></tr>
+    <tr><td>API 调用（有副作用）</td><td>不可逆操作</td><td>调用前暂停，人工审批</td></tr>
+    <tr><td>低置信度决策</td><td>结果不可靠</td><td>置信度低于阈值时暂停，人工判断</td></tr>
+    <tr><td>合规审核</td><td>违反法规</td><td>特定操作自动触发人工审核流程</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 2: interrupt() ==================== -->
+<div class="section" id="llm-hitl-memory-s2">
+  <h2>interrupt() 函数详解</h2>
+
+  <p><code>interrupt()</code> 是 LangGraph 推荐的人机交互方式（0.2+ 版本）。它在节点函数内部调用，暂停图执行，将上下文信息发送给人类，并等待人类响应后恢复执行。</p>
+
+  <div class="callout callout-key">
+    <strong>核心机制：</strong><code>interrupt(value)</code> 暂停图执行并将 <code>value</code> 作为"人类看到的信息"返回给调用方。当人类准备好回复时，通过 <code>Command(resume=response)</code> 恢复执行，<code>interrupt()</code> 的返回值就是人类的 <code>response</code>。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langgraph.types <span class="kw">import</span> <span class="cls">interrupt</span>, <span class="cls">Command</span>
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">START</span>, <span class="cls">END</span>
+<span class="kw">from</span> langgraph.checkpoint.memory <span class="kw">import</span> <span class="cls">MemorySaver</span>
+
+<span class="cmt"># 定义带 HITL 的节点</span>
+<span class="kw">def</span> <span class="fn">generate_plan</span>(state):
+    <span class="str">"""生成执行计划"""</span>
+    plan = <span class="str">"1. 创建数据库表\n2. 导入数据\n3. 生成报告"</span>
+    <span class="kw">return</span> {<span class="str">"plan"</span>: plan}
+
+<span class="kw">def</span> <span class="fn">human_approval</span>(state):
+    <span class="str">"""人工审批节点：暂停等待人类确认"""</span>
+    <span class="cmt"># interrupt() 暂停执行，返回人类的响应</span>
+    human_response = <span class="fn">interrupt</span>({
+        <span class="str">"plan"</span>: state[<span class="str">"plan"</span>],
+        <span class="str">"question"</span>: <span class="str">"请审核以上计划，是否批准执行？"</span>
+    })
+    <span class="cmt"># human_response 就是人类通过 Command(resume=) 传入的值</span>
+    <span class="kw">return</span> {<span class="str">"approved"</span>: human_response.get(<span class="str">"approved"</span>, <span class="kw">False</span>)}
+
+<span class="kw">def</span> <span class="fn">execute_plan</span>(state):
+    <span class="str">"""执行计划"""</span>
+    <span class="kw">return</span> {<span class="str">"result"</span>: <span class="str">"计划已执行完毕"</span>}
+
+<span class="cmt"># 构建图</span>
+graph = <span class="cls">StateGraph</span>(<span class="cls">dict</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"generate"</span>, generate_plan)
+graph.<span class="fn">add_node</span>(<span class="str">"approve"</span>, human_approval)
+graph.<span class="fn">add_node</span>(<span class="str">"execute"</span>, execute_plan)
+
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"generate"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"generate"</span>, <span class="str">"approve"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"approve"</span>, <span class="str">"execute"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"execute"</span>, <span class="cls">END</span>)
+
+<span class="cmt"># 编译（必须有 checkpointer 才能使用 interrupt）</span>
+checkpointer = <span class="cls">MemorySaver</span>()
+app = graph.<span class="fn">compile</span>(checkpointer=checkpointer)
+
+<span class="cmt"># 第一次调用：执行到 interrupt() 时暂停</span>
+config = {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"task-001"</span>}}
+result = app.<span class="fn">invoke</span>({<span class="str">"plan"</span>: <span class="str">""</span>, <span class="str">"approved"</span>: <span class="kw">False</span>, <span class="str">"result"</span>: <span class="str">""</span>}, config)
+<span class="cmt"># result 包含 interrupt 的 value，但图已暂停</span></code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 3: Command(resume=) ==================== -->
+<div class="section" id="llm-hitl-memory-s3">
+  <h2>Command(resume=value) 恢复模式</h2>
+
+  <p>当图因 <code>interrupt()</code> 暂停后，使用 <code>Command(resume=value)</code> 恢复执行。传入的 <code>value</code> 就是 <code>interrupt()</code> 的返回值。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langgraph.types <span class="kw">import</span> <span class="cls">Command</span>
+
+<span class="cmt"># 人类审核后，通过 Command(resume=) 恢复执行</span>
+result = app.<span class="fn">invoke</span>(
+    <span class="cls">Command</span>(resume={<span class="str">"approved"</span>: <span class="kw">True</span>, <span class="str">"feedback"</span>: <span class="str">"计划合理，批准执行"</span>}),
+    config=config
+)
+<span class="fn">print</span>(result[<span class="str">"result"</span>])  <span class="cmt"># -> "计划已执行完毕"</span>
+
+<span class="cmt"># 也可以拒绝</span>
+result = app.<span class="fn">invoke</span>(
+    <span class="cls">Command</span>(resume={<span class="str">"approved"</span>: <span class="kw">False</span>, <span class="str">"feedback"</span>: <span class="str">"需要修改第二步"</span>}),
+    config=config
+)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>关键要点：</strong><code>Command(resume=value)</code> 中的 <code>value</code> 可以是任何 Python 对象——字符串、字典、列表、甚至自定义类实例。在节点函数中，<code>interrupt()</code> 的返回值就是这个对象。设计好数据结构即可。
+  </div>
+</div>
+
+<!-- ==================== SECTION 4: interrupt_after 对比 ==================== -->
+<div class="section" id="llm-hitl-memory-s4">
+  <h2>interrupt_after 编译时参数（旧方式）</h2>
+
+  <p>在 <code>interrupt()</code> 函数出现之前，LangGraph 使用编译时参数 <code>interrupt_after</code> 来实现 HITL。</p>
+
+  <div class="compare">
+    <div class="compare-card left">
+      <h4>interrupt_after（旧方式）</h4>
+      <ul>
+        <li>编译时指定哪些节点后暂停</li>
+        <li>粒度较粗，只能在节点边界暂停</li>
+        <li>通过 <code>update_state</code> 传入人类决策</li>
+        <li>用 <code>invoke(None)</code> 恢复</li>
+      </ul>
+    </div>
+    <div class="compare-card right">
+      <h4>interrupt() 函数（推荐）</h4>
+      <ul>
+        <li>节点内部调用，精确控制暂停位置</li>
+        <li>可在同一节点内多次调用</li>
+        <li>通过 <code>Command(resume=)</code> 恢复</li>
+        <li>可传递丰富的上下文信息</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 旧方式：interrupt_after（仍可用，但不推荐）</span>
+app = graph.<span class="fn">compile</span>(
+    checkpointer=checkpointer,
+    interrupt_after=[<span class="str">"review"</span>]  <span class="cmt"># review 节点执行完后暂停</span>
+)
+
+<span class="cmt"># 运行——会在 review 后暂停</span>
+result = app.<span class="fn">invoke</span>(initial_state, config=config)
+
+<span class="cmt"># 人类修改 State</span>
+app.<span class="fn">update_state</span>(config, {<span class="str">"approved"</span>: <span class="kw">True</span>})
+
+<span class="cmt"># 恢复（传入 None 表示从暂停点继续）</span>
+result = app.<span class="fn">invoke</span>(<span class="kw">None</span>, config=config)</code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>推荐使用 <code>interrupt()</code>：</strong>新项目请使用 <code>interrupt()</code> + <code>Command(resume=)</code> 模式。<code>interrupt_after</code> 仍可用但功能受限，未来可能逐步弃用。
+  </div>
+</div>
+
+<!-- ==================== SECTION 5: Checkpointing ==================== -->
+<div class="section" id="llm-hitl-memory-s5">
+  <h2>Checkpointing：状态持久化</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>Checkpoint 就像游戏的<strong>自动存档</strong>系统。图每执行一个节点就自动存档一次。你可以随时读档回到任意一步，查看历史状态，或者从断点恢复执行。
+  </div>
+
+  <p>Checkpoint 是 LangGraph 的核心特性之一。它在每个节点执行后自动保存 State 的快照，支持暂停/恢复、时间回溯、断点续跑。</p>
+
+  <h3>MemorySaver — 内存存储（开发测试）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langgraph.checkpoint.memory <span class="kw">import</span> <span class="cls">MemorySaver</span>
+
+<span class="cmt"># 创建内存 checkpoint 存储（仅当前进程有效）</span>
+checkpointer = <span class="cls">MemorySaver</span>()
+
+<span class="cmt"># 编译时传入</span>
+app = graph.<span class="fn">compile</span>(checkpointer=checkpointer)
+
+<span class="cmt"># 运行时指定 thread_id（每次相同 ID 的调用会延续同一个对话）</span>
+config = {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"session-001"</span>}}
+result = app.<span class="fn">invoke</span>(input_state, config=config)
+
+<span class="cmt"># 查看 checkpoint 历史</span>
+history = <span class="fn">list</span>(app.<span class="fn">get_state_history</span>(config))
+<span class="kw">for</span> snapshot <span class="kw">in</span> history:
+    <span class="fn">print</span>(<span class="str">f"Step {snapshot.step}: {snapshot.values}"</span>)
+
+<span class="cmt"># 获取当前状态</span>
+current = app.<span class="fn">get_state</span>(config)
+<span class="fn">print</span>(current.values)</code></pre>
+  </div>
+
+  <h3>SqliteSaver — 持久化存储（生产环境）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langgraph.checkpoint.sqlite <span class="kw">import</span> <span class="cls">SqliteSaver</span>
+
+<span class="cmt"># 使用 SQLite 持久化（数据不会因进程退出丢失）</span>
+checkpointer = <span class="cls">SqliteSaver</span>.<span class="fn">from_conn_string</span>(<span class="str">"checkpoints.db"</span>)
+
+app = graph.<span class="fn">compile</span>(checkpointer=checkpointer)
+
+<span class="cmt"># 生产环境也可使用 PostgreSQL</span>
+<span class="cmt"># from langgraph.checkpoint.postgres import PostgresSaver</span>
+<span class="cmt"># checkpointer = PostgresSaver.from_conn_string("postgresql://...")</span></code></pre>
+  </div>
+
+  <table>
+    <tr><th>存储后端</th><th>特点</th><th>适用场景</th></tr>
+    <tr><td><code>MemorySaver</code></td><td>内存存储，进程退出即丢失</td><td>开发测试、原型验证</td></tr>
+    <tr><td><code>SqliteSaver</code></td><td>文件存储，单机持久化</td><td>小型生产、单机部署</td></tr>
+    <tr><td><code>PostgresSaver</code></td><td>数据库存储，支持多实例</td><td>生产环境、分布式部署</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 6: 长期记忆 ==================== -->
+<div class="section" id="llm-hitl-memory-s6">
+  <h2>长期记忆：Store 抽象</h2>
+
+  <p>Checkpoint 是<strong>线程内</strong>的短期记忆——同一个 <code>thread_id</code> 内的历史。而 <code>Store</code> 抽象提供了<strong>跨线程</strong>的长期记忆，适合存储用户偏好、历史摘要等需要在多次对话之间共享的信息。</p>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>Checkpoint 是"短期工作记忆"——你记得这次对话的上下文。Store 是"长期记忆"——你记得这个用户的偏好、历史交互，不管是不是同一次对话。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langgraph.store.memory <span class="kw">import</span> <span class="cls">InMemoryStore</span>
+
+<span class="cmt"># 创建长期记忆存储</span>
+store = <span class="cls">InMemoryStore</span>()
+
+<span class="cmt"># 编译时同时传入 checkpointer 和 store</span>
+app = graph.<span class="fn">compile</span>(
+    checkpointer=checkpointer,  <span class="cmt"># 短期记忆（线程内）</span>
+    store=store                 <span class="cmt"># 长期记忆（跨线程）</span>
+)
+
+<span class="cmt"># 在节点函数中使用 Store</span>
+<span class="kw">def</span> <span class="fn">remember_preference</span>(state, *, store):
+    <span class="str"""保存用户偏好到长期记忆"""</span>
+    store.<span class="fn">put</span>(
+        (<span class="str">"user_preferences"</span>, state[<span class="str">"user_id"</span>]),
+        <span class="str">"language"</span>,
+        {<span class="str">"preferred_lang"</span>: <span class="str">"中文"</span>, <span class="str">"updated_at"</span>: <span class="str">"2026-06-27"</span>}
+    )
+    <span class="kw">return</span> {}
+
+<span class="kw">def</span> <span class="fn">recall_preference</span>(state, *, store):
+    <span class="str"""从长期记忆读取用户偏好"""</span>
+    prefs = store.<span class="fn">get</span>(
+        (<span class="str">"user_preferences"</span>, state[<span class="str">"user_id"</span>]),
+        <span class="str">"language"</span>
+    )
+    <span class="kw">if</span> prefs:
+        <span class="kw">return</span> {<span class="str">"preferred_lang"</span>: prefs.value[<span class="str">"preferred_lang"</span>]}
+    <span class="kw">return</span> {<span class="str">"preferred_lang"</span>: <span class="str">"中文"</span>}</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 7: Thread 管理 ==================== -->
+<div class="section" id="llm-hitl-memory-s7">
+  <h2>Thread 线程管理</h2>
+
+  <p>每个 <code>thread_id</code> 代表一个独立的执行上下文。同一个 <code>thread_id</code> 的多次调用会延续之前的 State 和 checkpoint。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 同一个 thread_id = 同一个对话</span>
+config = {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"user-123"</span>}}
+
+<span class="cmt"># 第一轮对话</span>
+result1 = app.<span class="fn">invoke</span>(
+    {<span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"我叫张三"</span>)]},
+    config=config
+)
+
+<span class="cmt"># 第二轮对话（自动延续第一轮的上下文）</span>
+result2 = app.<span class="fn">invoke</span>(
+    {<span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"你还记得我叫什么吗？"</span>)]},
+    config=config
+)
+<span class="cmt"># -> "你叫张三"</span>
+
+<span class="cmt"># 不同的 thread_id = 不同的对话（互不影响）</span>
+config_b = {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"user-456"</span>}}
+result_b = app.<span class="fn">invoke</span>(
+    {<span class="str">"messages"</span>: [<span class="cls">HumanMessage</span>(content=<span class="str">"我叫谁？"</span>)]},
+    config=config_b
+)
+<span class="cmt"># -> "我不知道你叫什么名字"</span></code></pre>
+  </div>
+
+  <div class="callout callout-info">
+    <strong>Thread 与 Checkpoint 的关系：</strong>每个 thread 拥有独立的 checkpoint 链。同一 thread 的 checkpoint 形成一条时间线，不同 thread 的 checkpoint 完全隔离。这使得你可以同时运行数千个独立对话而互不干扰。
+  </div>
+</div>
+
+<!-- ==================== SECTION 8: 实战 ==================== -->
+<div class="section" id="llm-hitl-memory-s8">
+  <h2>实战：构建需要人工审批的 Agent</h2>
+
+  <p>综合运用 HITL、Checkpoint 和 Thread 管理，构建一个在执行敏感操作前需要人工审批的 Agent：</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">TypedDict</span>
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">START</span>, <span class="cls">END</span>
+<span class="kw">from</span> langgraph.types <span class="kw">import</span> <span class="cls">interrupt</span>, <span class="cls">Command</span>
+<span class="kw">from</span> langgraph.checkpoint.memory <span class="kw">import</span> <span class="cls">MemorySaver</span>
+
+<span class="kw">class</span> <span class="cls">AgentState</span>(<span class="cls">TypedDict</span>):
+    task: <span class="cls">str</span>
+    plan: <span class="cls">str</span>
+    approved: <span class="cls">bool</span>
+    result: <span class="cls">str</span>
+
+<span class="cmt"># 规划节点</span>
+<span class="kw">def</span> <span class="fn">plan</span>(state: <span class="cls">AgentState</span>) -> <span class="cls">dict</span>:
+    <span class="kw">return</span> {<span class="str">"plan"</span>: <span class="str">f"执行方案：对 '{state['task']}' 进行自动化处理"</span>}
+
+<span class="cmt"># 人工审批节点</span>
+<span class="kw">def</span> <span class="fn">approval</span>(state: <span class="cls">AgentState</span>) -> <span class="cls">dict</span>:
+    response = <span class="fn">interrupt</span>({
+        <span class="str">"type"</span>: <span class="str">"approval_request"</span>,
+        <span class="str">"plan"</span>: state[<span class="str">"plan"</span>],
+        <span class="str">"task"</span>: state[<span class="str">"task"</span>]
+    })
+    <span class="kw">return</span> {<span class="str">"approved"</span>: response.get(<span class="str">"approved"</span>, <span class="kw">False</span>)}
+
+<span class="cmt"># 执行或拒绝</span>
+<span class="kw">def</span> <span class="fn">execute</span>(state: <span class="cls">AgentState</span>) -> <span class="cls">dict</span>:
+    <span class="kw">if</span> state[<span class="str">"approved"</span>]:
+        <span class="kw">return</span> {<span class="str">"result"</span>: <span class="str">f"任务 '{state['task']}' 已成功执行"</span>}
+    <span class="kw">return</span> {<span class="str">"result"</span>: <span class="str">"任务被拒绝，未执行"</span>}
+
+<span class="cmt"># 构建图</span>
+graph = <span class="cls">StateGraph</span>(<span class="cls">AgentState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"plan"</span>, plan)
+graph.<span class="fn">add_node</span>(<span class="str">"approval"</span>, approval)
+graph.<span class="fn">add_node</span>(<span class="str">"execute"</span>, execute)
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"plan"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"plan"</span>, <span class="str">"approval"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"approval"</span>, <span class="str">"execute"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"execute"</span>, <span class="cls">END</span>)
+
+app = graph.<span class="fn">compile</span>(checkpointer=<span class="cls">MemorySaver</span>())
+
+<span class="cmt"># 使用</span>
+config = {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"task-001"</span>}}
+result = app.<span class="fn">invoke</span>({
+    <span class="str">"task"</span>: <span class="str">"清理过期数据"</span>, <span class="str">"plan"</span>: <span class="str">""</span>,
+    <span class="str">"approved"</span>: <span class="kw">False</span>, <span class="str">"result"</span>: <span class="str">""</span>
+}, config)
+
+<span class="cmt"># 人工审批后恢复</span>
+result = app.<span class="fn">invoke</span>(
+    <span class="cls">Command</span>(resume={<span class="str">"approved"</span>: <span class="kw">True</span>}),
+    config
+)
+<span class="fn">print</span>(result[<span class="str">"result"</span>])  <span class="cmt"># -> "任务 '清理过期数据' 已成功执行"</span></code></pre>
+  </div>
+</div>
+
+<div class="footer">
+  LangChain & LangGraph 教程系列 | 第5章：人机交互与持久化
+</div>
+</div></section>

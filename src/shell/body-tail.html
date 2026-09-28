@@ -1,0 +1,47 @@
+
+      </div></div>
+    </div>
+    <div id="pager">
+      <button id="prevCh" class="pg-btn"></button>
+      <button id="nextCh" class="pg-btn next"></button>
+    </div>
+  </div>
+</div>
+
+<div id="lightbox">
+  <button id="lbClose" aria-label="关闭">✕</button>
+  <div class="lb-count"></div>
+  <div class="lb-imgwrap"></div>
+  <div class="lb-cap"></div>
+  <button class="lb-nav" id="lbPrev" aria-label="上一张">‹</button>
+  <button class="lb-nav" id="lbNext" aria-label="下一张">›</button>
+</div>
+<div id="toast"></div>
+<div id="resumeDlg" role="dialog" aria-modal="true" aria-labelledby="resumeTitle">
+  <div class="box">
+    <h3 id="resumeTitle">继续上次的阅读？</h3>
+    <p>检测到上次中断的位置，可以直接接着看。</p>
+    <div class="where"><b id="resumeMod"></b><span id="resumeCh"></span></div>
+    <p class="meta" id="resumeMeta"></p>
+    <div class="acts">
+      <button id="resumeNo" type="button">留在首页</button>
+      <button id="resumeYes" type="button" class="primary">继续阅读 →</button>
+    </div>
+  </div>
+</div>
+<div id="tpPop" role="dialog" aria-modal="true" aria-labelledby="tpTitle">
+  <div class="tp-box llm-scope">
+    <div class="tp-head">
+      <div class="tp-t"><span class="tp-cat" id="tpCat"></span><h3 id="tpTitle"></h3></div>
+      <button class="tp-x" id="tpClose" type="button" aria-label="关闭">✕</button>
+    </div>
+    <div class="tp-body" id="tpBody"></div>
+    <div class="tp-foot">
+      <span class="tp-src" id="tpSrc"></span>
+      <button id="tpGoto" type="button">查看完整章节 →</button>
+    </div>
+  </div>
+</div>
+<button id="tpBack" type="button"><span>← 返回原处</span><small id="tpBackWhere"></small><span class="tp-back-x" id="tpBackX" role="button" aria-label="关闭">✕</span></button>
+<button id="toTop" aria-label="回到顶部">↑</button>
+

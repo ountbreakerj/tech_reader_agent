@@ -1,0 +1,637 @@
+<section class="llm-mod llm-m-milvus" id="llm-milvus"><div class="module-wrapper">
+<!-- 侧边栏导航 -->
+
+
+
+
+
+<!-- 主内容区 -->
+
+
+
+<!-- Hero Banner -->
+<div class="hero-banner">
+  <h1>🔍 Milvus向量数据库实战</h1>
+  <p>掌握向量检索，构建RAG系统的基础</p>
+</div>
+
+<!-- ==================== SECTION 1 ==================== -->
+<div class="section" id="llm-milvus-s1">
+  <h2>向量数据库基础</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>传统数据库就像图书馆的目录系统，通过书名、作者等关键词找到书籍。向量数据库则像是能"理解语义"的图书管理员——你描述"一本关于太空冒险的科幻小说"，它能帮你找到最相关的内容，即使书名中没有这些词。
+  </div>
+
+  <h3>什么是向量嵌入（Embedding）</h3>
+  <p>向量嵌入是将文本、图片、音频等非结构化数据转换成高维数值向量（数组）的过程。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 使用Sentence-Transformers生成文本嵌入</span>
+<span class="kw">from</span> sentence_transformers <span class="kw">import</span> SentenceTransformer
+
+<span class="cmt"># 加载预训练模型</span>
+model = SentenceTransformer(<span class="str">'all-MiniLM-L6-v2'</span>)
+
+<span class="cmt"># 生成嵌入向量</span>
+texts = [
+    <span class="str">"机器学习是人工智能的一个分支"</span>,
+    <span class="str">"深度学习使用神经网络进行学习"</span>,
+    <span class="str">"今天天气真好，适合出去玩"</span>
+]
+
+embeddings = model.encode(texts)
+<span class="fn">print</span>(embeddings.shape)  <span class="cmt"># (3, 384) - 3个文本，每个384维向量</span></code></pre>
+  </div>
+
+  <h3>向量相似度计算</h3>
+
+  <table>
+    <tr><th>相似度度量</th><th>公式</th><th>适用场景</th></tr>
+    <tr><td><strong>余弦相似度</strong></td><td>cos(A,B) = (A·B) / (|A|·|B|)</td><td>最常用，适用于文本、推荐系统</td></tr>
+    <tr><td><strong>欧氏距离</strong></td><td>d(A,B) = √∑(Ai-Bi)²</td><td>适用于图像特征</td></tr>
+    <tr><td><strong>内积（点积）</strong></td><td>A·B = ∑Ai·Bi</td><td>适用于已归一化的向量</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> numpy <span class="kw">as</span> np
+<span class="kw">from</span> sklearn.metrics.pairwise <span class="kw">import</span> cosine_similarity
+
+<span class="cmt"># 生成两个向量</span>
+vec1 = np.array([[<span class="num">0.2</span>, <span class="num">0.8</span>, <span class="num">0.1</span>, <span class="num">0.5</span>]])
+vec2 = np.array([[<span class="num">0.3</span>, <span class="num">0.7</span>, <span class="num">0.2</span>, <span class="num">0.4</span>]])
+
+<span class="cmt"># 计算余弦相似度</span>
+similarity = cosine_similarity(vec1, vec2)
+<span class="fn">print</span>(<span class="str">f"余弦相似度: <span class="var">{similarity[0][0]:.4f}</span>"</span>)  <span class="cmt"># 接近1表示很相似</span>
+
+<span class="cmt"># 计算欧氏距离</span>
+euclidean_dist = np.linalg.norm(vec1 - vec2)
+<span class="fn">print</span>(<span class="str">f"欧氏距离: <span class="var">{euclidean_dist:.4f}</span>"</span>)  <span class="cmt"># 越小越相似</span></code></pre>
+  </div>
+
+  <h3>向量检索问题</h3>
+
+  <p>暴力搜索（Linear Search）的复杂度是O(n)，当向量数量达到百万级时太慢。因此需要<strong>近似最近邻（ANN）算法</strong>。</p>
+
+  <div class="compare">
+    <div class="compare-card left">
+      <h4>❌ 暴力搜索</h4>
+      <ul>
+        <li>100%召回率</li>
+        <li>搜索时间：O(n)</li>
+        <li>百万向量：秒级延迟</li>
+        <li>适用于小规模数据</li>
+      </ul>
+    </div>
+    <div class="compare-card right">
+      <h4>✅ ANN算法</h4>
+      <ul>
+        <li>95-99%召回率</li>
+        <li>搜索时间：O(log n) 或 O(1)</li>
+        <li>百万向量：毫秒级延迟</li>
+        <li>适用于大规模数据</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>主流向量数据库对比</h3>
+
+  <table>
+    <tr><th>数据库</th><th>类型</th><th>特点</th><th>适用场景</th></tr>
+    <tr><td><strong>Milvus</strong></td><td>分布式</td><td>功能全面，性能优秀，云原生</td><td>生产环境，大规模数据</td></tr>
+    <tr><td><strong>FAISS</strong></td><td>库</td><td>Facebook开源，单机性能极致</td><td>研究、原型开发</td></tr>
+    <tr><td><strong>Chroma</strong></td><td>嵌入式</td><td>轻量级，Python原生</td><td>小型项目、快速原型</td></tr>
+    <tr><td><strong>Weaviate</strong></td><td>数据库</td><td>GraphQL支持，多模态</td><td>多模态检索</td></tr>
+    <tr><td><strong>Pinecone</strong></td><td>云服务</td><td>全托管，开箱即用</td><td>不想运维，快速上线</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>💡 选型建议：</strong>学习阶段推荐Milvus或Chroma（开源、文档完善）。生产环境推荐Milvus（支持分布式、高可用）。
+  </div>
+</div>
+
+<!-- ==================== SECTION 2 ==================== -->
+<div class="section" id="llm-milvus-s2">
+  <h2>Milvus架构</h2>
+
+  <h3>核心组件</h3>
+
+  <div class="diagram">
+    <pre class="mermaid">
+graph TB
+    Client[客户端/应用] --> Proxy[Proxy层]
+    Proxy --> QueryNode[Query Node]
+    Proxy --> DataNode[Data Node]
+    Proxy --> IndexNode[Index Node]
+    QueryNode --> MetaStore[(元数据存储<br/>etcd)]
+    DataNode --> Pulsar[消息队列<br/>Pulsar/Kafka]
+    Pulsar --> MinIO[对象存储<br/>MinIO/S3]
+    IndexNode --> MinIO
+    </pre>
+    <div class="caption">Milvus 2.x 分布式架构</div>
+  </div>
+
+  <h4>组件说明</h4>
+
+  <table>
+    <tr><th>组件</th><th>职责</th><th>说明</th></tr>
+    <tr><td><strong>Proxy</strong></td><td>请求路由</td><td>接收客户端请求，路由到对应的节点</td></tr>
+    <tr><td><strong>Query Node</strong></td><td>查询处理</td><td>执行向量搜索和标量过滤</td></tr>
+    <tr><td><strong>Data Node</strong></td><td>数据写入</td><td>处理插入、删除操作</td></tr>
+    <tr><td><strong>Index Node</strong></td><td>索引构建</td><td>构建和更新向量索引</td></tr>
+    <tr><td><strong>etcd</strong></td><td>元数据存储</td><td>存储Collection、Schema等元信息</td></tr>
+    <tr><td><strong>Pulsar/Kafka</strong></td><td>日志流</td><td>存储WAL（Write-Ahead Log）</td></tr>
+    <tr><td><strong>MinIO/S3</strong></td><td>对象存储</td><td>存储向量数据和索引文件</td></tr>
+  </table>
+
+  <h3>部署模式</h3>
+
+  <table>
+    <tr><th>模式</th><th>适用场景</th><th>复杂度</th></tr>
+    <tr><td><strong>Milvus Lite</strong></td><td>嵌入式，本地开发</td><td>最简单</td></tr>
+    <tr><td><strong>Milvus Standalone</strong></td><td>单机部署，测试和小规模</td><td>简单</td></tr>
+    <tr><td><strong>Milvus Distributed</strong></td><td>生产环境，大规模数据</td><td>复杂</td></tr>
+  </table>
+
+  <div class="callout callout-info">
+    <strong>📖 三种部署模式详解：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li><strong>Milvus Lite</strong>：嵌入式模式，数据存储在本地文件（如 <code>./milvus_demo.db</code>），无需启动任何服务，适合开发和测试</li>
+      <li><strong>Milvus Standalone</strong>：单机服务模式，通过 Docker 部署，监听 <code>localhost:19530</code>，适合中小规模生产环境</li>
+      <li><strong>Milvus Distributed</strong>：分布式集群模式，基于 Kubernetes 部署，支持水平扩展和高可用，适合大规模生产环境</li>
+    </ul>
+    <p style="margin-top: 0.5rem;">三种模式的 API 完全兼容，代码无需修改即可切换。</p>
+  </div>
+</div>
+
+<!-- ==================== SECTION 3 ==================== -->
+<div class="section" id="llm-milvus-s3">
+  <h2>安装部署</h2>
+
+  <h3>Milvus Lite（推荐学习）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Bash</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 安装Milvus Lite（最简单的方式，pymilvus 3.0+）</span>
+pip install pymilvus
+
+<span class="cmt"># Python代码中使用Milvus Lite</span>
+<span class="kw">from</span> pymilvus <span class="kw">import</span> MilvusClient
+
+<span class="cmt"># 连接到Milvus Lite（数据保存在本地文件）</span>
+client = MilvusClient(<span class="str">"./milvus_demo.db"</span>)
+<span class="fn">print</span>(<span class="str">"✅ Milvus Lite 连接成功"</span>)</code></pre>
+  </div>
+
+  <h3>Milvus Standalone（生产测试）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Bash</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 使用Docker Compose部署</span>
+<span class="cmt"># 下载配置文件</span>
+wget https://github.com/milvus-io/milvus/releases/download/v2.5.6/milvus-standalone-docker-compose.yml -O docker-compose.yml
+
+<span class="cmt"># 启动Milvus</span>
+docker compose up -d
+
+<span class="cmt"># 查看运行状态</span>
+docker compose ps
+
+<span class="cmt"># 连接到Milvus</span>
+<span class="kw">from</span> pymilvus <span class="kw">import</span> connections
+
+connections.connect(
+    alias=<span class="str">"default"</span>,
+    host=<span class="str">"localhost"</span>,
+    port=<span class="str">"19530"</span>
+)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 学习建议：</strong>初学阶段使用Milvus Lite，零配置，数据存在本地文件。需要测试更多功能时用Standalone。生产环境用Distributed。
+  </div>
+</div>
+
+<!-- ==================== SECTION 4 ==================== -->
+<div class="section" id="llm-milvus-s4">
+  <h2>基础操作</h2>
+
+  <h3>完整示例：图片相似度搜索</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> pymilvus <span class="kw">import</span> (
+    MilvusClient,
+    DataType,
+    CollectionSchema,
+    FieldSchema
+)
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+<span class="cmt"># 1. 连接到Milvus</span>
+client = MilvusClient(<span class="str">"./milvus_demo.db"</span>)
+
+<span class="cmt"># 2. 定义Schema</span>
+fields = [
+    FieldSchema(name=<span class="str">"id"</span>, dtype=DataType.INT64, is_primary=<span class="kw">True</span>, auto_id=<span class="kw">True</span>),
+    FieldSchema(name=<span class="str">"embedding"</span>, dtype=DataType.FLOAT_VECTOR, dim=<span class="num">128</span>),
+    FieldSchema(name=<span class="str">"filename"</span>, dtype=DataType.VARCHAR, max_length=<span class="num">256</span>),
+]
+
+schema = CollectionSchema(fields=fields, description=<span class="str">"图片相似度搜索"</span>)
+
+<span class="cmt"># 3. 创建Collection</span>
+collection_name = <span class="str">"image_embeddings"</span>
+<span class="kw">if</span> client.has_collection(collection_name):
+    client.drop_collection(collection_name)
+
+client.create_collection(
+    collection_name=collection_name,
+    schema=schema
+)
+
+<span class="cmt"># 4. 生成模拟的图片嵌入向量</span>
+np.random.seed(<span class="num">42</span>)
+num_images = <span class="num">1000</span>
+embeddings = np.random.randn(num_images, <span class="num">128</span>).astype(np.float32)
+filenames = [<span class="str">f"image_<span class="var">{i:04d}</span>.jpg"</span> <span class="kw">for</span> i <span class="kw">in</span> range(num_images)]
+
+<span class="cmt"># 5. 插入数据</span>
+data = [
+    {<span class="str">"embedding"</span>: emb.tolist(), <span class="str">"filename"</span>: fname}
+    <span class="kw">for</span> emb, fname <span class="kw">in</span> zip(embeddings, filenames)
+]
+
+insert_result = client.insert(
+    collection_name=collection_name,
+    data=data
+)
+<span class="fn">print</span>(<span class="str">f"✅ 插入 <span class="var">{insert_result['insert_count']}</span> 条数据"</span>)
+
+<span class="cmt"># 6. 创建索引</span>
+index_params = client.prepare_index_params()
+index_params.add_index(
+    field_name=<span class="str">"embedding"</span>,
+    index_type=<span class="str">"IVF_FLAT"</span>,
+    metric_type=<span class="str">"COSINE"</span>,
+    params={<span class="str">"nlist"</span>: <span class="num">128</span>}
+)
+
+client.create_index(
+    collection_name=collection_name,
+    index_params=index_params
+)
+
+<span class="cmt"># 7. 搜索相似图片</span>
+query_embedding = np.random.randn(<span class="num">1</span>, <span class="num">128</span>).astype(np.float32).tolist()
+
+search_results = client.search(
+    collection_name=collection_name,
+    data=query_embedding,
+    limit=<span class="num">5</span>,
+    output_fields=[<span class="str">"filename"</span>]
+)
+
+<span class="cmt"># 8. 打印结果</span>
+<span class="fn">print</span>(<span class="str">"\n📸 最相似的5张图片："</span>)
+<span class="kw">for</span> result <span class="kw">in</span> search_results[<span class="num">0</span>]:
+    <span class="fn">print</span>(<span class="str">f"  ID: <span class="var">{result['id']}</span>, 文件: <span class="var">{result['entity']['filename']}</span>, 相似度: <span class="var">{result['distance']:.4f}</span>"</span>)</code></pre>
+  </div>
+
+  <h3>核心API说明</h3>
+
+  <table>
+    <tr><th>API</th><th>用途</th><th>关键参数</th></tr>
+    <tr><td><code>create_collection()</code></td><td>创建Collection</td><td>collection_name, schema</td></tr>
+    <tr><td><code>insert()</code></td><td>插入数据</td><td>data（字典列表）</td></tr>
+    <tr><td><code>create_index()</code></td><td>创建索引</td><td>index_params</td></tr>
+    <tr><td><code>search()</code></td><td>向量搜索</td><td>data, limit, output_fields</td></tr>
+    <tr><td><code>query()</code></td><td>标量过滤查询</td><td>filter, output_fields</td></tr>
+    <tr><td><code>delete()</code></td><td>删除数据</td><td>ids</td></tr>
+    <tr><td><code>get()</code></td><td>获取数据</td><td>ids, output_fields</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 5 ==================== -->
+<div class="section" id="llm-milvus-s5">
+  <h2>索引算法详解</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>索引就像是图书馆的检索系统。IVF索引像是先按类别分架，再在每个架子内搜索；HNSW索引像是建立了一个楼层导航系统，从高层快速定位到目标区域。
+  </div>
+
+  <!-- 5.1 IVF -->
+  <div id="llm-milvus-s5-1">
+    <h3>IVF（Inverted File Index）</h3>
+
+    <p>IVF索引的核心思想：<strong>先聚类，再搜索</strong>。</p>
+
+    <h4>原理</h4>
+    <ol>
+      <li>使用K-Means算法将向量聚类成若干簇（clusters）</li>
+      <li>搜索时，先找到最近的几个簇</li>
+      <li>只在这些簇内进行精确搜索</li>
+    </ol>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">Python</span>
+        
+      </div>
+      <pre><code><span class="cmt"># IVF_FLAT索引参数</span>
+index_params.add_index(
+    field_name=<span class="str">"embedding"</span>,
+    index_type=<span class="str">"IVF_FLAT"</span>,     <span class="cmt"># 索引类型</span>
+    metric_type=<span class="str">"COSINE"</span>,       <span class="cmt"># 相似度度量</span>
+    params={
+        <span class="str">"nlist"</span>: <span class="num">128</span>           <span class="cmt"># 聚类数量（推荐：sqrt(n)到4*sqrt(n)）</span>
+    }
+)
+
+<span class="cmt"># 搜索时的参数</span>
+search_results = client.search(
+    collection_name=<span class="str">"image_embeddings"</span>,
+    data=query_embedding,
+    limit=<span class="num">5</span>,
+    search_params={
+        <span class="str">"metric_type"</span>: <span class="str">"COSINE"</span>,
+        <span class="str">"params"</span>: {<span class="str">"nprobe"</span>: <span class="num">16</span>}  <span class="cmt"># 搜索时探测的簇数量</span>
+    }
+)</code></pre>
+    </div>
+
+    <h4>IVF变体</h4>
+    <table>
+      <tr><th>类型</th><th>特点</th><th>适用场景</th></tr>
+      <tr><td><code>IVF_FLAT</code></td><td>精确存储原始向量</td><td>精度要求高，内存充足</td></tr>
+      <tr><td><code>IVF_SQ8</code></td><td>量化压缩，节省内存</td><td>内存有限，可接受轻微精度损失</td></tr>
+      <tr><td><code>IVF_PQ</code></td><td>乘积量化，大幅压缩</td><td>超大规模数据，内存紧张</td></tr>
+    </table>
+  </div>
+
+  <!-- 5.2 HNSW -->
+  <div id="llm-milvus-s5-2">
+    <h3>HNSW（Hierarchical Navigable Small World）</h3>
+
+    <p>HNSW的核心思想：<strong>基于图的导航，逐层搜索</strong>。</p>
+
+    <h4>原理</h4>
+    <ol>
+      <li>构建多层图结构，每层都是一个导航图</li>
+      <li>搜索从最高层开始，逐层向下</li>
+      <li>每层内进行贪心搜索，找到最近邻</li>
+    </ol>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">Python</span>
+        
+      </div>
+      <pre><code><span class="cmt"># HNSW索引参数</span>
+index_params.add_index(
+    field_name=<span class="str">"embedding"</span>,
+    index_type=<span class="str">"HNSW"</span>,         <span class="cmt"># 索引类型</span>
+    metric_type=<span class="str">"COSINE"</span>,
+    params={
+        <span class="str">"M"</span>: <span class="num">16</span>,                <span class="cmt"># 每层的最大连接数（推荐：16-64）</span>
+        <span class="str">"efConstruction"</span>: <span class="num">200</span>  <span class="cmt"># 构建时的搜索范围（推荐：100-500）</span>
+    }
+)
+
+<span class="cmt"># 搜索时的参数</span>
+search_results = client.search(
+    collection_name=<span class="str">"image_embeddings"</span>,
+    data=query_embedding,
+    limit=<span class="num">5</span>,
+    search_params={
+        <span class="str">"metric_type"</span>: <span class="str">"COSINE"</span>,
+        <span class="str">"params"</span>: {<span class="str">"ef"</span>: <span class="num">100</span>}  <span class="cmt"># 搜索时的搜索范围</span>
+    }
+)</code></pre>
+    </div>
+
+    <div class="callout callout-key">
+      <strong>HNSW参数详解：</strong>
+      <ul style="margin-top: 0.5rem;">
+        <li><strong>M</strong>：每个节点的最大连接数。越大召回率越高，但内存占用越大</li>
+        <li><strong>efConstruction</strong>：构建索引时的搜索范围。越大索引质量越好，但构建时间越长</li>
+        <li><strong>ef</strong>：搜索时的搜索范围。越大召回率越高，但搜索速度越慢</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 5.3 索引选择指南 -->
+  <div id="llm-milvus-s5-3">
+    <h3>索引选择指南</h3>
+
+    <table>
+      <tr><th>索引类型</th><th>速度</th><th>召回率</th><th>内存</th><th>适用场景</th></tr>
+      <tr><td><code>FLAT</code></td><td>慢</td><td>100%</td><td>高</td><td>小数据集（<10万），精度要求极高</td></tr>
+      <tr><td><code>IVF_FLAT</code></td><td>中</td><td>高</td><td>高</td><td>中等规模，平衡速度和精度</td></tr>
+      <tr><td><code>IVF_SQ8</code></td><td>快</td><td>中</td><td>中</td><td>大规模数据，内存有限</td></tr>
+      <tr><td><code>HNSW</code></td><td>快</td><td>高</td><td>高</td><td>频繁查询，低延迟要求</td></tr>
+      <tr><td><code>SCANN</code></td><td>快</td><td>高</td><td>中</td><td>大规模数据，平衡性能</td></tr>
+      <tr><td><code>DISKANN</code></td><td>中</td><td>高</td><td>低</td><td>超大规模数据，内存受限</td></tr>
+    </table>
+
+    <div class="callout callout-tip">
+      <strong>💡 选择建议：</strong>
+      <ul style="margin-top: 0.5rem;">
+        <li>学习阶段：用 <code>IVF_FLAT</code>，参数少，容易理解</li>
+        <li>生产环境：用 <code>HNSW</code>，性能最好</li>
+        <li>内存紧张：用 <code>IVF_SQ8</code> 或 <code>DISKANN</code></li>
+        <li>超大规模（亿级）：用 <code>IVF_PQ</code> 或 <code>DISKANN</code></li>
+        <li>不确定选哪个：<code>AUTOINDEX</code> 会自动选择合适的索引类型</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SECTION 6 ==================== -->
+<div class="section" id="llm-milvus-s6">
+  <h2>高级特性</h2>
+
+  <h3>混合搜索（向量+标量）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 创建带标量字段的Collection</span>
+fields = [
+    FieldSchema(name=<span class="str">"id"</span>, dtype=DataType.INT64, is_primary=<span class="kw">True</span>, auto_id=<span class="kw">True</span>),
+    FieldSchema(name=<span class="str">"embedding"</span>, dtype=DataType.FLOAT_VECTOR, dim=<span class="num">128</span>),
+    FieldSchema(name=<span class="str">"category"</span>, dtype=DataType.VARCHAR, max_length=<span class="num">50</span>),
+    FieldSchema(name=<span class="str">"price"</span>, dtype=DataType.FLOAT),
+]
+
+<span class="cmt"># 向量搜索 + 标量过滤</span>
+search_results = client.search(
+    collection_name=<span class="str">"products"</span>,
+    data=query_embedding,
+    limit=<span class="num">5</span>,
+    filter=<span class="str">'category == "电子产品" and price < 1000'</span>,  <span class="cmt"># 标量过滤条件</span>
+    output_fields=[<span class="str">"category"</span>, <span class="str">"price"</span>]
+)</code></pre>
+  </div>
+
+  <h3>数据一致性处理</h3>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 注意：</strong>Milvus默认是最终一致性，插入数据后可能需要几秒钟才能搜索到。需要强一致性时设置 <code>consistency_level="Strong"</code>。
+  </div>
+
+  <h3>Milvus 2.5+ 新特性</h3>
+
+  <p>Milvus 2.5 及后续版本带来了多项重要更新：</p>
+
+  <table>
+    <tr><th>特性</th><th>说明</th><th>使用场景</th></tr>
+    <tr><td><strong>原生全文搜索（BM25）</strong></td><td>基于 tantivy 引擎内置全文检索，支持混合向量+关键词搜索</td><td>RAG 混合检索、精确关键词匹配</td></tr>
+    <tr><td><strong>多向量字段</strong></td><td>单个 Collection 支持多个向量字段（如稠密向量 + 稀疏向量）</td><td>多模态检索、混合检索</td></tr>
+    <tr><td><strong>Grouping Search</strong></td><td>搜索结果按指定字段分组去重，每组返回 Top-K</td><td>推荐系统中每个类别返回最优结果</td></tr>
+    <tr><td><strong>JSON 索引增强</strong></td><td>JSON 字段支持更高效的索引和过滤</td><td>结构化+非结构化混合查询</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># Milvus 2.5+ 全文搜索示例（基于 tantivy 的 BM25）</span>
+<span class="kw">from</span> pymilvus <span class="kw">import</span> MilvusClient, DataType
+
+client = MilvusClient(<span class="str">"./milvus_demo.db"</span>)
+
+<span class="cmt"># 创建带全文搜索功能的Schema</span>
+schema = client.create_schema()
+schema.add_field(<span class="str">"id"</span>, DataType.INT64, is_primary=<span class="kw">True</span>, auto_id=<span class="kw">True</span>)
+schema.add_field(<span class="str">"text"</span>, DataType.VARCHAR, max_length=<span class="num">65535</span>,
+                 enable_analyzer=<span class="kw">True</span>)  <span class="cmt"># 启用分词器</span>
+schema.add_field(<span class="str">"sparse_vector"</span>, DataType.SPARSE_FLOAT_VECTOR)
+
+<span class="cmt"># 创建BM25函数将文本转换为稀疏向量</span>
+from pymilvus import Function, FunctionType
+bm25_fn = Function(
+    name=<span class="str">"text_to_bm25"</span>,
+    input_field_names=[<span class="str">"text"</span>],
+    output_field_names=[<span class="str">"sparse_vector"</span>],
+    function_type=FunctionType.BM25,
+)
+schema.add_function(bm25_fn)
+
+<span class="cmt"># 全文搜索（关键词检索）</span>
+results = client.search(
+    collection_name=<span class="str">"my_docs"</span>,
+    data=[<span class="str">"机器学习"</span>],
+    anns_field=<span class="str">"sparse_vector"</span>,
+    limit=<span class="num">5</span>
+)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 7 ==================== -->
+<div class="section" id="llm-milvus-s7">
+  <h2>Python集成</h2>
+
+  <h3>与LangChain集成</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_milvus <span class="kw">import</span> Milvus
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> OpenAIEmbeddings
+<span class="kw">from</span> langchain_text_splitters <span class="kw">import</span> RecursiveCharacterTextSplitter
+<span class="kw">from</span> langchain_community.document_loaders <span class="kw">import</span> TextLoader
+
+<span class="cmt"># 加载文档</span>
+loader = TextLoader(<span class="str">"./document.txt"</span>)
+documents = loader.load()
+
+<span class="cmt"># 分割文本</span>
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=<span class="num">500</span>,
+    chunk_overlap=<span class="num">50</span>
+)
+docs = text_splitter.split_documents(documents)
+
+<span class="cmt"># 创建向量存储</span>
+vectorstore = Milvus.from_documents(
+    documents=docs,
+    embedding=OpenAIEmbeddings(),
+    collection_name=<span class="str">"my_documents"</span>,
+    connection_args={<span class="str">"host"</span>: <span class="str">"localhost"</span>, <span class="str">"port"</span>: <span class="num">19530</span>}
+)
+
+<span class="cmt"># 相似度搜索</span>
+results = vectorstore.similarity_search(<span class="str">"什么是机器学习？"</span>, k=<span class="num">3</span>)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 8 ==================== -->
+<div class="section" id="llm-milvus-s8">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：文档语义搜索 <span class="badge">基础</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>用Milvus构建一个简单的文档语义搜索系统。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 准备5-10个不同主题的文本段落</p>
+      <p>② 使用Sentence-Transformers生成嵌入向量</p>
+      <p>③ 创建Milvus Collection，插入数据</p>
+      <p>④ 创建IVF_FLAT索引</p>
+      <p>⑤ 实现语义搜索，输入查询返回最相关的3个段落</p>
+      <p>⑥ 测试不同查询的效果</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习2：索引性能对比 <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>对比不同索引类型的性能。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 生成10000个128维的随机向量</p>
+      <p>② 分别创建FLAT、IVF_FLAT、HNSW三种索引</p>
+      <p>③ 对比三种索引的：构建时间、搜索速度、召回率、内存占用</p>
+      <p>④ 改变参数（nlist、M、ef）观察性能变化</p>
+      <p>⑤ 总结不同场景下应该选择哪种索引</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习3：混合检索 <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>实现向量搜索+标量过滤的混合检索。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 创建一个商品数据集（包含名称、描述、类别、价格、嵌入向量）</p>
+      <p>② 实现：语义搜索"性价比高的手机" + 过滤价格<3000</p>
+      <p>③ 实现：语义搜索"轻薄笔记本" + 过滤类别="电脑"</p>
+      <p>④ 对比纯向量搜索和混合检索的效果差异</p>
+    </div>
+  </div>
+</div>
+
+<!-- 底部导航 -->
+</div></section>

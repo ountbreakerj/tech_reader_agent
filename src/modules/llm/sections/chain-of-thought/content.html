@@ -1,0 +1,83 @@
+<section class="llm-mod llm-m-chain-of-thought" id="llm-chain-of-thought"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>🧩 模块0：Chain-of-Thought与高级提示技术</h1>
+  <p>释放大模型的推理能力</p>
+</div><div class="section" id="llm-chain-of-thought-s1">
+    <h2>Chain-of-Thought (CoT)</h2>
+    
+    <p>CoT（思维链）让模型在回答前先展示推理步骤，显著提升复杂推理任务的效果。</p>
+    <h3>两种CoT方式</h3>
+    <div class="compare">
+    <div class="compare-card left"><h4>Zero-shot CoT</h4><ul><li>在Prompt末尾加"Let's think step by step"</li><li>无需示例</li><li>简单但有效</li><li>适合数学/逻辑推理</li></ul></div>
+    <div class="compare-card right"><h4>Few-shot CoT</h4><ul><li>提供带推理链的示例</li><li>效果更好</li><li>需要精心设计示例</li><li>适合复杂推理</li></ul></div>
+  </div>
+    <h3>效果对比</h3>
+    <table>
+    <tr><th>方法</th><th>GSM8K数学准确率</th><th>说明</th></tr>
+    <tr><td>直接回答</td><td>~18%</td><td>不使用CoT</td></tr>
+<tr><td>Zero-shot CoT</td><td>~42%</td><td>加"Let's think step by step"</td></tr>
+<tr><td>Few-shot CoT</td><td>~57%</td><td>提供推理示例</td></tr>
+
+  </table>
+    <div class="callout callout-key">
+    <p>🔑 CoT的原理：引导模型将复杂问题分解为简单步骤，每步推理都可以被验证，从而提升最终答案的准确性。</p>
+  </div>
+  </div><div class="section" id="llm-chain-of-thought-s2">
+    <h2>In-Context Learning (ICL)</h2>
+    
+    <p>ICL是大模型的核心能力之一——通过少量示例（不更新参数）学习新任务。</p>
+    <h3>示例选择策略</h3>
+    <table>
+    <tr><th>策略</th><th>原理</th><th>效果</th></tr>
+    <tr><td>随机选择</td><td>从训练集中随机抽取</td><td>基线</td></tr>
+<tr><td>相似度选择</td><td>选择与输入最相似的示例</td><td>好（推荐）</td></tr>
+<tr><td>多样性选择</td><td>选择覆盖不同模式的示例</td><td>好</td></tr>
+<tr><td>混合策略</td><td>相似+多样性的组合</td><td>最好</td></tr>
+
+  </table>
+    <h3>示例顺序的影响</h3>
+    <p>研究表明，示例的排列顺序会影响输出质量。将最相关的示例放在最后（靠近输入）通常效果更好。</p>
+  </div><div class="section" id="llm-chain-of-thought-s3">
+    <h2>指令微调（Instruction Tuning）</h2>
+    
+    <p>指令微调让模型学会"听从指令"，是从GPT-3到ChatGPT的关键技术突破。</p>
+    <table>
+    <tr><th>模型</th><th>训练方式</th><th>关键特点</th></tr>
+    <tr><td>GPT-3</td><td>纯预训练</td><td>能力强但不听指令</td></tr>
+<tr><td>InstructGPT</td><td>预训练 + RLHF</td><td>学会听从人类指令</td></tr>
+<tr><td>ChatGPT</td><td>预训练 + RLHF + 对话数据</td><td>自然对话交互</td></tr>
+<tr><td>LLaMA-Chat</td><td>预训练 + SFT + DPO</td><td>开源指令模型</td></tr>
+
+  </table>
+    <h3>指令数据格式</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code># Alpaca格式
+{"instruction": "将以下文本翻译成英文",
+ "input": "自然语言处理是AI的分支",
+ "output": "Natural language processing is a branch of AI"}
+
+# ShareGPT格式（多轮对话）
+{"conversations": [
+  {"from": "human", "value": "什么是NLP?"},
+  {"from": "gpt", "value": "NLP是自然语言处理的缩写..."}
+]}</code></pre>
+  </div>
+  </div><div class="section" id="llm-chain-of-thought-s4">
+    <h2>进阶推理策略</h2>
+    
+    <table>
+    <tr><th>策略</th><th>原理</th><th>优势</th><th>成本</th></tr>
+    <tr><td>Self-Consistency</td><td>多次采样取多数投票</td><td>提升准确性</td><td>高（多次推理）</td></tr>
+<tr><td>Tree-of-Thought</td><td>树状搜索多条推理路径</td><td>适合探索性问题</td><td>很高</td></tr>
+<tr><td>ReAct<sup class="tp-mark" data-tp="react" role="button" tabindex="0" title="查看技术点详情" aria-label="查看技术点详情">?</sup></td><td>推理(Reason)+行动(Act)交替</td><td>可调用工具</td><td>中</td></tr>
+<tr><td>Reflexion</td><td>生成→评估→反思→改进</td><td>自我纠错</td><td>高</td></tr>
+
+  </table>
+    <div class="callout callout-tip">
+    <p>💡 实际应用中，Zero-shot CoT + Self-Consistency 是性价比最高的推理增强方案。</p>
+  </div>
+  </div>
+</div></section>

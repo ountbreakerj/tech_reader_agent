@@ -1,0 +1,297 @@
+<section class="llm-mod llm-m-rag-pipeline" id="llm-rag-pipeline"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#059669;">
+  <h1>⚙️ 完整RAG Pipeline实战</h1>
+  <p>从数据导入到问答生成的完整实现</p>
+</div>
+
+<div class="section" id="llm-rag-pipeline-s1">
+  <h2>系统架构设计</h2>
+
+  <div class="diagram">
+    <pre class="mermaid">
+graph TB
+    subgraph DataIngestion["数据导入"]
+        A[文档加载] --> B[文本分割]
+        B --> C[向量化]
+        C --> D[(Milvus)]
+    end
+
+    subgraph Retrieval["检索阶段"]
+        E[用户查询] --> F{混合检索}
+        F --> G[MySQL SQL]
+        F --> H[BM25]
+        F --> I[向量检索]
+        G --> J[RRF融合]
+        H --> J
+        I --> J
+        J --> K[重排序]
+    end
+
+    subgraph Generation["生成阶段"]
+        K --> L[构建Prompt]
+        L --> M[LLM生成]
+        M --> N[返回答案]
+    end
+    </pre>
+    <div class="caption">完整RAG系统架构</div>
+  </div>
+</div>
+
+<div class="section" id="llm-rag-pipeline-s2">
+  <h2>数据处理流程</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_community.document_loaders <span class="kw">import</span> DirectoryLoader, TextLoader
+<span class="kw">from</span> langchain_text_splitters <span class="kw">import</span> RecursiveCharacterTextSplitter
+<span class="kw">from</span> sentence_transformers <span class="kw">import</span> SentenceTransformer
+<span class="kw">from</span> pymilvus <span class="kw">import</span> MilvusClient
+<span class="kw">from</span> pymilvus <span class="kw">import</span> FieldSchema, CollectionSchema, DataType, Collection
+<span class="kw">import</span> mysql.connector
+<span class="kw">import</span> uuid
+
+<span class="kw">class</span> <span class="cls">RAGPipeline</span>:
+    <span class="str">"""完整RAG Pipeline"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        <span class="cmt"># 初始化组件</span>
+        self.embed_model = SentenceTransformer(<span class="str">"BAAI/bge-base-zh-v1.5"</span>)
+        self.milvus = MilvusClient(<span class="str">"./rag_milvus.db"</span>)
+        self.mysql = mysql.connector.connect(
+            host=<span class="str">"localhost"</span>, user=<span class="str">"root"</span>,
+            password=<span class="str">"password"</span>, database=<span class="str">"rag_db"</span>
+        )
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=<span class="num">500</span>, chunk_overlap=<span class="num">50</span>
+        )
+
+        <span class="cmt"># 创建Milvus集合（如不存在）</span>
+        <span class="kw">if not</span> self.milvus.has_collection(<span class="str">"documents"</span>):
+            fields = [
+                FieldSchema(name=<span class="str">"id"</span>, dtype=DataType.VARCHAR,
+                            is_primary=<span class="kw">True</span>, max_length=<span class="num">64</span>),
+                FieldSchema(name=<span class="str">"embedding"</span>, dtype=DataType.FLOAT_VECTOR,
+                            dim=<span class="num">768</span>),
+                FieldSchema(name=<span class="str">"title"</span>, dtype=DataType.VARCHAR,
+                            max_length=<span class="num">512</span>),
+            ]
+            schema = CollectionSchema(fields, description=<span class="str">"RAG文档集合"</span>)
+            self.milvus.create_collection(
+                collection_name=<span class="str">"documents"</span>,
+                schema=schema
+            )
+            <span class="cmt"># 创建向量索引以加速检索</span>
+            index_params = self.milvus.prepare_index_params()
+            index_params.add_index(
+                field_name=<span class="str">"embedding"</span>,
+                index_type=<span class="str">"IVF_FLAT"</span>,
+                metric_type=<span class="str">"COSINE"</span>,
+                params={<span class="str">"nlist"</span>: <span class="num">128</span>}
+            )
+            self.milvus.create_index(<span class="str">"documents"</span>, index_params)
+
+    <span class="kw">def</span> <span class="fn">ingest_documents</span>(self, doc_dir: <span class="cls">str</span>):
+        <span class="str">"""数据导入Pipeline"""</span>
+        <span class="cmt"># 1. 加载文档</span>
+        loader = DirectoryLoader(doc_dir, glob=<span class="str">"**/*.txt"</span>, loader_cls=TextLoader)
+        documents = loader.load()
+
+        <span class="cmt"># 2. 文本分割</span>
+        chunks = self.text_splitter.split_documents(documents)
+
+        <span class="cmt"># 3. 写入MySQL（原始文档）</span>
+        cursor = self.mysql.cursor()
+        <span class="kw">for</span> chunk <span class="kw">in</span> chunks:
+            cursor.execute(
+                <span class="str">"INSERT INTO documents (title, content, source) VALUES (%s, %s, %s)"</span>,
+                (chunk.metadata[<span class="str">"source"</span>], chunk.page_content, chunk.metadata[<span class="str">"source"</span>])
+            )
+        self.mysql.commit()
+
+        <span class="cmt"># 4. 生成向量并写入Milvus</span>
+        texts = [c.page_content <span class="kw">for</span> c <span class="kw">in</span> chunks]
+        embeddings = self.embed_model.encode(texts).tolist()
+
+        data = [
+            {
+                <span class="str">"id"</span>: <span class="fn">str</span>(uuid.uuid4()),  <span class="cmt"># 使用UUID避免重复导入时ID冲突</span>
+                <span class="str">"embedding"</span>: emb,
+                <span class="str">"title"</span>: chunks[i].metadata[<span class="str">"source"</span>]
+            }
+            <span class="kw">for</span> i, emb <span class="kw">in</span> <span class="fn">enumerate</span>(embeddings)
+        ]
+        self.milvus.insert(collection_name=<span class="str">"documents"</span>, data=data)
+
+        <span class="fn">print</span>(<span class="str">f"✅ 导入完成：<span class="var">{len(chunks)}</span> 个文档块"</span>)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-rag-pipeline-s3">
+  <h2>检索+生成</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">import</span> time
+<span class="kw">import</span> logging
+
+logger = logging.getLogger(__name__)
+
+<span class="kw">def</span> <span class="fn">query</span>(self, question: <span class="cls">str</span>, top_k: <span class="cls">int</span> = <span class="num">5</span>) -> <span class="cls">dict</span>:
+    <span class="str">"""RAG查询（含错误处理与重试）"""</span>
+
+    <span class="cmt"># 1. 混合检索（含异常处理）</span>
+    <span class="kw">try</span>:
+        results = self.hybrid_retrieve(question, top_k=top_k)
+    <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> e:
+        logger.error(<span class="str">f"检索失败：<span class="var">{e}</span>"</span>)
+        <span class="kw">return</span> {<span class="str">"answer"</span>: <span class="str">"抱歉，检索服务暂时不可用。"</span>, <span class="str">"sources"</span>: [], <span class="str">"context"</span>: <span class="str">""</span>}
+
+    <span class="kw">if not</span> results:
+        <span class="kw">return</span> {<span class="str">"answer"</span>: <span class="str">"未找到相关信息。"</span>, <span class="str">"sources"</span>: [], <span class="str">"context"</span>: <span class="str">""</span>}
+
+    <span class="cmt"># 2. 构建Prompt</span>
+    context = <span class="str">"\n\n"</span>.join([r[<span class="str">"content"</span>] <span class="kw">for</span> r <span class="kw">in</span> results])
+    prompt = <span class="str">f"""基于以下上下文回答问题。如果上下文中没有相关信息，请说"我不知道"。
+
+上下文：
+{context}
+
+问题：{question}
+
+回答："""</span>
+
+    <span class="cmt"># 3. LLM生成（带指数退避重试）</span>
+    max_retries = <span class="num">3</span>
+    <span class="kw">for</span> attempt <span class="kw">in</span> <span class="fn">range</span>(max_retries):
+        <span class="kw">try</span>:
+            response = self.llm.generate(prompt, timeout=<span class="num">30</span>)
+            <span class="kw">break</span>
+        <span class="kw">except</span> <span class="cls">TimeoutError</span>:
+            logger.warning(<span class="str">f"LLM调用超时，第<span class="var">{attempt+1}</span>次重试"</span>)
+            time.sleep(<span class="num">2</span> ** attempt)  <span class="cmt"># 指数退避: 1s, 2s, 4s</span>
+        <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> e:
+            logger.error(<span class="str">f"LLM调用失败：<span class="var">{e}</span>"</span>)
+            response = <span class="str">"抱歉，生成服务暂时不可用。"</span>
+            <span class="kw">break</span>
+
+    <span class="kw">return</span> {
+        <span class="str">"answer"</span>: response,
+        <span class="str">"sources"</span>: results,
+        <span class="str">"context"</span>: context
+    }
+
+<span class="kw">def</span> <span class="fn">query_stream</span>(self, question: <span class="cls">str</span>, top_k: <span class="cls">int</span> = <span class="num">5</span>):
+    <span class="str">"""流式RAG查询——逐token返回，提升用户体验"""</span>
+    results = self.hybrid_retrieve(question, top_k=top_k)
+    <span class="kw">if not</span> results:
+        <span class="kw">yield</span> <span class="str">"未找到相关信息。"</span>
+        <span class="kw">return</span>
+
+    context = <span class="str">"\n\n"</span>.join([r[<span class="str">"content"</span>] <span class="kw">for</span> r <span class="kw">in</span> results])
+    prompt = <span class="str">f"""基于以下上下文回答问题。
+
+上下文：
+{context}
+
+问题：{question}
+
+回答："""</span>
+
+    <span class="cmt"># 使用LLM流式接口逐token输出</span>
+    <span class="kw">for</span> token <span class="kw">in</span> self.llm.stream(prompt):
+        <span class="kw">yield</span> token
+
+<span class="cmt"># 使用示例</span>
+pipeline = RAGPipeline()
+pipeline.ingest_documents(<span class="str">"./docs"</span>)
+
+<span class="cmt"># 普通查询</span>
+result = pipeline.query(<span class="str">"什么是机器学习？"</span>)
+<span class="fn">print</span>(result[<span class="str">"answer"</span>])
+
+<span class="cmt"># 流式查询（适合Web前端实时展示）</span>
+<span class="kw">for</span> token <span class="kw">in</span> pipeline.query_stream(<span class="str">"什么是机器学习？"</span>):
+    <span class="fn">print</span>(token, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-rag-pipeline-s5">
+  <h2>RAG评估（RAGAS）</h2>
+
+  <p>构建RAG系统后，如何量化评估其质量？<strong>RAGAS</strong>（Retrieval Augmented Generation Assessment）是最常用的RAG评估框架，提供以下核心指标：</p>
+
+  <table>
+    <tr><th>指标</th><th>含义</th><th>评估对象</th></tr>
+    <tr><td><strong>Faithfulness（忠实度）</strong></td><td>生成的答案是否基于检索到的上下文？有无幻觉？</td><td>生成质量</td></tr>
+    <tr><td><strong>Answer Relevancy（答案相关性）</strong></td><td>答案是否真正回答了用户的问题？</td><td>生成质量</td></tr>
+    <tr><td><strong>Context Precision（上下文精确率）</strong></td><td>相关文档是否被排在检索结果的前列？</td><td>检索质量</td></tr>
+    <tr><td><strong>Context Recall（上下文召回率）</strong></td><td>所有相关文档是否都被检索到了？</td><td>检索质量</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># 使用RAGAS评估RAG系统</span>
+<span class="cmt"># pip install ragas</span>
+
+<span class="kw">from</span> ragas <span class="kw">import</span> evaluate
+<span class="kw">from</span> ragas.metrics <span class="kw">import</span> (
+    faithfulness,
+    answer_relevancy,
+    context_precision,
+    context_recall
+)
+<span class="kw">from</span> datasets <span class="kw">import</span> Dataset
+
+<span class="cmt"># 准备评估数据集</span>
+eval_data = {
+    <span class="str">"question"</span>: [<span class="str">"什么是机器学习？"</span>, <span class="str">"深度学习和机器学习的关系？"</span>],
+    <span class="str">"answer"</span>: [<span class="str">"机器学习是AI的分支..."</span>, <span class="str">"深度学习是机器学习的子集..."</span>],
+    <span class="str">"contexts"</span>: [
+        [<span class="str">"机器学习是人工智能的一个分支"</span>, <span class="str">"它使计算机能够从数据中学习"</span>],
+        [<span class="str">"深度学习是机器学习的一个子领域"</span>, <span class="str">"使用多层神经网络"</span>],
+    ],
+    <span class="str">"ground_truth"</span>: [<span class="str">"机器学习是AI的分支..."</span>, <span class="str">"深度学习是机器学习的子集..."</span>]
+}
+dataset = Dataset.from_dict(eval_data)
+
+<span class="cmt"># 运行评估</span>
+result = evaluate(
+    dataset,
+    metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+)
+
+<span class="fn">print</span>(result)  <span class="cmt"># 输出各指标分数（0-1）</span>
+result.to_pandas()  <span class="cmt"># 转为DataFrame查看详细结果</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>评估最佳实践：</strong>准备至少20-50个有标准答案（ground_truth）的测试用例，覆盖常见问题、边界情况和长尾问题。持续评估、持续迭代是提升RAG系统质量的关键。
+  </div>
+</div>
+
+<div class="section" id="llm-rag-pipeline-s4">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：构建完整RAG系统</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>从零构建一个可运行的RAG问答系统。</p>
+      <p><strong>技术栈：</strong>MySQL + Milvus + LangChain + OpenAI/Claude</p>
+      <p><strong>要求：</strong></p>
+      <p>① 准备10-20个文本文件作为知识库</p>
+      <p>② 实现文档导入Pipeline</p>
+      <p>③ 实现混合检索（MySQL + 向量）</p>
+      <p>④ 实现RAG生成</p>
+      <p>⑤ 测试5个不同的问题</p>
+      <p>⑥ 记录答案和来源文档</p>
+    </div>
+  </div>
+</div>
+
+
+
+</div>
+
+</section>

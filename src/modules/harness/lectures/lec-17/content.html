@@ -1,0 +1,76 @@
+<section id="sec-h-lec-17" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 17 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-17">第 17 讲 · 延伸阅读与资源</h1>
+    <p>这门课覆盖了 harness 工程的核心概念。这一讲汇总了继续深入的方向：官方文档、关键实践者、值得追踪的研究，以及本课程内容的来源脉络。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>官方文档</h2>
+    <ul>
+      <li><strong>Claude Code 文档</strong>：<code>claude.ai/code</code> — hooks、skills、memory、MCP、worktrees 的完整参考。第 15 讲所有机制的权威来源。</li>
+      <li><strong>Anthropic 工程博客</strong>：<code>anthropic.com/engineering</code> — 系统性 harness 实验（DAW 案例）、agent 可靠性研究、多 agent 架构设计的第一手资料。</li>
+      <li><strong>OpenAI Codex 文档</strong>：<code>platform.openai.com/docs/codex</code> — AGENTS.md 规范、沙箱机制、并发任务设计的参考。</li>
+      <li><strong>LangGraph 文档</strong>：<code>langchain-ai.github.io/langgraph</code> — 第 14 讲图工程原语（node/edge/state/routing）的 Python 实现参考。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>关键实践者</h2>
+    <p>以下实践者的公开写作和演讲是本课程内容的重要来源：</p>
+    <ul>
+      <li><strong>Boris Cherny</strong>（Meta）— 大规模 agent 工程实践，Loop 工程的早期实践者之一。</li>
+      <li><strong>Peter Steinberger</strong>（PSPDFKit / Superapp）— "Graph 工程"概念的提出者之一，把 agent 组织成有向图的实践先驱。</li>
+      <li><strong>Addy Osmani</strong>（Google Chrome）— AI 辅助工程的规模化实践，《AI-Assisted Engineering》作者。</li>
+      <li><strong>Rohit（@rohit4verse）</strong>— 四层框架（Prompt → Context → Loop → Graph）的提出者。</li>
+      <li><strong>Simon Willison</strong>（Datasette）— Agent 工程实践的长期观察者，大量一手实验记录。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>研究论文</h2>
+    <ul>
+      <li><strong>Guo et al. (2017) "On Calibration of Modern Neural Networks"，ICML</strong> — 神经网络系统性过度自信的经典证明，第 09 讲的理论基础。</li>
+      <li><strong>Anthropic "Building Effective Agents" (2024)</strong> — 多 agent 架构、生成者-评估者分离、harness 设计的系统性总结。官方推荐的 agent 工程起点。</li>
+      <li><strong>Google "Software Engineering at Google" — Testing chapters</strong> — 测试金字塔、测试分层的原始来源，第 09–10 讲的背景参考。</li>
+      <li><strong>OpenAI "Practices for Governing Agentic AI Systems" (2025)</strong> — agent 架构约束、早期前置条件设计的实践总结，第 16 讲的部分来源。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>工具与框架</h2>
+    <ul>
+      <li><strong>LangGraph</strong> — Python 生态里最成熟的 graph 工程框架。节点/边/状态/路由四原语的参考实现。</li>
+      <li><strong>Playwright MCP</strong> — 让 agent 像用户一样操作浏览器的 MCP 服务。Evaluator agent 的标准工具。</li>
+      <li><strong>GitHub Actions</strong> — Automation 原语的通用实现。Claude Code 的 GitHub Actions 集成让 loop 触发条件可以是 PR 事件、定时任务等。</li>
+      <li><strong>pytest / vitest</strong> — agent 场景下的测试框架首选。结构化输出，错误消息面向机器可读，易于集成到 harness 验证步骤。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>课程脉络与概念图</h2>
+    <p>这门课的 17 讲覆盖了 harness 工程的五个子系统：</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">子系统</th><th scope="col">相关讲次</th><th scope="col">核心问题</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">指令（Instructions）</th><td>01–04</td><td>Agent 怎么知道该做什么</td></tr>
+        <tr><th scope="row">状态（State）</th><td>05–06</td><td>跨会话的上下文怎么持久化</td></tr>
+        <tr><th scope="row">工具（Tools）</th><td>07–08</td><td>任务边界和完成条件怎么定义</td></tr>
+        <tr><th scope="row">验证（Verification）</th><td>09–12</td><td>怎么知道 agent 真的做完了</td></tr>
+        <tr><th scope="row">反馈（Feedback）</th><td>13–16</td><td>怎么让 agent 在循环里持续进步</td></tr>
+      </tbody>
+    </table></div>
+    <p>建议的深入路径：把第 01–12 讲的核心原则在一个实际项目里逐一实施，大约 3–4 周后回来看第 13–16 讲，会对 Loop 和 Graph 工程的必要性有更直接的感受。理论容易懂，难的是在真实项目压力下坚持这些原则。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-16">← 第 16 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-00">↑ 回到课程概述</a>
+  </nav>
+</section>
+</div>

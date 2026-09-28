@@ -1,0 +1,110 @@
+<section id="sec-h-lec-15" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 15 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-15">第 15 讲 · Claude Code 深度解析</h1>
+    <p>Claude Code 是 Anthropic 的官方 CLI，把 agent 工作流直接嵌入终端。它的设计假设是：开发者最有效率的地方是命令行，而不是一个独立的 IDE 窗口。理解它的 harness 机制，能让你从"问答工具"升级到"自主执行引擎"。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>指令层级：四个文件的优先级</h2>
+    <p>Claude Code 的指令来自四个位置，按从高到低的优先级依次是：</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">文件</th><th scope="col">作用域</th><th scope="col">典型内容</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Enterprise policy</th><td>组织级</td><td>安全合规、禁止操作、审计要求</td></tr>
+        <tr><th scope="row">~/.claude/CLAUDE.md</th><td>用户全局</td><td>个人习惯、默认语言、环境变量偏好</td></tr>
+        <tr><th scope="row">CLAUDE.md（项目根）</th><td>项目级</td><td>构建命令、测试命令、架构约束</td></tr>
+        <tr><th scope="row">AGENTS.md（子目录）</th><td>模块级</td><td>模块特定规则、子目录约束</td></tr>
+      </tbody>
+    </table></div>
+    <p>这个层级直接实现了第 04 讲的指令分层原则。全局规则放 CLAUDE.md，项目规则放项目根 CLAUDE.md，模块特定规则放对应目录的 AGENTS.md。每层文件只写属于那个作用域的内容，不重复上层已有的规则。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>Hooks：把验证嵌入工具调用</h2>
+    <p>Hooks 是 Claude Code 最强大的 harness 机制之一。你可以在特定事件发生时自动触发 shell 命令：</p>
+    <div class="codeblock">
+      <pre><code># .claude/settings.json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "npm run lint -- --fix" }]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "echo 'Running: $CLAUDE_TOOL_INPUT'" }]
+      }
+    ]
+  }
+}</code></pre></div>
+    <p>支持的事件：<code>PreToolUse</code>（工具调用前）、<code>PostToolUse</code>（工具调用后）、<code>Stop</code>（agent 停止前）、<code>Notification</code>（需要用户注意时）。Hooks 的输出会反馈给 agent，agent 可以根据 hook 输出调整行为。这是第 10 讲"架构规则必须可执行"的技术实现：lint 失败，agent 看到错误，自动修复。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>Skills：封装可复用工作流</h2>
+    <p>Skills（技能）是存储在 <code>.claude/agents/</code> 目录下的 markdown 文件，描述一套可复用的操作流程。用户通过 <code>/skill-name</code> 调用，agent 读取 skill 文件后按其中的指令执行。</p>
+    <div class="codeblock">
+      <pre><code># .claude/agents/deploy.md
+---
+description: 部署到生产环境
+---
+
+1. 运行完整测试套件：`npm test`
+2. 构建生产包：`npm run build:prod`
+3. 检查 bundle 大小不超过 500KB
+4. 推送到 main 分支
+5. 触发 CI/CD pipeline
+6. 验证部署：`curl https://prod.example.com/health`</code></pre></div>
+    <p>Skills 对应第 13 讲 Loop 工程里的"Skills（技能）"原语——把可复用行为封装成可调用的单元，不需要每次重新定义。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>Memory：持久化跨会话知识</h2>
+    <p>Claude Code 支持文件级 memory，把需要跨会话保留的知识写入 <code>.claude/memory/</code> 目录。每个 memory 文件是一个带 frontmatter 的 markdown 文件：</p>
+    <div class="codeblock">
+      <pre><code>---
+name: api-conventions
+description: 项目 API 设计约定
+metadata:
+  type: project
+---
+- 所有端点以 /api/v2/ 开头
+- 认证用 Bearer token，放在 Authorization header
+- 错误响应格式：{ "error": "...", "code": "...", "details": {} }
+- 分页参数：?page=1&per_page=20（最大 100）</code></pre></div>
+    <p>Memory 直接实现了第 05 讲的状态持久化——不是临时笔记，是跨会话共享的事实库。MEMORY.md 是索引文件，每个会话开始时自动加载。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>Worktrees：并发任务的隔离沙箱</h2>
+    <p>Claude Code 集成了 git worktrees，允许在同一个仓库下开多个独立工作目录，每个目录运行不同的 agent 实例，互不干扰。</p>
+    <p>在 Claude Code 里，<code>/worktree feature-x</code> 创建一个新 worktree，agent 在里面工作，完成后可以 merge 回主分支。这是第 13 讲 Loop 工程"Worktrees"原语的具体实现：并发执行多个独立任务，每个任务有干净的隔离环境。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>/loop 和 /goal：持续执行的两种模式</h2>
+    <p><code>/goal</code>：目标驱动模式。你描述一个目标状态，Claude Code 持续工作直到达成目标或遇到无法解决的障碍。适合有明确终态的任务，比如"让所有测试通过"、"把 TypeScript 错误清零"。</p>
+    <p><code>/loop</code>：持续循环模式。Claude Code 按照指定的提示词持续执行，每次 loop 间隔可配置。适合监控任务、定期检查、持续集成场景。</p>
+    <p>两者的共同点：都需要 harness 的其他机制支撑才能稳定运行。没有 PROGRESS.md（第 05 讲）、没有 Clean State（第 12 讲）、没有结构化的完成条件（第 08 讲），长时间运行的 loop 会出现状态漂移和验证债务。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>MCP：把外部系统接入 Harness</h2>
+    <p>Model Context Protocol（MCP）是 Claude Code 连接外部工具和数据源的标准接口。通过 MCP，agent 可以直接操作：数据库（读写查询）、浏览器（Playwright MCP，用于端到端测试）、第三方 API（GitHub、Jira、Slack）、文件系统（超出当前目录的访问）。</p>
+    <p>MCP 对应第 13 讲的"Connectors（连接器）"原语——loop 与外部系统的接口。Anthropic DAW 实验里，Evaluator 用 Playwright MCP 像用户一样点击应用，就是这个机制的典型应用。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-14">← 第 14 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-16">第 16 讲 →</a>
+  </nav>
+</section>

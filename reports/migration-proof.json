@@ -1,0 +1,7 @@
+{
+  "source": "../tech-reader.html",
+  "sha256": "e4a32352d47e39dcabfbef7d21f2f8ffa8532f5cab4b56ed66e7e1ea8c22d3ae",
+  "sourceBytes": 7938321,
+  "importedAt": "2026-09-01",
+  "proof": "初始连续切片在导入时逐字符还原，并通过 SHA-256 校验；之后的路由与响应式修复属于有意的产品改动。"
+}

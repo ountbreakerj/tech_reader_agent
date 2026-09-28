@@ -1,0 +1,901 @@
+<section class="llm-mod llm-m-rag-production" id="llm-rag-production"><div class="module-wrapper">
+<h1>RAG生产化</h1>
+<p>将RAG系统从原型推向生产环境需要解决架构、性能、安全、运维等一系列工程挑战。本章全面覆盖RAG生产化的关键实践。</p>
+
+<!-- ========== 1. 生产架构设计 ========== -->
+<h2>1. 生产架构设计</h2>
+
+<h3>微服务架构</h3>
+<p>生产级RAG系统通常拆分为以下微服务：</p>
+
+<table>
+    <tr><th>服务</th><th>职责</th><th>技术选型</th></tr>
+    <tr><td>API Gateway</td><td>请求路由、认证鉴权、限流、负载均衡</td><td>Kong / Nginx / AWS API Gateway</td></tr>
+    <tr><td>Query Service</td><td>查询预处理、意图识别、查询改写</td><td>FastAPI / gRPC</td></tr>
+    <tr><td>Retrieval Service</td><td>向量检索、BM25检索、混合检索、重排序</td><td>FastAPI + Milvus/Weaviate</td></tr>
+    <tr><td>LLM Service</td><td>Prompt组装、LLM调用、流式输出</td><td>FastAPI + OpenAI/vLLM</td></tr>
+    <tr><td>Cache Service</td><td>语义缓存、精确缓存</td><td>Redis + GPTCache</td></tr>
+    <tr><td>Monitoring Service</td><td>指标采集、日志聚合、告警</td><td>Prometheus + Grafana + ELK</td></tr>
+</table>
+
+<h3>部署拓扑图</h3>
+<div class="diagram">
+                        +------------------+
+                        |   Load Balancer   |
+                        +--------+---------+
+                                 |
+                        +--------v---------+
+                        |   API Gateway    |
+                        | (限流/鉴权/路由)  |
+                        +--------+---------+
+                                 |
+              +------------------+------------------+
+              |                  |                  |
+     +--------v-------+ +-------v--------+ +-------v--------+
+     |  Query Service  | | Cache Service  | | Auth Service   |
+     | (查询预处理)     | | (语义/精确缓存) | | (JWT/OAuth)    |
+     +--------+--------+ +-------+--------+ +----------------+
+              |                  |
+              +--------+---------+
+                       |
+        +--------------+--------------+
+        |                             |
++-------v--------+          +--------v-------+
+| Retrieval Svc  |          |  LLM Service   |
+| (向量+BM25+Rerank) |      | (Prompt+生成)  |
++-------+--------+          +--------+-------+
+        |                             |
++-------v--------+          +--------v-------+
+|  Vector DB     |          |  LLM Provider  |
+| (Milvus/Qdrant)|          | (OpenAI/vLLM)  |
++----------------+          +----------------+</div>
+
+<h3>核心服务代码骨架</h3>
+<pre><code># app/main.py - FastAPI 主应用
+from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    # 启动时初始化
+    app.state.vector_store = await init_vector_store()
+    app.state.cache = await init_cache()
+    app.state.llm_client = init_llm_client()
+    yield
+    # 关闭时清理
+    await app.state.vector_store.close()
+    await app.state.cache.close()
+
+app = FastAPI(title="RAG Production API", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
+
+@app.post("/api/query")
+async def rag_query(request: QueryRequest):
+    """RAG 查询主流程"""
+    # 1. 检查缓存
+    cached = await app.state.cache.get(request.question)
+    if cached:
+        return CachedResponse(answer=cached, from_cache=True)
+
+    # 2. 查询预处理
+    rewritten = await rewrite_query(request.question)
+
+    # 3. 检索
+    contexts = await app.state.vector_store.search(
+        query=rewritten, top_k=request.top_k
+    )
+
+    # 4. 生成
+    answer = await app.state.llm_client.generate(
+        question=request.question, contexts=contexts
+    )
+
+    # 5. 写入缓存
+    await app.state.cache.set(request.question, answer)
+
+    return RAGResponse(answer=answer, contexts=contexts, from_cache=False)</code></pre>
+
+<!-- ========== 2. 缓存策略 ========== -->
+<h2>2. 缓存策略</h2>
+
+<p>缓存是降低RAG系统延迟和成本最有效的手段。一个好的缓存策略可以将LLM调用量减少30%-70%。</p>
+
+<h3>语义缓存</h3>
+<p>语义缓存通过embedding相似度匹配，即使用户换了一种问法也能命中缓存。例如"Python怎么读文件"和"如何用Python读取文件"语义相同。</p>
+
+<pre><code>import hashlib
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+class SemanticCache:
+    """基于embedding相似度的语义缓存"""
+
+    def __init__(self, similarity_threshold: float = 0.95):
+        self.model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.entries: list[dict] = []  # {"query", "embedding", "answer", "hit_count"}
+        self.threshold = similarity_threshold
+
+    def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+    def get(self, query: str) -> str | None:
+        """查询缓存，返回命中答案或None"""
+        if not self.entries:
+            return None
+        query_emb = self.model.encode(query)
+        best_score = 0.0
+        best_entry = None
+        for entry in self.entries:
+            score = self._cosine_similarity(query_emb, entry["embedding"])
+            if score > best_score:
+                best_score = score
+                best_entry = entry
+        if best_score >= self.threshold:
+            best_entry["hit_count"] += 1
+            return best_entry["answer"]
+        return None
+
+    def set(self, query: str, answer: str):
+        """写入缓存"""
+        embedding = self.model.encode(query)
+        self.entries.append({
+            "query": query,
+            "embedding": embedding,
+            "answer": answer,
+            "hit_count": 0,
+        })
+
+# 使用示例
+cache = SemanticCache(similarity_threshold=0.92)
+
+# 第一次查询 - 缓存未命中
+result = cache.get("什么是向量数据库？")  # None
+cache.set("什么是向量数据库？", "向量数据库是专门存储...")
+
+# 语义相似查询 - 缓存命中
+result = cache.get("向量数据库是什么？")  # "向量数据库是专门存储..."</code></pre>
+
+<h3>精确缓存</h3>
+<p>精确缓存使用query的hash作为key，速度极快但无法处理同义问法。</p>
+
+<pre><code>import hashlib
+import json
+import redis
+
+class ExactCache:
+    """基于Redis的精确缓存"""
+
+    def __init__(self, redis_url: str = "redis://localhost:6379", ttl: int = 3600):
+        self.redis = redis.from_url(redis_url)
+        self.ttl = ttl  # 过期时间（秒）
+
+    def _make_key(self, query: str, model: str = "default") -> str:
+        """生成缓存键"""
+        content = f"{model}:{query.strip().lower()}"
+        return f"rag_cache:{hashlib.sha256(content.encode()).hexdigest()}"
+
+    def get(self, query: str, model: str = "default") -> str | None:
+        key = self._make_key(query, model)
+        result = self.redis.get(key)
+        return result.decode("utf-8") if result else None
+
+    def set(self, query: str, answer: str, model: str = "default"):
+        key = self._make_key(query, model)
+        self.redis.setex(key, self.ttl, answer)
+
+    def invalidate(self, query: str, model: str = "default"):
+        """手动失效缓存"""
+        key = self._make_key(query, model)
+        self.redis.delete(key)</code></pre>
+
+<h3>缓存失效策略</h3>
+<table>
+    <tr><th>策略</th><th>适用场景</th><th>实现方式</th></tr>
+    <tr><td>TTL过期</td><td>通用场景</td><td>Redis EXPIRE / setex</td></tr>
+    <tr><td>LRU淘汰</td><td>内存有限</td><td>Redis maxmemory-policy allkeys-lru</td></tr>
+    <tr><td>版本失效</td><td>知识库更新后</td><td>缓存key包含知识库版本号</td></tr>
+    <tr><td>主动失效</td><td>文档更新/删除</td><td>监听文档变更事件，删除相关缓存</td></tr>
+</table>
+
+<h3>GPTCache使用</h3>
+<pre><code># pip install gptcache
+from gptcache import cache
+from gptcache.adapter.openai import openai
+from gptcache.embedding import Onnx
+from gptcache.manager import CacheBase, VectorBase, get_data_manager
+from gptcache.similarity_evaluation.distance import SearchDistanceEvaluation
+
+# 初始化 GPTCache
+onnx = Onnx()
+data_manager = get_data_manager(
+    CacheBase("sqlite"),
+    VectorBase("faiss", dimension=onnx.dimension),
+)
+
+cache.init(
+    embedding_func=onnx.to_embeddings,
+    data_manager=data_manager,
+    similarity_evaluation=SearchDistanceEvaluation(),
+)
+
+# 直接替换 openai.ChatCompletion，缓存自动生效
+response = openai.ChatCompletion.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "什么是RAG？"}],
+)
+print(response.choices[0].message.content)</code></pre>
+
+<!-- ========== 3. 流式输出 ========== -->
+<h2>3. 流式输出</h2>
+
+<p>对于RAG系统，用户可能需要等待检索+生成的时间。流式输出可以让用户看到逐步生成的文字，大幅改善感知延迟。</p>
+
+<h3>SSE后端实现</h3>
+<pre><code># FastAPI 流式输出 (Server-Sent Events)
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+
+app = FastAPI()
+
+async def stream_rag_response(question: str):
+    """流式生成RAG回答"""
+    # 1. 检索阶段（无法流式，但可以先发送状态）
+    yield f"data: {json.dumps({'type': 'status', 'content': '正在检索相关文档...'})}\n\n"
+    contexts = await retrieve(question)
+    yield f"data: {json.dumps({'type': 'status', 'content': f'找到 {len(contexts)} 条相关文档'})}\n\n"
+
+    # 2. 流式生成阶段
+    yield f"data: {json.dumps({'type': 'start', 'content': ''})}\n\n"
+    stream = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": f"根据以下上下文回答问题：\n{contexts}"},
+            {"role": "user", "content": question},
+        ],
+        stream=True,
+    )
+    async for chunk in stream:
+        if chunk.choices[0].delta.content:
+            content = chunk.choices[0].delta.content
+            yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+
+    # 3. 完成
+    yield f"data: {json.dumps({'type': 'done', 'content': ''})}\n\n"
+
+@app.get("/api/stream")
+async def stream_endpoint(question: str):
+    return StreamingResponse(
+        stream_rag_response(question),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )</code></pre>
+
+<h3>前端流式渲染</h3>
+<pre><code>// 前端 SSE 消费
+async function streamRAG(question: string): Promise&lt;void&gt; {
+    const response = await fetch(`/api/stream?question=${encodeURIComponent(question)}`);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    const answerEl = document.getElementById("answer")!;
+
+    answerEl.textContent = "";
+    let buffer = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!;  // 保留不完整行
+
+        for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = JSON.parse(line.slice(6));
+
+            switch (data.type) {
+                case "status":
+                    showStatus(data.content);     // 显示状态信息
+                    break;
+                case "token":
+                    answerEl.textContent += data.content;  // 逐token追加
+                    break;
+                case "done":
+                    hideStatus();                  // 隐藏加载状态
+                    break;
+            }
+        }
+    }
+}</code></pre>
+
+<div class="callout">
+    <strong>SSE vs WebSocket</strong>
+    RAG场景推荐SSE而非WebSocket。SSE是单向服务端推送，实现更简单、天然支持重连、浏览器原生支持。RAG的流式输出恰好是单向的。
+</div>
+
+<!-- ========== 4. 监控与告警 ========== -->
+<h2>4. 监控与告警</h2>
+
+<h3>关键指标</h3>
+<table>
+    <tr><th>指标</th><th>含义</th><th>告警阈值参考</th></tr>
+    <tr><td>延迟 P50/P95/P99</td><td>端到端响应时间的分位数</td><td>P99 > 5s</td></tr>
+    <tr><td>吞吐量 QPS</td><td>每秒处理的请求数</td><td>低于预期50%</td></tr>
+    <tr><td>缓存命中率</td><td>语义+精确缓存总命中率</td><td>< 20%</td></tr>
+    <tr><td>检索质量分</td><td>检索结果的平均相关性</td><td>< 0.6</td></tr>
+    <tr><td>LLM错误率</td><td>LLM调用失败/超时的比例</td><td>> 5%</td></tr>
+    <tr><td>Token使用量</td><td>每请求平均token消耗</td><td>超出预算线</td></tr>
+    <tr><td>幻觉率</td><td>回答中存在幻觉的比例</td><td>> 10%</td></tr>
+</table>
+
+<h3>指标采集代码</h3>
+<pre><code>from prometheus_client import Counter, Histogram, Gauge, start_http_server
+import time
+
+# 定义指标
+QUERY_COUNT = Counter("rag_query_total", "RAG查询总数", ["status", "cache_hit"])
+QUERY_LATENCY = Histogram("rag_query_latency_seconds", "查询延迟",
+                          buckets=[0.5, 1, 2, 3, 5, 8, 13])
+RETRIEVAL_SCORE = Histogram("rag_retrieval_score", "检索质量分",
+                            buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+ACTIVE_REQUESTS = Gauge("rag_active_requests", "当前活跃请求数")
+TOKEN_USAGE = Counter("rag_token_usage_total", "Token使用量", ["type"])  # type: prompt/completion
+
+# 中间件：自动采集指标
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class MetricsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        ACTIVE_REQUESTS.inc()
+        start = time.time()
+        try:
+            response = await call_next(request)
+            QUERY_COUNT.labels(status=response.status_code, cache_hit="false").inc()
+            return response
+        except Exception:
+            QUERY_COUNT.labels(status=500, cache_hit="false").inc()
+            raise
+        finally:
+            latency = time.time() - start
+            QUERY_LATENCY.observe(latency)
+            ACTIVE_REQUESTS.dec()
+
+app.add_middleware(MetricsMiddleware)
+
+# 在应用启动时暴露 metrics 端口
+# start_http_server(8001)  # Prometheus 抓取 http://app:8001/metrics</code></pre>
+
+<h3>Prometheus配置</h3>
+<pre><code># prometheus.yml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "rag-service"
+    static_configs:
+      - targets: ["rag-app:8001"]
+    metrics_path: /metrics
+
+  - job_name: "retrieval-service"
+    static_configs:
+      - targets: ["retrieval-app:8002"]
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - "rag_alerts.yml"</code></pre>
+
+<h3>告警规则</h3>
+<pre><code># rag_alerts.yml
+groups:
+  - name: rag_alerts
+    rules:
+      - alert: HighLatencyP99
+        expr: histogram_quantile(0.99, rag_query_latency_seconds_bucket) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG P99延迟超过5秒"
+
+      - alert: LowCacheHitRate
+        expr: rag_cache_hit_rate < 0.2
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "缓存命中率低于20%"
+
+      - alert: HighLLMErrorRate
+        expr: rate(rag_llm_errors_total[5m]) / rate(rag_query_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM错误率超过5%"</code></pre>
+
+<!-- ========== 5. 成本优化 ========== -->
+<h2>5. 成本优化</h2>
+
+<p>LLM调用是RAG系统最大的成本项。以下是经过实践验证的优化策略：</p>
+
+<h3>Embedding缓存</h3>
+<pre><code>import hashlib
+import redis
+import numpy as np
+
+class EmbeddingCache:
+    """缓存Embedding结果，避免重复计算"""
+
+    def __init__(self, redis_client: redis.Redis, ttl: int = 86400 * 7):
+        self.redis = redis_client
+        self.ttl = ttl
+
+    def get_or_compute(self, texts: list[str], embed_fn) -> list[list[float]]:
+        """批量获取embedding，优先从缓存取"""
+        results = [None] * len(texts)
+        uncached_indices = []
+        uncached_texts = []
+
+        # 查询缓存
+        for i, text in enumerate(texts):
+            key = f"emb:{hashlib.sha256(text.encode()).hexdigest()}"
+            cached = self.redis.get(key)
+            if cached:
+                results[i] = np.frombuffer(cached, dtype=np.float32).tolist()
+            else:
+                uncached_indices.append(i)
+                uncached_texts.append(text)
+
+        # 批量计算未缓存的
+        if uncached_texts:
+            new_embeddings = embed_fn(uncached_texts)
+            for idx, emb in zip(uncached_indices, new_embeddings):
+                results[idx] = emb
+                key = f"emb:{hashlib.sha256(texts[idx].encode()).hexdigest()}"
+                self.redis.setex(key, self.ttl, np.array(emb, dtype=np.float32).tobytes())
+
+        return results  # type: ignore</code></pre>
+
+<h3>Prompt压缩</h3>
+<pre><code>def compress_context(contexts: list[str], max_tokens: int = 2000) -> str:
+    """压缩上下文，保留最相关的内容"""
+    # 策略1: 按相关性分数截断（需要检索时返回分数）
+    # 策略2: 提取关键句子而非全段
+    total = ""
+    for ctx in contexts:
+        if count_tokens(total + ctx) > max_tokens:
+            # 截断到最近的句号
+            remaining = max_tokens - count_tokens(total)
+            truncated = truncate_to_tokens(ctx, remaining, break_at="。")
+            total += truncated
+            break
+        total += ctx + "\n\n"
+    return total
+
+def count_tokens(text: str) -> int:
+    """粗略估算token数（中文约1.5字/token）"""
+    return len(text) // 2</code></pre>
+
+<h3>小模型初筛 + 大模型精排</h3>
+<pre><code>class TwoStageGenerator:
+    """两阶段生成：小模型初筛 + 大模型精排"""
+
+    def __init__(self):
+        self.small_model = "gpt-4o-mini"   # 便宜快速
+        self.large_model = "gpt-4o"        # 贵但准确
+
+    async def generate(self, question: str, contexts: list[str]) -> str:
+        # 阶段1: 用小模型判断问题复杂度
+        complexity_prompt = f"""判断以下问题的复杂度：
+- simple: 事实查询、单跳推理
+- complex: 多跳推理、比较分析、需要综合多个信息
+
+问题：{question}
+只输出 simple 或 complex。"""
+
+        complexity = await call_llm(
+            model=self.small_model,
+            prompt=complexity_prompt,
+            max_tokens=10,
+        )
+
+        # 阶段2: 根据复杂度选择模型
+        if "simple" in complexity.lower():
+            # 简单问题用小模型回答，节省成本
+            return await call_llm(
+                model=self.small_model,
+                prompt=build_rag_prompt(question, contexts),
+            )
+        else:
+            # 复杂问题用大模型保证质量
+            return await call_llm(
+                model=self.large_model,
+                prompt=build_rag_prompt(question, contexts),
+            )</code></pre>
+
+<div class="callout callout-success">
+    <strong>成本优化效果参考</strong>
+    通过组合以上策略，实际生产中通常可以节省40%-60%的LLM调用成本，同时保持回答质量基本不变。
+</div>
+
+<!-- ========== 6. 安全与合规 ========== -->
+<h2>6. 安全与合规</h2>
+
+<h3>Prompt注入防御</h3>
+<p>Prompt注入是RAG系统面临的最大安全风险。攻击者可能通过精心构造的文档或查询来操控LLM输出。</p>
+
+<pre><code>import re
+
+class PromptInjectionDefender:
+    """Prompt注入防御层"""
+
+    # 输入侧：检测恶意查询
+    INJECTION_PATTERNS = [
+        r"ignore\s+(all\s+)?(previous|above)\s+instructions",
+        r"你现在是",
+        r"忽略.*指令",
+        r"system\s*prompt",
+        r"<\|im_start\|>",
+        r"act\s+as\s+(?:a\s+)?(?:DAN|jailbreak)",
+    ]
+
+    def scan_input(self, query: str) -> tuple[bool, str]:
+        """扫描用户输入是否包含注入尝试"""
+        query_lower = query.lower()
+        for pattern in self.INJECTION_PATTERNS:
+            if re.search(pattern, query_lower, re.IGNORECASE):
+                return True, f"检测到潜在注入: {pattern}"
+        return False, ""
+
+    def scan_output(self, answer: str, contexts: list[str]) -> tuple[bool, str]:
+        """扫描LLM输出是否泄露系统信息"""
+        leak_patterns = [
+            r"我的系统提示是",
+            r"system prompt",
+            r"我的指令是",
+            r"I was told to",
+        ]
+        for pattern in leak_patterns:
+            if re.search(pattern, answer, re.IGNORECASE):
+                return True, "输出可能包含系统信息泄露"
+        return False, ""
+
+    def sanitize_context(self, context: str) -> str:
+        """清理检索到的文档内容"""
+        # 移除可能的注入指令
+        context = re.sub(r"\[SYSTEM\].*?(\n|$)", "", context, flags=re.IGNORECASE)
+        context = re.sub(r"<!--.*?-->", "", context, flags=re.DOTALL)
+        return context.strip()
+
+# 在RAG pipeline中使用
+defender = PromptInjectionDefender()
+
+def safe_rag_query(question: str) -> str:
+    # 1. 输入检查
+    is_injection, reason = defender.scan_input(question)
+    if is_injection:
+        return "抱歉，您的提问中包含不安全的内容，请重新提问。"
+
+    # 2. 检索
+    contexts = retriever.invoke(question)
+
+    # 3. 清理检索结果
+    clean_contexts = [defender.sanitize_context(c) for c in contexts]
+
+    # 4. 生成
+    answer = llm.invoke(question, clean_contexts)
+
+    # 5. 输出检查
+    has_leak, reason = defender.scan_output(answer, clean_contexts)
+    if has_leak:
+        answer = "抱歉，系统无法生成合适的回答，请重新提问。"
+
+    return answer</code></pre>
+
+<h3>PII脱敏</h3>
+<pre><code># pip install presidio-analyzer presidio-anonymizer
+from presidio_analyzer import AnalyzerEngine
+from presidio_anonymizer import AnonymizerEngine
+from presidio_anonymizer.entities import OperatorConfig
+
+class PIIDetector:
+    """使用 Microsoft Presidio 进行PII脱敏"""
+
+    def __init__(self):
+        self.analyzer = AnalyzerEngine()
+        self.anonymizer = AnonymizerEngine()
+
+    def detect_and_anonymize(self, text: str, language: str = "en") -> str:
+        """检测并匿名化PII信息"""
+        results = self.analyzer.analyze(
+            text=text,
+            language=language,
+            entities=[
+                "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER",
+                "CREDIT_CARD", "IP_ADDRESS", "LOCATION",
+            ],
+        )
+
+        anonymized = self.anonymizer.anonymize(
+            text=text,
+            analyzer_results=results,
+            operators={
+                "PERSON": OperatorConfig("replace", {"new_value": "[姓名]"}),
+                "EMAIL_ADDRESS": OperatorConfig("replace", {"new_value": "[邮箱]"}),
+                "PHONE_NUMBER": OperatorConfig("replace", {"new_value": "[电话]"}),
+                "CREDIT_CARD": OperatorConfig("replace", {"new_value": "[银行卡]"}),
+            },
+        )
+        return anonymized.text
+
+# 使用
+pii = PIIDetector()
+safe_text = pii.detect_and_anonymize(
+    "请联系张三，邮箱zhangsan@example.com，电话13800138000"
+)
+print(safe_text)
+# "请联系[姓名]，邮箱[邮箱]，电话[电话]"</code></pre>
+
+<h3>审计日志与访问控制</h3>
+<pre><code>import logging
+from datetime import datetime
+
+# 审计日志配置
+audit_logger = logging.getLogger("rag.audit")
+handler = logging.FileHandler("rag_audit.log", encoding="utf-8")
+handler.setFormatter(logging.Formatter(
+    '%(asctime)s | %(message)s'
+))
+audit_logger.addHandler(handler)
+audit_logger.setLevel(logging.INFO)
+
+def log_query(user_id: str, question: str, answer: str, metadata: dict):
+    """记录审计日志"""
+    audit_logger.info(
+        f"USER={user_id} | QUERY={question[:200]} | "
+        f"ANSWER_LEN={len(answer)} | "
+        f"TOKENS={metadata.get('tokens', 'N/A')} | "
+        f"LATENCY={metadata.get('latency', 'N/A')}s | "
+        f"CACHE={metadata.get('from_cache', False)}"
+    )
+
+# 访问控制示例（基于角色）
+from enum import Enum
+
+class Role(Enum):
+    VIEWER = "viewer"      # 只能查询
+    EDITOR = "editor"      # 可以管理知识库
+    ADMIN = "admin"        # 全部权限
+
+PERMISSIONS = {
+    Role.VIEWER:  {"query", "feedback"},
+    Role.EDITOR:  {"query", "feedback", "upload_doc", "delete_doc"},
+    Role.ADMIN:   {"query", "feedback", "upload_doc", "delete_doc",
+                   "manage_users", "view_audit_log", "system_config"},
+}
+
+def check_permission(user_role: Role, action: str) -> bool:
+    return action in PERMISSIONS.get(user_role, set())</code></pre>
+
+<!-- ========== 7. 蓝绿部署与版本管理 ========== -->
+<h2>7. 蓝绿部署与版本管理</h2>
+
+<h3>Embedding模型升级（Re-index策略）</h3>
+<p>更换Embedding模型意味着所有文档需要重新向量化。这是一次高风险操作，需要谨慎规划。</p>
+
+<pre><code>class EmbeddingMigration:
+    """Embedding模型迁移管理"""
+
+    def __init__(self, old_model: str, new_model: str, vector_store):
+        self.old_model = old_model
+        self.new_model = new_model
+        self.vector_store = vector_store
+
+    async def reindex(self, documents: list[dict], batch_size: int = 100):
+        """重新索引所有文档"""
+        new_collection = f"docs_{self.new_model.replace('/', '_')}"
+
+        print(f"开始re-index到集合: {new_collection}")
+        total = len(documents)
+
+        for i in range(0, total, batch_size):
+            batch = documents[i:i + batch_size]
+            # 使用新模型生成embedding
+            embeddings = await embed_batch(batch, model=self.new_model)
+            # 写入新集合
+            await self.vector_store.upsert(
+                collection=new_collection,
+                ids=[d["id"] for d in batch],
+                vectors=embeddings,
+                payloads=batch,
+            )
+            print(f"  进度: {min(i + batch_size, total)}/{total}")
+
+        print(f"Re-index完成，共 {total} 条文档")
+
+    async def validate(self, test_queries: list[dict], new_collection: str):
+        """验证新索引质量"""
+        hits = 0
+        for tq in test_queries:
+            results = await self.vector_store.search(
+                collection=new_collection,
+                query=tq["query"],
+                top_k=5,
+            )
+            if any(r["id"] in tq["expected_ids"] for r in results):
+                hits += 1
+        hit_rate = hits / len(test_queries)
+        print(f"验证 Hit Rate@5: {hit_rate:.2%}")
+        return hit_rate
+
+# 迁移流程
+# 1. 用新模型re-index所有文档到新集合
+# 2. 验证新索引质量
+# 3. 灰度切换：先将10%流量导向新索引
+# 4. 对比评估指标，确认无退化
+# 5. 全量切换，保留旧索引一周后删除</code></pre>
+
+<h3>Prompt版本管理</h3>
+<pre><code>class PromptVersionManager:
+    """Prompt版本管理器"""
+
+    def __init__(self):
+        self.prompts: dict[str, dict] = {}
+        self.active_version: dict[str, str] = {}  # prompt_name -> version
+
+    def register(self, name: str, version: str, template: str, metadata: dict = None):
+        """注册新版本的Prompt"""
+        key = f"{name}:{version}"
+        self.prompts[key] = {
+            "template": template,
+            "metadata": metadata or {},
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        print(f"注册 Prompt: {key}")
+
+    def activate(self, name: str, version: str):
+        """激活指定版本"""
+        key = f"{name}:{version}"
+        if key not in self.prompts:
+            raise ValueError(f"Prompt {key} 不存在")
+        self.active_version[name] = version
+        print(f"激活 Prompt: {key}")
+
+    def get(self, name: str, version: str = None) -> str:
+        """获取Prompt模板"""
+        ver = version or self.active_version.get(name)
+        if not ver:
+            raise ValueError(f"Prompt {name} 未指定版本且无激活版本")
+        return self.prompts[f"{name}:{ver}"]["template"]
+
+    def rollback(self, name: str):
+        """回滚到上一个版本"""
+        current = self.active_version.get(name)
+        if not current:
+            raise ValueError(f"Prompt {name} 无激活版本")
+        # 找到当前版本之前的版本
+        versions = sorted(
+            [k.split(":")[1] for k in self.prompts if k.startswith(f"{name}:")],
+            reverse=True,
+        )
+        for ver in versions:
+            if ver < current:
+                self.activate(name, ver)
+                return
+        raise ValueError(f"没有更早的版本可以回滚")
+
+# 使用示例
+pm = PromptVersionManager()
+
+pm.register("rag_system", "v1.0", "根据以下上下文回答：{context}\n问题：{question}")
+pm.register("rag_system", "v1.1", "你是一个专业的助手。根据以下参考资料回答。\n资料：{context}\n问题：{question}")
+pm.register("rag_system", "v2.0", "你是一个专业的助手。请基于参考资料，给出准确且完整的回答。\n\n参考资料：\n{context}\n\n用户问题：{question}\n\n要求：如果参考资料中没有相关信息，请明确说明。")
+
+pm.activate("rag_system", "v2.0")
+print(pm.get("rag_system"))  # 获取v2.0的模板
+
+pm.rollback("rag_system")    # 回滚到v1.1</code></pre>
+
+<h3>回滚机制</h3>
+<pre><code>class RollbackManager:
+    """RAG系统回滚管理"""
+
+    def __init__(self):
+        self.versions: dict[str, dict] = {}  # version -> config
+
+    def snapshot(self, version: str, config: dict):
+        """保存当前系统配置快照"""
+        self.versions[version] = {
+            "config": config,
+            "timestamp": datetime.utcnow().isoformat(),
+            "status": "inactive",
+        }
+
+    def activate(self, version: str):
+        """激活指定版本"""
+        for v in self.versions:
+            self.versions[v]["status"] = "inactive"
+        self.versions[version]["status"] = "active"
+
+    def rollback_to_last_stable(self):
+        """回滚到最近的稳定版本"""
+        stable_versions = [
+            v for v, cfg in self.versions.items()
+            if cfg.get("metadata", {}).get("stable", False)
+        ]
+        if not stable_versions:
+            raise RuntimeError("没有可用的稳定版本")
+        latest_stable = sorted(stable_versions)[-1]
+        self.activate(latest_stable)
+        print(f"已回滚到: {latest_stable}")
+        return latest_stable
+
+# 快照示例
+rb = RollbackManager()
+rb.snapshot("2025-06-01", {
+    "embedding_model": "text-embedding-3-small",
+    "llm_model": "gpt-4o",
+    "prompt_version": "v1.1",
+    "chunk_size": 512,
+    "retrieval_top_k": 5,
+    "metadata": {"stable": True},
+})</code></pre>
+
+<div class="callout callout-warn">
+    <strong>回滚注意事项</strong>
+    <ul>
+        <li>回滚Embedding模型需要保留旧的向量索引至少7天</li>
+        <li>Prompt回滚要同步更新评估基线</li>
+        <li>建议每次变更都创建带时间戳的配置快照</li>
+        <li>生产环境变更窗口建议选在低峰期</li>
+    </ul>
+</div>
+
+<!-- ========== 8. 动手练习 ========== -->
+<h2>8. 动手练习</h2>
+
+<div class="exercise">
+    <h3>练习1：实现语义缓存</h3>
+    <p>基于本章的SemanticCache代码，完成以下改进：</p>
+    <ul>
+        <li>添加LRU淘汰策略，当缓存条目超过1000时淘汰最久未使用的</li>
+        <li>支持TTL过期，缓存条目默认24小时后失效</li>
+        <li>添加缓存统计功能（命中率、平均相似度分数、总条目数）</li>
+        <li>对比不同similarity_threshold（0.90/0.92/0.95/0.98）的命中率和准确率</li>
+    </ul>
+</div>
+
+<div class="exercise">
+    <h3>练习2：搭建监控系统</h3>
+    <p>使用Prometheus + Grafana搭建RAG系统监控：</p>
+    <ul>
+        <li>实现本章的MetricsMiddleware，采集延迟、QPS、错误率指标</li>
+        <li>配置Prometheus抓取规则和告警规则</li>
+        <li>创建Grafana Dashboard，包含以下面板：延迟趋势图、QPS实时图、缓存命中率饼图、错误率折线图</li>
+    </ul>
+</div>
+
+<div class="exercise">
+    <h3>练习3：Prompt注入攻防</h3>
+    <p>体验Prompt注入攻防：</p>
+    <ul>
+        <li>编写5种不同的Prompt注入攻击（角色扮演、指令覆盖、编码绕过等）</li>
+        <li>测试本章的PromptInjectionDefender能否检测到</li>
+        <li>改进防御策略，使其能检测到编码绕过（如Base64编码的恶意指令）</li>
+        <li>思考：在知识库文档中嵌入注入指令的风险及防御方案</li>
+    </ul>
+</div>
+</div></section>

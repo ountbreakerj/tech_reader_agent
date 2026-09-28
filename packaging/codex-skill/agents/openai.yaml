@@ -1,0 +1,5 @@
+interface:
+  display_name: "Tech Reader Agent"
+  short_description: "Maintain Tech Reader with design review"
+  brand_color: "#3B82F6"
+  default_prompt: "Use $tech-reader-agent to maintain this Tech Reader project from my requirements."

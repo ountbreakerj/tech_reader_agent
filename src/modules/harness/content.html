@@ -1,0 +1,49 @@
+<div class="module" id="mod-harness" hidden>
+  <div class="harness-scope">
+    <nav class="harness-breadcrumb" aria-label="当前位置"><a href="#/">首页</a><span aria-hidden="true">/</span><span aria-current="page">Harness</span></nav>
+    <header id="harness-home" class="harness-head">
+      <h1>Harness</h1>
+      <p>模型提出下一步，Harness 让这一步真正发生：准备上下文、执行工具、管好权限，再把结果交回模型。</p>
+    </header>
+    <nav class="home-cards harness-entries" aria-label="Harness 学习入口">
+      <a class="home-card" href="#/codex-harness">
+        <h2>Codex Harness</h2>
+        <p class="sub">深入任务循环与运行时</p>
+        <p class="desc">从一轮任务追到流式响应、并发工具、长命令和断线重试。用 Python 拆开状态变化与失败分支，再对照 Rust 源码和测试。</p>
+        <div class="harness-meta">12 个主题 · Python 实验 · 源码与测试对照</div>
+        <div class="go">进入 Codex 模块 →</div>
+      </a>
+      <a class="home-card" href="#/dsh">
+        <h2>DSH Harness</h2>
+        <p class="sub">从插件理解运行时</p>
+        <p class="desc">Cordis 怎么管理插件？事件怎么传递？会话、工具和界面怎么拼起来？用 Python 类比理解 TypeScript 的实现。</p>
+        <div class="harness-meta">插件与事件 · 模块家族 · 实战路径</div>
+        <div class="go">进入 DSH 模块 →</div>
+      </a>
+    </nav>
+    <section id="harness-meaning" class="harness-section">
+      <h2>Harness 到底管什么</h2>
+      <p>假设你说“帮我修好这个失败的测试”。模型可以决定先读哪个文件，但读文件、运行测试、收集报错、限制写入范围，都需要程序来完成。这套围着模型工作的程序，就是这里说的 Harness。</p>
+      <ol class="harness-flow" aria-label="一次任务的基本循环">
+        <li><b>准备</b><span>任务、规则、历史</span></li>
+        <li><b>判断</b><span>模型提出下一步</span></li>
+        <li><b>执行</b><span>工具与权限检查</span></li>
+        <li><b>反馈</b><span>把结果带回下一步</span></li>
+      </ol>
+      <p>模型不会因为“说了要运行测试”，测试就真的跑起来。只有工具返回了结果，下一次判断才有新的依据。</p>
+    </section>
+    <section id="harness-compare" class="harness-section">
+      <h2>同一个问题，两种组织方式</h2>
+      <div class="harness-table-wrap"><table>
+        <thead><tr><th scope="col">要解决的问题</th><th scope="col">Codex</th><th scope="col">DSH</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">任务怎么往下走</th><td><a href="#/codex-harness?section=cx-loop">run_turn 驱动多步执行</a></td><td><a href="#/dsh?section=s2">core 与执行流程</a></td></tr>
+          <tr><th scope="row">新能力怎么接进来</th><td><a href="#/codex-harness?section=cx-tools">工具注册与路由</a></td><td><a href="#/dsh?section=s1">Cordis 插件与服务</a></td></tr>
+          <tr><th scope="row">之前做了什么</th><td><a href="#/codex-harness?section=cx-history">history 与 rollout</a></td><td><a href="#/dsh?section=s7">会话、存储与上下文</a></td></tr>
+          <tr><th scope="row">在关键时机加逻辑</th><td><a href="#/codex-harness?section=cx-extensions">hooks 与扩展</a></td><td><a href="#/dsh?section=s4">事件与组合机制</a></td></tr>
+        </tbody>
+      </table></div>
+      <p>这里对照的是各自解决的问题。Codex 的 hook 和 DSH 的事件并不是同一个接口，也不能直接互换。先读懂 Codex 的一轮任务，再回头看 DSH，会更容易理解两者各自的取舍。</p>
+    </section>
+  </div>
+</div>

@@ -1,0 +1,12 @@
+.minimind-mod .llm-hero { --hero-a:#0f766e; --hero-b:#2563eb; }
+.minimind-mod .quick-jump { font-size:.9em; }
+.minimind-mod .codeblock { margin-top:1.1rem; }
+.minimind-mod .table-wrap { overflow-x:auto; }
+.minimind-mod .source-file { margin: .7rem 0; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; background: var(--bg-soft); content-visibility: auto; contain-intrinsic-size: 52px; }
+.minimind-mod .source-file summary { cursor: pointer; padding: .65rem .85rem; color: var(--text-strong); background: var(--bg-inset); }
+.minimind-mod .source-file pre { margin: 0; max-height: 70vh; overflow: auto; contain: content; }
+.minimind-mod .source-file pre code { display: block; min-width: max-content; }
+.minimind-mod .source-copy { float: right; margin: -.15rem 0 0 .6rem; padding: .2rem .55rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--text-dim); cursor: pointer; }
+.minimind-mod .jump-target { animation: minimindJump 1.6s ease; }
+@keyframes minimindJump { 0%,100% { outline: 0 solid transparent; } 20%,70% { outline: 3px solid var(--accent); outline-offset: 3px; } }
+@media (prefers-reduced-motion: reduce) { .minimind-mod .jump-target { animation: none; outline: 2px solid var(--accent); } }

@@ -1,0 +1,85 @@
+<section id="sec-h-lec-03" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 03 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-03">第 03 讲 · 让代码仓库成为唯一的事实来源</h1>
+    <p>团队的架构决策散落在 Confluence、Slack、Jira 和几个工程师的脑子里。对人类来说勉强够用，但对 AI agent 来说，不在仓库里的信息等于不存在。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>Agent 的世界边界</h2>
+    <p>Agent 的输入只有三样东西：系统提示和任务描述、仓库里的文件内容、工具执行的输出。你的 Slack 历史、Jira 工单、Confluence 页面、和上周跟同事聊的架构决定，agent 全都看不到。它不能"去问一下"，也不能"搜一下聊天记录"。</p>
+    <p>所以问题变成了：你给不给它一张足够好的地图？</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>全新会话测试</h2>
+    <p>检验地图质量最直接的方法：开一个全新的 agent 会话，只让它看仓库内容，看它能不能回答这五个基本问题。</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">问题</th><th scope="col">应在仓库何处找到答案</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">这是什么系统？</th><td>AGENTS.md / README</td></tr>
+        <tr><th scope="row">怎么组织的？</th><td>ARCHITECTURE.md / 模块文档</td></tr>
+        <tr><th scope="row">怎么跑？</th><td>Makefile / init.sh / package scripts</td></tr>
+        <tr><th scope="row">怎么验证？</th><td>测试、lint、check 命令</td></tr>
+        <tr><th scope="row">现在做到哪了？</th><td>PROGRESS.md / 功能清单 / git 历史</td></tr>
+      </tbody>
+    </table></div>
+    <p>如果它答不上来，说明地图上有空白。每个新会话都要猜一遍，猜的成本远高于一开始就把地图画好。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>核心概念</h2>
+    <ul>
+      <li><strong>知识可见性缺口。</strong> 项目总知识中不在仓库里的比例。缺口越大，agent 失败概率越高。</li>
+      <li><strong>发现成本。</strong> Agent 为了找到一条关键信息需要消耗多少上下文。信息放得越隐蔽，发现成本越高，留给实际任务的预算越少。关键信息应该放在 agent 最先看到的位置。</li>
+      <li><strong>知识衰减率。</strong> 单位时间内变得过时的知识条目比例。<em>过时的文档比没有文档更危险</em>，它会让 agent 走错方向还以为自己是对的。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>画好地图的四条原则</h2>
+    <ol>
+      <li><strong>知识靠近代码。</strong> 关于 API 端点认证的规则，应该放在 API 代码旁边，而不是藏在全局文档里。就近放置的价值远大于篇幅长短。</li>
+      <li><strong>用标准化入口文件。</strong> AGENTS.md 是 agent 的"着陆页"。50–100 行就够了，必须能回答"这是什么项目"、"怎么跑"、"怎么验证"这三个问题。</li>
+      <li><strong>最小但完备。</strong> 每条知识都有明确的使用场景。删掉某条规则如果不影响 agent 的决策质量，那它就不该存在。但全新会话测试的每个问题都必须有答案。</li>
+      <li><strong>和代码一起更新。</strong> 把知识更新绑定到代码变更。最简单的方法：把架构文档放在对应模块目录里，改代码时自然能看到。</li>
+    </ol>
+  </section>
+
+  <section class="harness-section">
+    <h2>推荐的仓库结构</h2>
+    <div class="codeblock">
+      <pre><code>project/
+├── AGENTS.md              # 入口：项目概览、运行命令、硬约束
+├── src/
+│   ├── api/
+│   │   ├── ARCHITECTURE.md  # API 层的架构决策
+│   │   └── ...
+│   └── db/
+│       ├── CONSTRAINTS.md   # 数据库操作的硬约束
+│       └── ...
+├── PROGRESS.md             # 当前进度：做了什么、在做什么、被什么阻塞
+└── Makefile                # 标准化命令：setup、test、lint、check</code></pre></div>
+  </section>
+
+  <section class="harness-section">
+    <h2>用 ACID 原则管理 Agent 状态</h2>
+    <p>把数据库事务管理的四个原则用到 agent 的状态管理上：</p>
+    <ul>
+      <li><strong>原子性。</strong> 每次"逻辑操作"用一个 git commit 原子化。中途挂了就回滚，要么全做，要么不做。</li>
+      <li><strong>一致性。</strong> 定义"一致状态"的验证谓词（所有测试通过、lint 无报错）。agent 每次操作后跑验证，不一致的中间状态不要 commit。</li>
+      <li><strong>隔离性。</strong> 多个 agent 并发工作时，每个 agent 用独立的进度文件，或用 git 分支隔离，避免竞争条件。</li>
+      <li><strong>持久性。</strong> 跨会话必须的知识写到 git 跟踪的文件里。脑子里的不算，写在纸上的才算。</li>
+    </ul>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-02">← 第 02 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-04">第 04 讲 →</a>
+  </nav>
+</section>

@@ -1,0 +1,57 @@
+
+.llm-m-eval-advanced .module-wrapper * { margin: 0; padding: 0; box-sizing: border-box; }
+.llm-m-eval-advanced h1 { font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            
+            border-bottom: 3px solid #3b82f6;
+            padding-bottom: 0.5rem; }
+.llm-m-eval-advanced h2 { font-size: 1.5rem;
+            font-weight: 600;
+            margin-top: 2.5rem;
+            margin-bottom: 1rem;
+            
+            padding-left: 0.75rem;
+            border-left: 4px solid #3b82f6; }
+.llm-m-eval-advanced h3 { font-size: 1.2rem;
+            font-weight: 600;
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem; }
+.llm-m-eval-advanced p { margin-bottom: 1rem; }
+.llm-m-eval-advanced a { text-decoration: none; }
+.llm-m-eval-advanced a:hover { text-decoration: underline; }
+.llm-m-eval-advanced table { width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.9rem; }
+.llm-m-eval-advanced th, .llm-m-eval-advanced td { border: 1px solid var(--lc-border);
+            padding: 0.6rem 0.8rem;
+            text-align: left; }
+.llm-m-eval-advanced th { font-weight: 600; }
+.llm-m-eval-advanced code { font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            
+            
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.88em; }
+.llm-m-eval-advanced pre { padding: 1.2rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1rem 0;
+            font-size: 0.88rem;
+            line-height: 1.6; }
+.llm-m-eval-advanced pre code { padding: 0; }
+.llm-m-eval-advanced .callout { border-left: 4px solid #3b82f6;
+            
+            padding: 1rem 1.2rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0; }
+.llm-m-eval-advanced .callout-warn { border-left-color: #f59e0b; }
+.llm-m-eval-advanced .callout-success { border-left-color: #10b981; }
+.llm-m-eval-advanced .callout-danger { border-left-color: #ef4444; }
+.llm-m-eval-advanced .callout strong { display: block; margin-bottom: 0.3rem; }
+.llm-m-eval-advanced ul, .llm-m-eval-advanced ol { margin: 0.5rem 0 1rem 1.5rem; }
+.llm-m-eval-advanced li { margin-bottom: 0.3rem; }
+.llm-m-eval-advanced .subtitle { font-size: 1.05rem;
+            margin-bottom: 2rem; }
+.llm-m-eval-advanced .section-number { font-weight: 700; }

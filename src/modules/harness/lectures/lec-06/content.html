@@ -1,0 +1,73 @@
+<section id="sec-h-lec-06" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 06 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-06">第 06 讲 · 让 Agent 每次工作前先初始化</h1>
+    <p>Agent 拿到任务就开始写代码。跑到一半发现：依赖没装、环境变量缺了、测试命令跑不起来。它一边修环境一边做任务，上下文里混进了大量噪声，真正的工作反而没做好。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>为什么初始化要独立成一个阶段</h2>
+    <p>对人类工程师来说，"把环境搭起来"是进入真正工作之前的前置步骤。我们会先运行 <code>make setup</code>，确认测试能跑通，再开始写功能。但 agent 默认没有这个前置阶段的概念——它们会把"修 pip install 报错"和"实现 API 端点"混在同一个上下文流里处理。</p>
+    <p>这带来三个具体问题：</p>
+    <ul>
+      <li><strong>上下文污染。</strong> 环境问题的排查过程（依赖版本不匹配、路径报错、工具缺失）会把大量无关信息带入上下文，挤占实现阶段需要的推理预算。</li>
+      <li><strong>无法建立基线。</strong> 如果没有"初始状态：测试全绿"这个基准，agent 在修 bug 时无法判断自己的改动是让情况变好了还是变差了。</li>
+      <li><strong>验证信号丢失。</strong> 第一次跑测试失败，是环境问题还是代码问题？混在一起处理的 agent 很难区分。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>启动就绪清单</h2>
+    <p>初始化阶段的目标是把 agent 带到"启动就绪"状态，再让它开始任何实现工作。清单上的每一项都是可验证的：</p>
+    <ol>
+      <li>读取 AGENTS.md，提取项目概览、技术栈、硬约束</li>
+      <li>运行环境安装命令（<code>make setup</code> / <code>pip install -r requirements.txt</code>）并确认无报错</li>
+      <li>运行完整验证命令（<code>make check</code>）并记录基线状态（通过 N 个测试，M 个 lint 警告）</li>
+      <li>检查 PROGRESS.md 或功能清单，确认当前任务的范围</li>
+      <li>确认理解"完成"的定义（什么样的验证结果算做完了）</li>
+    </ol>
+    <p>只有这五步全部通过，agent 才进入实现阶段。这不是教条，是一个让 agent 可以安全地说"我知道我从哪里出发"的锚点。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>初始化与实现分离</h2>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">阶段</th><th scope="col">目标</th><th scope="col">结束条件</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">初始化</th><td>建立环境基线，确认验证命令可运行</td><td>全量验证通过，或明确记录预先存在的失败</td></tr>
+        <tr><th scope="row">实现</th><td>按功能清单逐项完成，每项完成后运行验证</td><td>验证通过 + 进度文件更新</td></tr>
+        <tr><th scope="row">收尾</th><td>更新 PROGRESS.md，提交检查点</td><td>下一个 agent 会话能从此处接续</td></tr>
+      </tbody>
+    </table></div>
+    <p>两个阶段用不同的上下文窗口处理会更干净。但即使在同一个会话里，<strong>明确的阶段边界</strong>本身就能大幅减少混乱：在指令里写清楚"做任何实现前，先完成初始化清单"。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>热启动策略</h2>
+    <p>如果仓库已经有一个清晰的基线状态（测试通过，lint 干净），初始化可以很快——只需要验证"现在还是那个状态"，然后直接拿起 PROGRESS.md 继续工作。</p>
+    <p>热启动模板，放在 AGENTS.md 里：</p>
+    <div class="codeblock">
+      <pre><code>## 会话开始协议
+1. 运行 make check，确认基线状态
+2. 读取 PROGRESS.md，找到"下一步"
+3. 确认当前任务范围（只做 PROGRESS.md 里列出的下一项）
+4. 开始实现；每完成一个工作单元，运行 make check</code></pre></div>
+    <p>关键是第 3 步。热启动不是"继续做所有剩下的事"，而是"做下一个已定义的原子工作单元"。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>从零到首次测试通过</h2>
+    <p>新仓库的初始化最容易出问题。Anthropic 观察到的模式：agent 拿到空仓库加一个需求描述，会花很多时间在"搭架子"上——项目结构、测试框架、CI 配置——这些不是它的核心任务，但没有脚手架它又没法验证自己做得对。</p>
+    <p>解决方案：在任务描述里把"从零到首次测试通过"定义为第一个独立阶段。这个阶段的唯一目标是让验证链路跑通，不是实现任何业务功能。一旦有一个绿色测试，agent 就有了可靠的锚点。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-05">← 第 05 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-07">第 07 讲 →</a>
+  </nav>
+</section>

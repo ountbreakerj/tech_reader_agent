@@ -1,0 +1,201 @@
+<section class="llm-mod llm-m-word-embedding" id="llm-word-embedding"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>📊 模块0：文本表示与词向量</h1>
+  <p>让计算机理解文字的数学桥梁</p>
+</div><div class="section" id="llm-word-embedding-s1">
+    <h2>文本表示方法演进</h2>
+    
+    <p>计算机无法直接理解文本，需要将文字转换为数值表示。文本表示方法经历了从简单到复杂的演进。</p>
+
+    <h3>One-Hot 编码</h3>
+    <p>最简单的表示方法：每个词用一个长向量表示，只有对应位置为1，其余为0。</p>
+    <p>假设词表大小为V，则每个词用V维向量表示。例如词表 = ["我", "喜欢", "NLP"]：</p>
+    <table>
+    <tr><th>词语</th><th>One-Hot向量</th><th>维度</th></tr>
+    <tr><td>我</td><td>[1, 0, 0]</td><td>3</td></tr>
+<tr><td>喜欢</td><td>[0, 1, 0]</td><td>3</td></tr>
+<tr><td>NLP</td><td>[0, 0, 1]</td><td>3</td></tr>
+
+  </table>
+    <p><strong>问题：</strong>向量维度 = 词表大小（通常10万+），极其稀疏；无法表达词语间的相似度。</p>
+
+    <h3>TF-IDF</h3>
+    <p>TF-IDF（词频-逆文档频率）是一种统计方法，用于评估词语对文档的重要程度：</p>
+    <p><strong>TF-IDF = TF(t,d) x IDF(t)</strong></p>
+    <p>其中 TF = 词在文档中出现的频率，IDF = log(总文档数 / 包含该词的文档数)</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from sklearn.feature_extraction.text import TfidfVectorizer
+
+docs = [
+    "自然语言处理是人工智能的重要方向",
+    "深度学习推动了自然语言处理的发展",
+    "人工智能改变着我们的生活方式",
+]
+
+vectorizer = TfidfVectorizer()
+tfidf_matrix = vectorizer.fit_transform(docs)
+print("特征词:", vectorizer.get_feature_names_out()[:10])
+print("TF-IDF矩阵形状:", tfidf_matrix.shape)</code></pre>
+  </div>
+    <h3>文本表示方法对比</h3>
+    <table>
+    <tr><th>方法</th><th>维度</th><th>稀疏性</th><th>语义信息</th><th>适用场景</th></tr>
+    <tr><td>One-Hot</td><td>词表大小</td><td>极高</td><td>无</td><td>简单分类</td></tr>
+<tr><td>Bag of Words</td><td>词表大小</td><td>高</td><td>无</td><td>文本分类基线</td></tr>
+<tr><td>TF-IDF</td><td>词表大小</td><td>中</td><td>弱</td><td>信息检索、关键词提取</td></tr>
+<tr><td>Word Embedding</td><td>自定义(100-300)</td><td>稠密</td><td>强</td><td>深度学习输入</td></tr>
+
+  </table>
+  </div><div class="section" id="llm-word-embedding-s2">
+    <h2>Word2Vec原理详解</h2>
+    
+    <p>Word2Vec（2013, Google）是里程碑式的词向量方法，将词语映射为低维稠密向量，且能捕捉语义关系。</p>
+
+    <h3>两种架构</h3>
+    <table>
+    <tr><th>架构</th><th>输入</th><th>输出</th><th>特点</th><th>适用场景</th></tr>
+    <tr><td>CBOW</td><td>上下文词（窗口内）</td><td>中心词</td><td>训练速度快，适合高频词</td><td>大规模语料</td></tr>
+<tr><td>Skip-gram</td><td>中心词</td><td>上下文词</td><td>对低频词效果好</td><td>小规模语料</td></tr>
+
+  </table>
+    <h3>核心思想</h3>
+    <p>Word2Vec的核心假设：<strong>出现在相似上下文中的词语，具有相似的语义</strong>（分布式假设）。</p>
+    <p>例如："猫坐在垫子上" 和 "狗躺在垫子上" — 猫和狗的上下文相似，因此它们的向量也相近。</p>
+
+    <h3>负采样优化</h3>
+    <p>原始Softmax需要计算整个词表的归一化（计算量巨大）。负采样将多分类问题转化为二分类：</p>
+    <ul>
+        <li>正样本：真实的(中心词, 上下文词)对</li>
+        <li>负样本：随机采样K个"假"的上下文词</li>
+        <li>训练目标：区分正样本和负样本</li>
+    </ul>
+    <div class="callout callout-key">
+    <p>🔑 Word2Vec的经典发现：<strong>vector("King") - vector("Man") + vector("Woman") ≈ vector("Queen")</strong>，说明词向量能捕捉语义关系！</p>
+  </div>
+  </div><div class="section" id="llm-word-embedding-s3">
+    <h2>词嵌入层（nn.Embedding）</h2>
+    
+    <p>PyTorch的 <code>nn.Embedding</code> 层是现代NLP模型的基础组件，本质上是一个可训练的查找表。</p>
+
+    <h3>基本用法</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch
+import torch.nn as nn
+
+# 创建嵌入层：词表大小=10000，向量维度=256
+embedding = nn.Embedding(num_embeddings=10000, embedding_dim=256)
+
+# 输入：词索引 [batch_size, seq_length]
+input_ids = torch.tensor([[1, 42, 100, 3]])
+
+# 输出：词向量 [batch_size, seq_length, embedding_dim]
+vectors = embedding(input_ids)
+print(vectors.shape)  # torch.Size([1, 4, 256])
+
+# 使用预训练词向量初始化
+pretrained = load_pretrained_vectors()  # shape: [vocab_size, dim]
+embedding.weight.data.copy_(pretrained)
+embedding.weight.requires_grad = True  # 可选：是否继续微调</code></pre>
+  </div>
+    <h3>Embedding vs One-Hot</h3>
+    <div class="compare">
+    <div class="compare-card left"><h4>One-Hot编码</h4><ul><li>维度 = 词表大小（10万+）</li><li>极度稀疏</li><li>无法表达语义相似度</li><li>无需训练</li></ul></div>
+    <div class="compare-card right"><h4>Embedding</h4><ul><li>维度可自定义（100-300）</li><li>稠密向量</li><li>能捕捉语义关系</li><li>可训练优化</li></ul></div>
+  </div>
+  </div><div class="section" id="llm-word-embedding-s4">
+    <h2>现代文本表示</h2>
+    
+    <p>词向量技术从静态（每个词一个固定向量）发展到上下文相关（同一个词在不同语境有不同向量）。</p>
+
+    <h3>发展脉络</h3>
+    <table>
+    <tr><th>阶段</th><th>模型</th><th>特点</th><th>局限</th></tr>
+    <tr><td>静态词向量</td><td>Word2Vec / GloVe / FastText</td><td>每个词一个固定向量，无法处理多义词</td><td>无法区分一词多义</td></tr>
+<tr><td>上下文词向量</td><td>ELMo (2018)</td><td>基于BiLSTM，同一词在不同句子有不同向量</td><td>特征提取能力弱于Transformer</td></tr>
+<tr><td>预训练语言模型</td><td>BERT / GPT (2018)</td><td>基于Transformer，深层上下文理解</td><td>需要大量计算资源</td></tr>
+<tr><td>句子向量</td><td>Sentence-BERT (2019)</td><td>专门优化句子级别的语义表示</td><td>需要微调</td></tr>
+
+  </table>
+    <h3>Sentence-BERT：句子级别的语义向量</h3>
+    <p>Sentence-BERT通过微调BERT模型，使语义相近的句子在向量空间中距离更近：</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("BAAI/bge-base-zh-v1.5")
+
+sentences = [
+    "自然语言处理是AI的重要方向",
+    "NLP是人工智能的核心技术",
+    "今天天气真不错",
+]
+
+embeddings = model.encode(sentences)
+print(f"向量维度: {embeddings.shape}")  # (3, 768)
+
+# 计算相似度
+from sklearn.metrics.pairwise import cosine_similarity
+sim = cosine_similarity(embeddings)
+print(f"句1-句2相似度: {sim[0][1]:.3f}")  # 高
+print(f"句1-句3相似度: {sim[0][2]:.3f}")  # 低</code></pre>
+  </div>
+  </div><div class="section" id="llm-word-embedding-s5">
+    <h2>实践：Gensim训练Word2Vec</h2>
+    
+    <p>使用Gensim库训练中文Word2Vec模型，并进行词向量分析。</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import jieba
+from gensim.models import Word2Vec
+
+# 准备中文语料（实际项目中应使用大规模语料）
+raw_texts = [
+    "自然语言处理是人工智能的重要研究方向",
+    "深度学习技术推动了NLP的快速发展",
+    "BERT和GPT是目前最流行的预训练模型",
+    "词向量是深度学习处理文本的基础",
+    "注意力机制是Transformer的核心创新",
+]
+
+# 分词
+sentences = [list(jieba.cut(text)) for text in raw_texts]
+
+# 训练Word2Vec模型
+model = Word2Vec(
+    sentences,
+    vector_size=100,    # 向量维度
+    window=5,          # 上下文窗口大小
+    min_count=1,       # 最低词频
+    sg=1,              # 1=Skip-gram, 0=CBOW
+    epochs=100,        # 训练轮数
+)
+
+# 查看词语的向量
+print(f"模型词表大小: {len(model.wv)}")
+print(f"向量维度: {model.wv.vector_size}")
+
+# 查找相似词
+if "NLP" in model.wv:
+    similar = model.wv.most_similar("NLP", topn=5)
+    print("\n与 NLP 最相似的词:")
+    for word, score in similar:
+        print(f"  {word}: {score:.3f}")
+
+# 词语类比
+# model.wv.most_similar(positive=["国王", "女人"], negative=["男人"])</code></pre>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 实际训练建议：1) 语料越大越好（百万句以上）；2) 使用jieba/HanLP分词后训练；3) 向量维度一般100-300；4) 可使用 <code>LineSentence</code> 流式加载大文件。</p>
+  </div>
+  </div>
+</div></section>

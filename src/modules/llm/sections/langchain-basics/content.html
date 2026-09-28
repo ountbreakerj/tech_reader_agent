@@ -1,0 +1,393 @@
+<section class="llm-mod llm-m-langchain-basics" id="llm-langchain-basics"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#0d9488;">
+  <h1>LangChain基础：核心概念</h1>
+  <p>理解 LangChain 生态系统、核心组件与基础用法</p>
+</div>
+
+<!-- ==================== SECTION 1: 生态系统 ==================== -->
+<div class="section" id="llm-langchain-basics-s1">
+  <h2>LangChain 生态系统概览</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>如果把构建 LLM 应用比作盖房子，LangChain 生态系统就是一整套建筑工具箱。<code>langchain-core</code> 是地基和钢筋（核心抽象），<code>langchain</code> 是预制件（高层接口），<code>langchain-community</code> 是各种五金配件（第三方集成），各 provider 包则是专业设备（如 OpenAI、Anthropic 的专用接口）。
+  </div>
+
+  <h3>包结构与职责</h3>
+
+  <table>
+    <tr><th>包名</th><th>职责</th><th>典型导入</th></tr>
+    <tr><td><code>langchain-core</code>（1.6.1）</td><td>核心抽象：<code>BaseChatModel</code>、<code>Runnable</code>、LCEL、消息类型</td><td><code>from langchain_core.prompts import ChatPromptTemplate</code></td></tr>
+    <tr><td><code>langchain</code>（1.4.0）</td><td>LangChain v1 高层 Agent 入口与中间件</td><td><code>from langchain.agents import create_agent</code></td></tr>
+    <tr><td><code>langchain-community</code>（0.4.2）</td><td>第三方集成：vectorstores、loaders、embeddings</td><td><code>from langchain_community.vectorstores import Chroma</code></td></tr>
+    <tr><td><code>langchain-text-splitters</code>（1.1.2）</td><td>文本分割器（RecursiveCharacterTextSplitter 等）</td><td><code>from langchain_text_splitters import RecursiveCharacterTextSplitter</code></td></tr>
+    <tr><td><code>langchain-openai</code>（1.6.0）</td><td>OpenAI / Azure 集成</td><td><code>from langchain_openai import ChatOpenAI</code></td></tr>
+    <tr><td><code>langchain-anthropic</code>（1.7.1）</td><td>Claude 系列模型集成</td><td><code>from langchain_anthropic import ChatAnthropic</code></td></tr>
+    <tr><td><code>langgraph</code>（1.2.11）</td><td>图编排引擎、Agent、HITL、持久化</td><td><code>from langgraph.graph import StateGraph</code></td></tr>
+  </table>
+
+  <div class="callout callout-warn">
+    <strong>导入迁移：</strong>LangChain v1 已将核心抽象和集成拆到独立 provider 包。新代码应从 <code>langchain_core</code>、<code>langchain_community</code> 或具体 provider 包导入；例如 <code>from langchain.prompts</code> 应改为 <code>from langchain_core.prompts</code>。直接安装 <code>langchain</code> 仍然可用，但它主要提供高层 Agent API。
+  </div>
+</div>
+
+<div class="callout callout-info" id="llm-langchain-v1-migration">
+  <strong>LangChain v1 迁移要点（截至 2026-09-04）：</strong>新代码使用 <code>from langchain.agents import create_agent</code> 构建 Agent；<code>LLMChain</code>、<code>AgentExecutor</code>、<code>create_tool_calling_agent</code> 等旧式 API 已移入 <code>langchain-classic</code>，用于维护存量项目。动态提示词、工具筛选、重试和 HITL 等横切能力通过 middleware 配置。提示词、消息和文本分割器分别从 <code>langchain_core</code>、<code>langchain_core.messages</code>、<code>langchain_text_splitters</code> 导入。需要自定义循环、supervisor 或 handoff 时，再使用 LangGraph 的 <code>StateGraph</code> 编排 <code>create_agent</code> 实例。
+</div>
+
+<!-- ==================== SECTION 2: 核心组件 ==================== -->
+<div class="section" id="llm-langchain-basics-s2">
+  <h2>核心组件一览</h2>
+
+  <p>LangChain 的所有功能都围绕以下五大核心组件构建：</p>
+
+  <table>
+    <tr><th>组件</th><th>作用</th><th>关键类</th></tr>
+    <tr><td><strong>Chat Models</strong></td><td>统一接口调用大模型</td><td><code>ChatOpenAI</code>, <code>ChatAnthropic</code></td></tr>
+    <tr><td><strong>Prompts</strong></td><td>模板化提示词</td><td><code>PromptTemplate</code>, <code>ChatPromptTemplate</code></td></tr>
+    <tr><td><strong>Output Parsers</strong></td><td>解析 LLM 输出为结构化数据</td><td><code>StrOutputParser</code>, <code>JsonOutputParser</code></td></tr>
+    <tr><td><strong>Retrievers</strong></td><td>从外部数据源检索文档</td><td><code>VectorStoreRetriever</code></td></tr>
+    <tr><td><strong>Tools</strong></td><td>让 LLM 调用外部能力</td><td><code>@tool</code>, <code>StructuredTool</code></td></tr>
+  </table>
+
+  <div class="callout callout-key">
+    <strong>关键理解：</strong>这些组件都实现了 <code>Runnable</code> 协议，意味着它们可以像管道一样用 <code>|</code> 操作符串联起来，形成 LCEL（LangChain Expression Language）链。这是 LangChain 1.x 的核心设计理念。
+  </div>
+</div>
+
+<!-- ==================== SECTION 3: Chat Models ==================== -->
+<div class="section" id="llm-langchain-basics-s3">
+  <h2>Chat Models 基础用法</h2>
+
+  <p>LangChain 为每个 LLM 提供商提供了专门的集成包。最常用的两个是 <code>ChatOpenAI</code> 和 <code>ChatAnthropic</code>。</p>
+
+  <h3>ChatOpenAI</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+
+<span class="cmt"># 基础用法</span>
+llm = <span class="cls">ChatOpenAI</span>(
+    model=<span class="str">"gpt-5.5"</span>,
+    temperature=<span class="num">0.7</span>,
+    max_tokens=<span class="num">2048</span>
+)
+
+<span class="cmt"># 调用模型</span>
+response = llm.<span class="fn">invoke</span>(<span class="str">"你好，请介绍一下自己"</span>)
+<span class="fn">print</span>(response.content)
+
+<span class="cmt"># 使用消息列表</span>
+<span class="kw">from</span> langchain_core.messages <span class="kw">import</span> <span class="cls">SystemMessage</span>, <span class="cls">HumanMessage</span>
+
+messages = [
+    <span class="cls">SystemMessage</span>(content=<span class="str">"你是一个Python专家"</span>),
+    <span class="cls">HumanMessage</span>(content=<span class="str">"解释装饰器的用法"</span>)
+]
+response = llm.<span class="fn">invoke</span>(messages)</code></pre>
+  </div>
+
+  <h3>ChatAnthropic</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+
+<span class="cmt"># 模型 ID 仅作示例，请以 Anthropic 当前 models 列表为准</span>
+llm = <span class="cls">ChatAnthropic</span>(
+    model=<span class="str">"claude-sonnet-5"</span>,
+    temperature=<span class="num">0</span>,
+    max_tokens=<span class="num">4096</span>
+)
+
+<span class="cmt"># invoke 与 ChatOpenAI 接口完全一致</span>
+response = llm.<span class="fn">invoke</span>(<span class="str">"用简洁的语言解释量子计算"</span>)
+<span class="fn">print</span>(response.content)
+
+<span class="cmt"># 流式输出</span>
+<span class="kw">for</span> chunk <span class="kw">in</span> llm.<span class="fn">stream</span>(<span class="str">"写一首关于编程的诗"</span>):
+    <span class="fn">print</span>(chunk.content, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
+  </div>
+
+  <div class="callout callout-info">
+    <strong>模型标识符说明：</strong>截至 2026-09，示例使用 Claude Sonnet 5（<code>claude-sonnet-5</code>）。模型 ID 会随版本更新，部署前请以各厂商的 models 列表和当前 provider 包文档为准。
+  </div>
+
+  <h3>主流模型对比</h3>
+
+  <table>
+    <tr><th>模型</th><th>集成包</th><th>特点</th><th>适用场景</th></tr>
+    <tr><td><strong>Claude Sonnet 5</strong></td><td><code>langchain-anthropic</code></td><td>推理、速度与成本均衡</td><td>通用 Agent、代码任务</td></tr>
+    <tr><td><strong>GPT-5.5</strong></td><td><code>langchain-openai</code></td><td>多模态、生态完善</td><td>通用场景、多模态</td></tr>
+    <tr><td><strong>DeepSeek V4-Pro</strong></td><td><code>langchain-openai</code>（兼容 API）</td><td>1.6T MoE、高性价比</td><td>大规模推理、成本敏感</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 4: Prompts ==================== -->
+<div class="section" id="llm-langchain-basics-s4">
+  <h2>PromptTemplate 与 ChatPromptTemplate</h2>
+
+  <p>LangChain 提供两种提示词模板：简单模板 <code>PromptTemplate</code> 和对话模板 <code>ChatPromptTemplate</code>。实际开发中推荐使用后者。</p>
+
+  <h3>PromptTemplate — 简单模板</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">PromptTemplate</span>
+
+<span class="cmt"># 方式一：from_template</span>
+prompt = <span class="cls">PromptTemplate</span>.<span class="fn">from_template</span>(
+    <span class="str">"请将以下文本翻译成{language}：{text}"</span>
+)
+
+<span class="cmt"># 格式化生成完整提示词</span>
+result = prompt.<span class="fn">format</span>(
+    language=<span class="str">"英文"</span>,
+    text=<span class="str">"人工智能正在改变世界"</span>
+)
+<span class="cmt"># -> "请将以下文本翻译成英文：人工智能正在改变世界"</span>
+
+<span class="cmt"># 方式二：显式定义变量</span>
+prompt = <span class="cls">PromptTemplate</span>(
+    template=<span class="str">"为{product}写一段{style}风格的广告文案，不超过{limit}字"</span>,
+    input_variables=[<span class="str">"product"</span>, <span class="str">"style"</span>, <span class="str">"limit"</span>]
+)</code></pre>
+  </div>
+
+  <h3>ChatPromptTemplate — 对话模板（推荐）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+
+<span class="cmt"># 方式一：from_messages — 多角色消息模板</span>
+prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+    (<span class="str">"system"</span>, <span class="str">"你是一位资深的{role}，请用专业但通俗的语言回答问题"</span>),
+    (<span class="str">"human"</span>, <span class="str">"{question}"</span>)
+])
+
+messages = prompt.<span class="fn">format_messages</span>(
+    role=<span class="str">"数据科学家"</span>,
+    question=<span class="str">"什么是过拟合？"</span>
+)
+
+<span class="cmt"># 方式二：from_template — 自动包装为 human message</span>
+simple_prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(
+    <span class="str">"总结以下文本的要点：\n\n{text}"</span>
+)
+
+<span class="cmt"># 方式三：支持 few-shot 示例</span>
+few_shot_prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+    (<span class="str">"system"</span>, <span class="str">"你是一个代码审查助手"</span>),
+    (<span class="str">"human"</span>, <span class="str">"审查这段代码：print('hello')"</span>),
+    (<span class="str">"ai"</span>, <span class="str">"建议：使用 logging 模块替代 print 进行日志输出"</span>),
+    (<span class="str">"human"</span>, <span class="str">"审查这段代码：{code}"</span>)
+])</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>选择建议：</strong><code>PromptTemplate</code> 适合纯文本补全模型（如旧版 GPT-3）；<code>ChatPromptTemplate</code> 专为对话模型设计，支持 system/human/ai 多角色消息，是当前的推荐用法。
+  </div>
+</div>
+
+<!-- ==================== SECTION 5: Output Parsers ==================== -->
+<div class="section" id="llm-langchain-basics-s5">
+  <h2>Output Parsers 输出解析器</h2>
+
+  <p>LLM 返回的是纯文本。输出解析器将其转换为结构化数据，便于后续程序处理。</p>
+
+  <h3>StrOutputParser — 最常用</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> <span class="cls">StrOutputParser</span>
+<span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+
+prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(<span class="str">"用一句话解释：{concept}"</span>)
+llm = <span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>)
+
+<span class="cmt"># StrOutputParser 从 AIMessage 中提取 .content 字符串</span>
+parser = <span class="cls">StrOutputParser</span>()
+
+chain = prompt | llm | parser
+result = chain.<span class="fn">invoke</span>({<span class="str">"concept"</span>: <span class="str">"量子纠缠"</span>})
+<span class="fn">print</span>(result)  <span class="cmt"># -> 纯文本字符串</span></code></pre>
+  </div>
+
+  <h3>JsonOutputParser — 结构化输出</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> <span class="cls">JsonOutputParser</span>
+<span class="kw">from</span> pydantic <span class="kw">import</span> <span class="cls">BaseModel</span>, <span class="cls">Field</span>
+
+<span class="cmt"># 定义输出结构</span>
+<span class="kw">class</span> <span class="cls">MovieReview</span>(<span class="cls">BaseModel</span>):
+    title: <span class="cls">str</span> = <span class="cls">Field</span>(description=<span class="str">"电影名称"</span>)
+    rating: <span class="cls">float</span> = <span class="cls">Field</span>(description=<span class="str">"评分，0-10"</span>)
+    summary: <span class="cls">str</span> = <span class="cls">Field</span>(description=<span class="str">"一句话影评"</span>)
+
+parser = <span class="cls">JsonOutputParser</span>(pydantic_object=<span class="cls">MovieReview</span>)
+
+<span class="cmt"># 在 prompt 中注入格式指令</span>
+prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+    (<span class="str">"system"</span>, <span class="str">"你是影评专家。\n{format_instructions}"</span>),
+    (<span class="str">"human"</span>, <span class="str">"请评价电影：{movie}"</span>)
+])
+
+chain = prompt | llm | parser
+result = chain.<span class="fn">invoke</span>({
+    <span class="str">"movie"</span>: <span class="str">"星际穿越"</span>,
+    <span class="str">"format_instructions"</span>: parser.<span class="fn">get_format_instructions</span>()
+})
+<span class="cmt"># -> {"title": "星际穿越", "rating": 9.5, "summary": "..."}  </span></code></pre>
+  </div>
+
+  <h3>with_structured_output — Pydantic 直出</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 推荐方式：让模型原生支持结构化输出</span>
+llm = <span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>)
+structured_llm = llm.<span class="fn">with_structured_output</span>(<span class="cls">MovieReview</span>)
+
+<span class="cmt"># 直接返回 Pydantic 对象</span>
+review = structured_llm.<span class="fn">invoke</span>(<span class="str">"评价电影：盗梦空间"</span>)
+<span class="fn">print</span>(review.title)    <span class="cmt"># 盗梦空间</span>
+<span class="fn">print</span>(review.rating)   <span class="cmt"># 9.0</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>实践建议：</strong>优先使用 <code>with_structured_output()</code>，它利用了模型原生的结构化输出能力（如 OpenAI 的 function calling），比 <code>JsonOutputParser</code> 更可靠。但要注意，不同模型对结构化输出的支持程度不同。
+  </div>
+</div>
+
+<!-- ==================== SECTION 6: 第一个应用 ==================== -->
+<div class="section" id="llm-langchain-basics-s6">
+  <h2>第一个 LangChain 应用</h2>
+
+  <p>将上面的组件组合起来，构建一个完整的"文本翻译+摘要"应用：</p>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>安装依赖</strong> — <code>pip install langchain langchain-openai langchain-core</code></div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>设置 API Key</strong> — <code>export OPENAI_API_KEY="sk-..."</code></div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>编写代码</strong> — 见下方完整示例</div>
+  </div>
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>运行测试</strong> — <code>py app.py</code></div>
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+<span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> <span class="cls">StrOutputParser</span>
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+
+<span class="cmt"># 1. 定义组件</span>
+prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+    (<span class="str">"system"</span>, <span class="str">"你是翻译专家，请将用户输入翻译成{language}"</span>),
+    (<span class="str">"human"</span>, <span class="str">"{text}"</span>)
+])
+llm = <span class="cls">ChatOpenAI</span>(model=<span class="str">"gpt-5.5"</span>, temperature=<span class="num">0</span>)
+parser = <span class="cls">StrOutputParser</span>()
+
+<span class="cmt"># 2. 组合为链（LCEL 管道语法）</span>
+chain = prompt | llm | parser
+
+<span class="cmt"># 3. 调用</span>
+result = chain.<span class="fn">invoke</span>({
+    <span class="str">"language"</span>: <span class="str">"英文"</span>,
+    <span class="str">"text"</span>: <span class="str">"LangChain 是一个用于构建 LLM 应用的框架"</span>
+})
+<span class="fn">print</span>(result)
+<span class="cmt"># -> "LangChain is a framework for building LLM applications."</span>
+
+<span class="cmt"># 4. 批量调用</span>
+results = chain.<span class="fn">batch</span>([
+    {<span class="str">"language"</span>: <span class="str">"英文"</span>, <span class="str">"text"</span>: <span class="str">"你好世界"</span>},
+    {<span class="str">"language"</span>: <span class="str">"日文"</span>, <span class="str">"text"</span>: <span class="str">"今天天气真好"</span>},
+])
+
+<span class="cmt"># 5. 流式输出</span>
+<span class="kw">for</span> chunk <span class="kw">in</span> chain.<span class="fn">stream</span>({<span class="str">"language"</span>: <span class="str">"法文"</span>, <span class="str">"text"</span>: <span class="str">"我喜欢编程"</span>}):
+    <span class="fn">print</span>(chunk, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
+  </div>
+
+  <div class="callout callout-key">
+    <strong>核心要点：</strong>这就是 LangChain 1.x 的基本开发模式——定义组件，用 <code>|</code> 管道串联，通过 <code>invoke</code>/<code>batch</code>/<code>stream</code> 调用。下一章将详细讲解 LCEL 管道语法的高级用法。
+  </div>
+</div>
+
+<!-- ==================== SECTION 7: Agent 工作流模式 ==================== -->
+<div class="section" id="llm-langchain-basics-s7">
+  <h2>Agent 工作流模式：从固定流程到多角色协作</h2>
+
+  <p>Agent 的差别不只在模型，也在于<strong>谁决定下一步</strong>以及<strong>状态如何流动</strong>。先根据任务的可控性、延迟预算和失败代价选择编排模式，再决定是否需要引入更复杂的 Agent 框架。</p>
+
+  <div class="callout callout-info">
+    <strong>快速判断：</strong>流程可以事先画出来就用 Workflow；需要模型根据工具结果逐步决定就用 ReAct；步骤很多但可以先拆解就用 Plan-and-Execute；任务可以按角色拆分且需要并行或互审时再考虑 Multi-Agent。
+  </div>
+
+  <h3>四种模式对比</h3>
+  <table>
+    <thead>
+      <tr><th>模式</th><th>核心流程</th><th>自主性</th><th>实现复杂度</th><th>常见框架</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Workflow (DAG)</strong></td><td>预定义流程，按图执行</td><td>高</td><td>低</td><td>LangGraph、Haystack</td></tr>
+      <tr><td><strong>ReAct</strong></td><td>思考 → 行动 → 观察循环</td><td>中</td><td>中</td><td>LangGraph、Bedrock Agents</td></tr>
+      <tr><td><strong>Plan-and-Execute</strong></td><td>先计划，后执行</td><td>中</td><td>中高</td><td>LangGraph、LlamaIndex</td></tr>
+      <tr><td><strong>Multi-Agent</strong></td><td>多角色分工协作</td><td>低</td><td>高</td><td>CrewAI、AutoGen</td></tr>
+    </tbody>
+  </table>
+
+  <h3>如何选择与落地</h3>
+  <ul>
+    <li><strong>Workflow (DAG)：</strong>节点和边由代码或配置预先定义，适合审批、抽取、质检等固定流程。它的可控性和可审计性最好，但遇到未预设的分支时需要显式补充节点或交给人工。</li>
+    <li><strong>ReAct：</strong>模型在每轮读取当前状态，决定是否调用工具，再根据观察结果继续或结束。必须设置最大步数、超时和循环检测，避免错误工具调用无限重试。</li>
+    <li><strong>Plan-and-Execute：</strong>先由规划器生成任务清单，再由执行器逐项完成；执行失败时可以让规划器只重排剩余步骤。规划与执行分离后更容易估算进度，但计划过时或拆分错误会带来额外开销。</li>
+    <li><strong>Multi-Agent：</strong>把研究、执行、审查等职责交给不同角色，可采用 supervisor、顺序流水线或并行 fan-out。要明确消息协议、共享状态边界和最终汇总者，避免重复劳动、冲突写入和责任不清。</li>
+  </ul>
+
+  <div class="callout callout-tip">
+    <strong>工程建议：</strong>从最简单的模式开始，先用单次调用或 Workflow 验证业务规则，再逐步引入 ReAct、规划和多 Agent。复杂度应由真实的分支、并行或隔离需求驱动，而不是由框架名称驱动。
+  </div>
+</div>
+
+<div class="footer">
+  LangChain & LangGraph 教程系列 | 第1章：LangChain基础
+</div>
+</div></section>

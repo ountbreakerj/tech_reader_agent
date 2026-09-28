@@ -1,0 +1,413 @@
+<section class="llm-mod llm-m-enterprise-qa" id="llm-enterprise-qa"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#059669;">
+  <h1>🏢 项目3：企业问答系统</h1>
+  <p>完整RAG系统 - 综合运用所有知识</p>
+</div>
+
+<div class="section" id="llm-enterprise-qa-s1">
+  <h2>项目概述</h2>
+
+  <h3>目标</h3>
+  <p>构建一个完整的企业知识库问答系统，支持文档检索、语义搜索、多轮对话，并提供引用溯源。</p>
+
+  <h3>核心功能</h3>
+  <ul>
+    <li>✅ 文档导入和索引</li>
+    <li>✅ 混合检索（MySQL + Milvus）</li>
+    <li>✅ 语义搜索</li>
+    <li>✅ RAG生成</li>
+    <li>✅ 引用溯源</li>
+    <li>✅ 权限控制</li>
+    <li>✅ 多轮对话</li>
+  </ul>
+
+  <h3>技术栈</h3>
+  <table>
+    <tr><th>组件</th><th>技术</th><th>用途</th></tr>
+    <tr><td>关系数据库</td><td>MySQL 8.0</td><td>存储文档元数据、用户信息</td></tr>
+    <tr><td>向量数据库</td><td>Milvus</td><td>存储文档向量</td></tr>
+    <tr><td>Embedding模型</td><td>BGE-base-zh</td><td>文本向量化</td></tr>
+    <tr><td>LLM</td><td>Claude/GPT-4</td><td>答案生成</td></tr>
+    <tr><td>框架</td><td>LangChain + FastAPI</td><td>应用框架</td></tr>
+  </table>
+</div>
+
+<div class="section" id="llm-enterprise-qa-s2">
+  <h2>系统架构</h2>
+
+  <div class="diagram">
+    <pre class="mermaid">
+graph TB
+    subgraph Frontend["前端"]
+        A[用户界面]
+    end
+
+    subgraph Backend["后端 API"]
+        B[FastAPI服务]
+        C[权限验证]
+        D[查询处理]
+    end
+
+    subgraph Retrieval["检索层"]
+        E[混合检索引擎]
+        F[重排序模块]
+    end
+
+    subgraph Storage["存储层"]
+        G[(MySQL<br/>文档元数据)]
+        H[(Milvus<br/>文档向量)]
+    end
+
+    subgraph Generation["生成层"]
+        I[LLM生成]
+        J[引用溯源]
+    end
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> G
+    E --> H
+    E --> F
+    F --> I
+    I --> J
+    J --> A
+    </pre>
+  </div>
+</div>
+
+<div class="section" id="llm-enterprise-qa-s3">
+  <h2>数据库设计</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># MySQL表结构</span>
+
+<span class="cmt"># 用户表</span>
+<span class="kw">CREATE TABLE</span> users (
+    id <span class="cls">INT</span> <span class="kw">AUTO_INCREMENT PRIMARY KEY</span>,
+    username <span class="cls">VARCHAR</span>(<span class="num">50</span>) <span class="kw">UNIQUE NOT NULL</span>,
+    department <span class="cls">VARCHAR</span>(<span class="num">50</span>),
+    role <span class="cls">ENUM</span>(<span class="str">'admin'</span>, <span class="str">'manager'</span>, <span class="str">'employee'</span>) <span class="kw">DEFAULT</span> <span class="str">'employee'</span>,
+    created_at <span class="cls">TIMESTAMP</span> <span class="kw">DEFAULT CURRENT_TIMESTAMP</span>
+);
+
+<span class="cmt"># 文档表</span>
+<span class="kw">CREATE TABLE</span> documents (
+    id <span class="cls">INT</span> <span class="kw">AUTO_INCREMENT PRIMARY KEY</span>,
+    title <span class="cls">VARCHAR</span>(<span class="num">255</span>) <span class="kw">NOT NULL</span>,
+    content <span class="cls">TEXT</span>,
+    category <span class="cls">VARCHAR</span>(<span class="num">50</span>),
+    department <span class="cls">VARCHAR</span>(<span class="num">50</span>),
+    access_level <span class="cls">ENUM</span>(<span class="str">'public'</span>, <span class="str">'internal'</span>, <span class="str">'confidential'</span>) <span class="kw">DEFAULT</span> <span class="str">'internal'</span>,
+    created_by <span class="cls">INT</span>,
+    created_at <span class="cls">TIMESTAMP</span> <span class="kw">DEFAULT CURRENT_TIMESTAMP</span>,
+    FOREIGN KEY (created_by) <span class="kw">REFERENCES</span> users(id)
+);
+
+<span class="cmt"># 对话历史表</span>
+<span class="kw">CREATE TABLE</span> chat_history (
+    id <span class="cls">INT</span> <span class="kw">AUTO_INCREMENT PRIMARY KEY</span>,
+    user_id <span class="cls">INT</span>,
+    session_id <span class="cls">VARCHAR</span>(<span class="num">100</span>),
+    role <span class="cls">ENUM</span>(<span class="str">'user'</span>, <span class="str">'assistant'</span>),
+    content <span class="cls">TEXT</span>,
+    sources <span class="cls">JSON</span>,
+    created_at <span class="cls">TIMESTAMP</span> <span class="kw">DEFAULT CURRENT_TIMESTAMP</span>
+);</code></pre>
+  </div>
+
+  <h3>Milvus Collection</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> pymilvus <span class="kw">import</span> MilvusClient, CollectionSchema, FieldSchema, DataType
+
+<span class="cmt"># 创建Milvus Collection</span>
+client = MilvusClient(<span class="str">"./enterprise_rag.db"</span>)
+
+<span class="cmt"># 使用 FieldSchema + CollectionSchema 定义结构</span>
+fields = [
+    FieldSchema(<span class="str">"id"</span>, DataType.VARCHAR, is_primary=<span class="kw">True</span>, max_length=<span class="num">64</span>),
+    FieldSchema(<span class="str">"doc_id"</span>, DataType.INT64),
+    FieldSchema(<span class="str">"embedding"</span>, DataType.FLOAT_VECTOR, dim=<span class="num">768</span>),
+    FieldSchema(<span class="str">"chunk_text"</span>, DataType.VARCHAR, max_length=<span class="num">65535</span>),
+    FieldSchema(<span class="str">"doc_type"</span>, DataType.VARCHAR, max_length=<span class="num">32</span>),
+]
+schema = CollectionSchema(fields, description=<span class="str">"企业文档向量库"</span>)
+
+client.create_collection(
+    collection_name=<span class="str">"enterprise_docs"</span>,
+    schema=schema
+)
+
+<span class="cmt"># 创建向量索引（必须在 insert 之前完成）</span>
+index_params = client.prepare_index_params()
+index_params.add_index(
+    field_name=<span class="str">"embedding"</span>,
+    index_type=<span class="str">"HNSW"</span>,
+    metric_type=<span class="str">"COSINE"</span>,
+    params={<span class="str">"M"</span>: <span class="num">16</span>, <span class="str">"efConstruction"</span>: <span class="num">256</span>}
+)
+client.create_index(<span class="str">"enterprise_docs"</span>, index_params)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-enterprise-qa-s3b">
+  <h2>文档分块策略</h2>
+
+  <p>高质量的文档分块是 RAG 系统效果的关键。推荐使用递归字符分割（Recursive Character Splitting）：</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> langchain_text_splitters <span class="kw">import</span> RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=<span class="num">500</span>,       <span class="cmt"># 每块约500字符（中文约250字）</span>
+    chunk_overlap=<span class="num">50</span>,      <span class="cmt"># 块间重叠50字符，避免语义截断</span>
+    separators=[<span class="str">"\n\n"</span>, <span class="str">"\n"</span>, <span class="str">"。"</span>, <span class="str">"；"</span>, <span class="str">" "</span>, <span class="str">""</span>],  <span class="cmt"># 中文友好的分隔符优先级</span>
+)
+
+chunks = splitter.split_text(document_content)</code></pre>
+  </div>
+
+  <h3>分块参数推荐</h3>
+  <table>
+    <tr><th>场景</th><th>chunk_size</th><th>chunk_overlap</th><th>说明</th></tr>
+    <tr><td>通用文档</td><td>500</td><td>50</td><td>平衡检索精度与上下文完整性</td></tr>
+    <tr><td>FAQ/知识库</td><td>300</td><td>30</td><td>短文本匹配更精确</td></tr>
+    <tr><td>技术手册</td><td>800</td><td>100</td><td>保留更多上下文关联</td></tr>
+    <tr><td>法律/合同</td><td>1000</td><td>150</td><td>段落完整性优先</td></tr>
+  </table>
+
+  <div class="callout callout-warn">
+    <strong>注意事项：</strong>chunk_size 不是越大越好。过大的块会稀释语义信号，降低检索精度；过小的块会丢失上下文，影响生成质量。建议在实际数据上做 A/B 测试。
+  </div>
+</div>
+
+<div class="section" id="llm-enterprise-qa-s4">
+  <h2>混合检索实现</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> langchain_openai <span class="kw">import</span> ChatOpenAI
+<span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> ChatPromptTemplate
+<span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> StrOutputParser
+
+<span class="kw">class</span> <span class="cls">EnterpriseRAG</span>:
+    <span class="str">"""企业级RAG系统"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        self.embed_model = SentenceTransformer(<span class="str">"BAAI/bge-base-zh-v1.5"</span>)
+        self.milvus = MilvusClient(<span class="str">"./enterprise_rag.db"</span>)
+        self.mysql = mysql.connector.connect(...)
+        self.reranker = CrossEncoder(<span class="str">"BAAI/bge-reranker-base"</span>)
+
+        <span class="cmt"># LLM 初始化（使用 LangChain LCEL 模式）</span>
+        self.llm = ChatOpenAI(model=<span class="str">"gpt-4o"</span>, temperature=<span class="num">0</span>)
+        self.prompt = ChatPromptTemplate.from_template(
+            <span class="str">"""基于以下文档回答问题。请引用来源。
+
+文档：
+{context}
+
+问题：{question}
+
+回答（请标注引用来源）："""</span>
+        )
+        self.chain = self.prompt | self.llm | StrOutputParser()
+
+    <span class="kw">def</span> <span class="fn">get_access_filter</span>(self, user_role):
+        <span class="str">"""根据用户角色返回权限过滤条件"""</span>
+        <span class="cmt"># TODO: 实现权限过滤逻辑</span>
+        <span class="kw">if</span> user_role == <span class="str">"admin"</span>:
+            <span class="kw">return</span> <span class="str">"1=1"</span>  <span class="cmt"># 管理员可访问全部</span>
+        <span class="kw">elif</span> user_role == <span class="str">"manager"</span>:
+            <span class="kw">return</span> <span class="str">"access_level IN ('public', 'internal')"</span>
+        <span class="kw">return</span> <span class="str">"access_level = 'public'"</span>
+
+    <span class="kw">def</span> <span class="fn">mysql_search</span>(self, query, access_filter, limit=<span class="num">10</span>):
+        <span class="str">"""MySQL 全文检索（MATCH...AGAINST）"""</span>
+        cursor = self.mysql.cursor(dictionary=<span class="kw">True</span>)
+        sql = <span class="str">f"""
+            SELECT id, title, content, category,
+                   MATCH(title, content) AGAINST('{query}' IN NATURAL LANGUAGE MODE) AS score
+            FROM documents
+            WHERE {access_filter}
+            ORDER BY score DESC
+            LIMIT {limit}
+        """</span>
+        cursor.execute(sql)
+        <span class="kw">return</span> cursor.fetchall()
+
+    <span class="kw">def</span> <span class="fn">vector_search</span>(self, query, access_filter, limit=<span class="num">10</span>):
+        <span class="str">"""Milvus 向量相似度检索"""</span>
+        query_vec = self.embed_model.encode([query])[<span class="num">0</span>].tolist()
+        results = self.milvus.search(
+            collection_name=<span class="str">"enterprise_docs"</span>,
+            data=[query_vec],
+            limit=limit,
+            output_fields=[<span class="str">"chunk_text"</span>, <span class="str">"doc_id"</span>, <span class="str">"doc_type"</span>],
+        )
+        <span class="cmt"># TODO: 结合 access_filter 做后过滤（或在 Milvus filter 表达式中实现）</span>
+        <span class="kw">return</span> [
+            {<span class="str">"id"</span>: hit[<span class="str">"id"</span>], <span class="str">"content"</span>: hit[<span class="str">"entity"</span>][<span class="str">"chunk_text"</span>],
+             <span class="str">"doc_id"</span>: hit[<span class="str">"entity"</span>][<span class="str">"doc_id"</span>], <span class="str">"score"</span>: hit[<span class="str">"distance"</span>]}
+            <span class="kw">for</span> hit <span class="kw">in</span> results[<span class="num">0</span>]
+        ]
+
+    <span class="kw">def</span> <span class="fn">rrf_fusion</span>(self, results_a, results_b, k=<span class="num">60</span>):
+        <span class="str">"""Reciprocal Rank Fusion 融合两路检索结果"""</span>
+        scores = {}
+        <span class="kw">for</span> rank, doc <span class="kw">in</span> <span class="fn">enumerate</span>(results_a):
+            doc_id = doc.get(<span class="str">"id"</span>) <span class="kw">or</span> doc.get(<span class="str">"doc_id"</span>)
+            scores[doc_id] = scores.get(doc_id, {<span class="str">"doc"</span>: doc, <span class="str">"score"</span>: <span class="num">0</span>})
+            scores[doc_id][<span class="str">"score"</span>] += <span class="num">1.0</span> / (k + rank + <span class="num">1</span>)
+        <span class="kw">for</span> rank, doc <span class="kw">in</span> <span class="fn">enumerate</span>(results_b):
+            doc_id = doc.get(<span class="str">"id"</span>) <span class="kw">or</span> doc.get(<span class="str">"doc_id"</span>)
+            scores[doc_id] = scores.get(doc_id, {<span class="str">"doc"</span>: doc, <span class="str">"score"</span>: <span class="num">0</span>})
+            scores[doc_id][<span class="str">"score"</span>] += <span class="num">1.0</span> / (k + rank + <span class="num">1</span>)
+        ranked = <span class="fn">sorted</span>(scores.values(), key=<span class="kw">lambda</span> x: x[<span class="str">"score"</span>], reverse=<span class="kw">True</span>)
+        <span class="kw">return</span> [item[<span class="str">"doc"</span>] <span class="kw">for</span> item <span class="kw">in</span> ranked]
+
+    <span class="kw">def</span> <span class="fn">rerank</span>(self, query, candidates, top_n=<span class="num">5</span>):
+        <span class="str">"""Cross-Encoder 重排序"""</span>
+        pairs = [(query, doc.get(<span class="str">"content"</span>, <span class="str">""</span>)) <span class="kw">for</span> doc <span class="kw">in</span> candidates]
+        scores = self.reranker.predict(pairs)
+        <span class="kw">for</span> doc, score <span class="kw">in</span> <span class="fn">zip</span>(candidates, scores):
+            doc[<span class="str">"rerank_score"</span>] = <span class="fn">float</span>(score)
+        ranked = <span class="fn">sorted</span>(candidates, key=<span class="kw">lambda</span> x: x[<span class="str">"rerank_score"</span>], reverse=<span class="kw">True</span>)
+        <span class="kw">return</span> ranked[:top_n]
+
+    <span class="kw">def</span> <span class="fn">retrieve</span>(self, query, user_role, top_k=<span class="num">5</span>):
+        <span class="str">"""混合检索 + 权限过滤"""</span>
+
+        <span class="cmt"># 1. 权限过滤SQL</span>
+        access_filter = self.<span class="fn">get_access_filter</span>(user_role)
+
+        <span class="cmt"># 2. MySQL检索</span>
+        mysql_results = self.<span class="fn">mysql_search</span>(query, access_filter)
+
+        <span class="cmt"># 3. 向量检索</span>
+        vector_results = self.<span class="fn">vector_search</span>(query, access_filter)
+
+        <span class="cmt"># 4. RRF融合</span>
+        fused = self.<span class="fn">rrf_fusion</span>(mysql_results, vector_results)
+
+        <span class="cmt"># 5. 重排序</span>
+        reranked = self.<span class="fn">rerank</span>(query, fused)
+
+        <span class="kw">return</span> reranked[:top_k]
+
+    <span class="kw">def</span> <span class="fn">answer</span>(self, query, user_role, session_id):
+        <span class="str">"""完整RAG问答"""</span>
+
+        <span class="cmt"># 检索相关文档</span>
+        docs = self.<span class="fn">retrieve</span>(query, user_role)
+
+        <span class="cmt"># 构建上下文</span>
+        context = <span class="str">"\n\n"</span>.join([d[<span class="str">"content"</span>] <span class="kw">for</span> d <span class="kw">in</span> docs])
+
+        <span class="cmt"># LCEL 链式调用生成回答</span>
+        response = self.chain.invoke({
+            <span class="str">"context"</span>: context,
+            <span class="str">"question"</span>: query
+        })
+
+        <span class="cmt"># 保存对话历史</span>
+        self.<span class="fn">save_history</span>(session_id, query, response, docs)
+
+        <span class="kw">return</span> {
+            <span class="str">"answer"</span>: response,
+            <span class="str">"sources"</span>: docs,
+            <span class="str">"session_id"</span>: session_id
+        }</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-enterprise-qa-s5">
+  <h2>API开发</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> fastapi <span class="kw">import</span> FastAPI, Depends
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel
+
+app = FastAPI(title=<span class="str">"企业问答系统API"</span>)
+rag = EnterpriseRAG()
+
+<span class="kw">class</span> <span class="cls">QueryRequest</span>(BaseModel):
+    query: <span class="cls">str</span>
+    session_id: <span class="cls">str</span> | <span class="kw">None</span> = <span class="kw">None</span>
+
+<span class="dec">@app.post</span>(<span class="str">"/api/query"</span>)
+<span class="kw">async def</span> <span class="fn">query</span>(request: QueryRequest, user = Depends(get_current_user)):
+    <span class="str">"""查询接口"""</span>
+    session_id = request.session_id <span class="kw">or</span> <span class="fn">str</span>(uuid4())
+
+    result = rag.<span class="fn">answer</span>(
+        query=request.query,
+        user_role=user[<span class="str">"role"</span>],
+        session_id=session_id
+    )
+
+    <span class="kw">return</span> {
+        <span class="str">"answer"</span>: result[<span class="str">"answer"</span>],
+        <span class="str">"sources"</span>: [
+            {<span class="str">"title"</span>: s[<span class="str">"title"</span>], <span class="str">"relevance"</span>: s[<span class="str">"score"</span>]}
+            <span class="kw">for</span> s <span class="kw">in</span> result[<span class="str">"sources"</span>]
+        ],
+        <span class="str">"session_id"</span>: session_id
+    }
+
+<span class="dec">@app.post</span>(<span class="str">"/api/documents/upload"</span>)
+<span class="kw">async def</span> <span class="fn">upload_document</span>(file: UploadFile, user = Depends(get_current_user)):
+    <span class="str">"""文档上传接口"""</span>
+    <span class="cmt"># 处理文件上传和索引</span>
+    ...
+
+<span class="cmt"># 启动：uvicorn api:app --host 0.0.0.0 --port 8000</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-enterprise-qa-s6">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：构建完整企业问答系统</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>从零构建一个可运行的企业问答系统。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 设计并创建MySQL数据库（users, documents, chat_history）</p>
+      <p>② 创建Milvus Collection</p>
+      <p>③ 实现文档导入Pipeline（分割、向量化、存储）</p>
+      <p>④ 实现混合检索（MySQL + Milvus + RRF）</p>
+      <p>⑤ 实现RAG生成（检索 + Prompt + LLM）</p>
+      <p>⑥ 实现简单的权限过滤</p>
+      <p>⑦ 用FastAPI搭建API服务</p>
+      <p>⑧ 测试完整的问答流程</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习2：优化与扩展</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>优化系统性能和功能。</p>
+      <p><strong>可选方向：</strong></p>
+      <p>① 添加重排序模块提升检索精度</p>
+      <p>② 实现多轮对话上下文管理</p>
+      <p>③ 添加前端界面（Streamlit或Gradio）</p>
+      <p>④ 实现文档版本管理</p>
+      <p>⑤ 添加用户反馈学习机制</p>
+    </div>
+  </div>
+</div>
+
+
+
+</div>
+
+</section>

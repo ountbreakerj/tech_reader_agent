@@ -1,0 +1,66 @@
+<section id="sec-h-lec-10" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 10 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-10">第 10 讲 · 跑通完整流程才算真正验证</h1>
+    <p>让 agent 给 Electron 应用加一个文件导出功能，它写了渲染进程组件、预加载脚本、服务层逻辑，每个组件的单元测试都通过了。agent 说"做完了"。实际点击导出按钮时：文件路径格式不对，进度条没反应，大文件导出时内存泄漏。5 个组件边界缺陷，单元测试一个都没发现。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>单元测试的系统性盲区</h2>
+    <p>单元测试的设计哲学是隔离：模拟依赖，专注被测单元。这个哲学使单元测试快速且精确，但也制造了系统性的盲区。Google 的测试金字塔告诉我们，大量单元测试是基础，但如果你止步于此，就会系统性地漏掉组件交互问题。</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">缺陷类型</th><th scope="col">原因</th><th scope="col">单元测试</th><th scope="col">端到端</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">接口不匹配</th><td>文件路径相对/绝对格式不一致</td><td>未检测</td><td>检测</td></tr>
+        <tr><th scope="row">状态传播错误</th><td>ORM 缓存持有旧 schema</td><td>未检测</td><td>检测</td></tr>
+        <tr><th scope="row">资源泄漏</th><td>文件句柄跨组件未释放</td><td>未检测</td><td>检测</td></tr>
+        <tr><th scope="row">权限问题</th><td>打包环境权限与开发环境不同</td><td>未检测</td><td>检测</td></tr>
+        <tr><th scope="row">错误传播</th><td>服务层异常未冒泡到 UI 层</td><td>未检测</td><td>检测</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="harness-section">
+    <h2>端到端测试同时改变 Agent 行为</h2>
+    <p>这是很多人没意识到的一点：当 agent 知道它的工作要过端到端测试时，它的编码行为会改变。</p>
+    <ul>
+      <li><strong>考虑组件交互</strong>：写代码时会想"这个接口和上游怎么对接"，不只关注单个函数。</li>
+      <li><strong>尊重架构边界</strong>：有架构约束的系统里，端到端测试迫使 agent 遵守边界规则。</li>
+      <li><strong>处理错误路径</strong>：端到端测试通常包含故障场景，迫使 agent 考虑异常处理。</li>
+    </ul>
+    <p>只有端到端测试能证明系统级缺陷不存在。单元测试测的是"写了什么"，端到端测的是"实际跑了什么"。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>架构规则必须可执行</h2>
+    <p>OpenAI 的经验：对 agent 生成的代码库，架构约束必须是第一天就建立的早期前置条件。Agent 会复制仓库中已有的模式，没有约束就会在每次会话中引入更多偏差。</p>
+    <p>关键原则：<strong>执行不变量，不微管实现。</strong>比如要求"数据在边界解析"，但不规定用哪个库。错误消息要包含修复指导：</p>
+    <div class="codeblock">
+      <pre><code>ERROR: Found direct import of 'fs' in src/renderer/App.tsx:12
+WHY: Renderer process has no access to Node.js APIs for security
+FIX: Move file operations to src/preload/file-ops.ts
+     and call via window.api.readFile()</code></pre></div>
+    <p>在 harness 里明确验证层级：</p>
+    <div class="codeblock">
+      <pre><code>## 验证层级
+- 层级 1: 单元测试（必须通过）
+- 层级 2: 集成测试（必须通过）
+- 层级 3: 端到端测试（涉及跨组件修改时必须通过）
+- 跳过任何必须层级的任务 = 未完成</code></pre></div>
+  </section>
+
+  <section class="harness-section">
+    <h2>审查反馈提升</h2>
+    <p>每次在代码审查中发现新类型的 agent 错误，把它变成自动化检查。一个月后你的 harness 会比月初强得多。流程：识别重复出现的问题类型 → 编写检查规则 → 写面向 agent 的错误消息 → 集成到 harness CI → 验证效果。这个反馈循环让 harness 自动随着项目演化而变强。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-09">← 第 09 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-11">第 11 讲 →</a>
+  </nav>
+</section>

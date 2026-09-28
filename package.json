@@ -1,0 +1,23 @@
+{
+  "name": "tech-reader-modular",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "模块化维护、生成单文件交付的 Tech Reader 项目",
+  "scripts": {
+    "import:legacy": "node tools/import-legacy.mjs ../tech-reader.html",
+    "build": "node build.mjs",
+    "build:legacy-check": "node build.mjs --legacy --check-baseline --no-write",
+    "verify": "node verify.mjs",
+    "test": "node build.mjs && node verify.mjs && node tools/assets.mjs audit && node tools/browser-audit.mjs",
+    "test:baseline": "node tools/verify-baseline.mjs",
+    "assets": "node tools/assets.mjs",
+    "doctor": "node tools/doctor.mjs",
+    "visual": "node tools/capture-visuals.mjs",
+    "browser:audit": "node tools/browser-audit.mjs",
+    "package": "pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File tools/package.ps1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

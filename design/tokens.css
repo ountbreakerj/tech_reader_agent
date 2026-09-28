@@ -1,0 +1,18 @@
+:root {
+  --tr-bg: #0f1117;
+  --tr-surface: #1b2130;
+  --tr-surface-raised: #252e43;
+  --tr-border: #334155;
+  --tr-text: #f8fafc;
+  --tr-text-secondary: #a9b7cf;
+  --tr-primary: #60a5fa;
+  --tr-primary-strong: #2563eb;
+  --tr-success: #5eead4;
+  --tr-warning: #fbbf24;
+  --tr-danger: #fb7185;
+  --tr-focus: #93c5fd;
+  --tr-radius-sm: 6px;
+  --tr-radius-md: 12px;
+  --tr-content-max: 960px;
+  --tr-reading-line: 1.8;
+}

@@ -1,0 +1,146 @@
+<section class="llm-mod llm-m-function-calling" id="llm-function-calling"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>🔧 模块0：Function Calling</h1>
+  <p>让大模型调用外部工具和API</p>
+</div><div class="section" id="llm-function-calling-s1">
+    <h2>什么是Function Calling</h2>
+    
+    <p>Function Calling 是大模型的一项关键能力：模型能够<strong>判断需要调用哪个函数</strong>，并<strong>生成结构化的调用参数</strong>。</p>
+    <table>
+    <tr><th>能力</th><th>说明</th></tr>
+    <tr><td>实时数据</td><td>查询天气、股价、数据库等实时信息</td></tr>
+<tr><td>精确计算</td><td>调用计算器、代码执行器做精确运算</td></tr>
+<tr><td>外部系统</td><td>操作数据库、发送邮件、调用第三方API</td></tr>
+<tr><td>工具编排</td><td>根据任务自动选择和组合多个工具</td></tr>
+
+  </table>
+    <div class="callout callout-key">
+    <p>🔑 FC不是让模型直接执行函数，而是让模型输出"我想调用XXX函数，参数是YYY"的JSON结构，由应用层执行后将结果返回模型。</p>
+  </div>
+  </div><div class="section" id="llm-function-calling-s2">
+    <h2>工作原理</h2>
+    
+    <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>定义函数</strong><br>向模型描述可用函数的名称、描述、参数schema</div>
+  </div><div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>用户提问</strong><br>用户发送自然语言请求</div>
+  </div><div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>模型判断</strong><br>模型判断是否需要调用函数，选择哪个函数</div>
+  </div><div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>生成参数</strong><br>模型输出函数名和JSON格式的参数</div>
+  </div><div class="step">
+    <div class="step-num">5</div>
+    <div class="step-content"><strong>执行函数</strong><br>应用层解析JSON，执行实际函数调用</div>
+  </div><div class="step">
+    <div class="step-num">6</div>
+    <div class="step-content"><strong>返回结果</strong><br>将函数执行结果返回给模型</div>
+  </div><div class="step">
+    <div class="step-num">7</div>
+    <div class="step-content"><strong>生成回复</strong><br>模型基于函数结果生成最终回复</div>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 FC的核心价值：让模型"知道"有哪些工具可用，但不直接执行——安全性和可控性由应用层保障。</p>
+  </div>
+  </div><div class="section" id="llm-function-calling-s3">
+    <h2>单函数调用实战</h2>
+    
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from openai import OpenAI
+client = OpenAI()
+
+# 1. 定义函数schema
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "获取指定城市的天气信息",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "城市名"},
+                "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+            },
+            "required": ["city"]
+        }
+    }
+}]
+
+# 2. 发送请求
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "北京今天天气怎么样?"}],
+    tools=tools,
+    tool_choice="auto",
+)
+
+# 3. 解析函数调用
+msg = response.choices[0].message
+if msg.tool_calls:
+    func = msg.tool_calls[0]
+    print(f"函数: {func.function.name}")
+    print(f"参数: {func.function.arguments}")</code></pre>
+  </div>
+  </div><div class="section" id="llm-function-calling-s4">
+    <h2>多函数编排</h2>
+    
+    <p>当定义多个函数时，模型会根据用户意图自动选择合适的函数。</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code># 定义多个工具
+tools = [
+    {"type": "function", "function": {"name": "get_weather",
+        "description": "查询天气", "parameters": {...}}},
+    {"type": "function", "function": {"name": "search_database",
+        "description": "搜索数据库", "parameters": {...}}},
+    {"type": "function", "function": {"name": "send_email",
+        "description": "发送邮件", "parameters": {...}}},
+]
+
+# 模型会根据问题自动选择合适的函数
+# "北京天气?" → 调用 get_weather
+# "查询客户订单" → 调用 search_database
+# "给张三发邮件" → 调用 send_email</code></pre>
+  </div>
+    <div class="callout callout-warn">
+    <p>⚠️ 函数描述的质量直接影响模型选择的准确性。描述要清晰、具体，避免歧义。</p>
+  </div>
+  </div><div class="section" id="llm-function-calling-s5">
+    <h2>Function Calling与数据库</h2>
+    
+    <p>FC最强大的应用之一是将自然语言转换为SQL查询：</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>tools = [{
+    "type": "function",
+    "function": {
+        "name": "query_sql",
+        "description": "执行SQL查询",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sql": {"type": "string", "description": "SQL查询语句"}
+            },
+            "required": ["sql"]
+        }
+    }
+}]
+
+# 用户: "查询销售额最高的前5个产品"
+# 模型输出: {"sql": "SELECT product, SUM(amount) as total FROM sales GROUP BY product ORDER BY total DESC LIMIT 5"}</code></pre>
+  </div>
+    <div class="callout callout-warn">
+    <p>⚠️ 安全警告：永远不要直接执行模型生成的SQL！必须添加参数验证、白名单过滤、只读权限等安全措施。</p>
+  </div>
+  </div>
+</div></section>

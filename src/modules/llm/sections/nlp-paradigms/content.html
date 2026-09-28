@@ -1,0 +1,68 @@
+<section class="llm-mod llm-m-nlp-paradigms" id="llm-nlp-paradigms"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>📈 模块0：NLP范式演进</h1>
+  <p>从规则到提示，四代技术革命</p>
+</div><div class="section" id="llm-nlp-paradigms-s1">
+    <h2>第一范式：基于规则的方法</h2>
+    
+    <p>1950s-1990s，NLP主要依赖人工编写的规则和专家知识。</p>
+    <table>
+    <tr><th>技术</th><th>原理</th><th>优点</th><th>缺点</th></tr>
+    <tr><td>正则表达式</td><td>模式匹配</td><td>精确、可解释</td><td>无法处理歧义</td></tr>
+<tr><td>专家系统</td><td>语法规则库</td><td>领域知识强</td><td>扩展性差</td></tr>
+<tr><td>关键词匹配</td><td>词典查找</td><td>简单高效</td><td>无法理解语义</td></tr>
+
+  </table>
+    <div class="callout callout-tip">
+    <p>💡 规则方法在特定场景（如正则提取电话号码、日期）仍然实用，不一定要用大模型。</p>
+  </div>
+  </div><div class="section" id="llm-nlp-paradigms-s2">
+    <h2>第二范式：统计机器学习</h2>
+    
+    <p>1990s-2010s，基于概率统计的方法取代了纯规则方法。</p>
+    <table>
+    <tr><th>方法</th><th>原理</th><th>适用任务</th></tr>
+    <tr><td>朴素贝叶斯</td><td>贝叶斯定理 + 特征独立假设</td><td>文本分类、垃圾邮件</td></tr>
+<tr><td>SVM</td><td>最大间隔分类器</td><td>文本分类、情感分析</td></tr>
+<tr><td>HMM</td><td>隐马尔可夫模型</td><td>词性标注、分词</td></tr>
+<tr><td>CRF</td><td>条件随机场</td><td>NER、序列标注</td></tr>
+
+  </table>
+    <h3>特征工程</h3>
+    <p>统计方法依赖人工设计特征：TF-IDF、N-gram、词袋模型等。特征质量直接决定模型效果。</p>
+  </div><div class="section" id="llm-nlp-paradigms-s3">
+    <h2>第三范式：预训练 + 微调</h2>
+    
+    <p>2013-2022，预训练模型成为NLP主流范式。</p>
+    <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>Word2Vec (2013)</strong><br>静态词向量，首次实现词语的分布式表示</div>
+  </div><div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>ELMo (2018)</strong><br>上下文相关的词向量，基于BiLSTM</div>
+  </div><div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>BERT (2018)</strong><br>基于Transformer Encoder，双向理解，刷新11项NLP基准</div>
+  </div><div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>GPT系列 (2018-2023)</strong><br>基于Transformer Decoder，自回归生成，规模不断扩大</div>
+  </div>
+    <h3>迁移学习思想</h3>
+    <p>在大规模无标注文本上<strong>预训练</strong>通用语言能力，再在下游任务上<strong>微调</strong>适配。</p>
+  </div><div class="section" id="llm-nlp-paradigms-s4">
+    <h2>第四范式：提示学习（Prompt-based）</h2>
+    
+    <p>2020至今，大模型时代的新范式——通过设计提示（Prompt）引导模型完成任务，无需微调。</p>
+    <table>
+    <tr><th>范式</th><th>数据需求</th><th>训练方式</th><th>代表方法</th><th>适用场景</th></tr>
+    <tr><td>规则方法</td><td>无</td><td>人工编写</td><td>正则/模板</td><td>简单模式匹配</td></tr>
+<tr><td>统计ML</td><td>千级标注</td><td>特征+分类器</td><td>SVM/NB</td><td>特定分类任务</td></tr>
+<tr><td>预训练+微调</td><td>万级标注</td><td>全参数微调</td><td>BERT/GPT</td><td>NLU/NLG任务</td></tr>
+<tr><td>提示学习</td><td>0-几条示例</td><td>无需训练/P-Tuning</td><td>GPT-4/CoT</td><td>通用任务</td></tr>
+
+  </table>
+    <div class="callout callout-key">
+    <p>🔑 范式不是替代关系，而是互补。简单任务用规则/ML，特定任务用微调，通用任务用提示学习。</p>
+  </div>
+  </div>
+</div></section>

@@ -1,0 +1,75 @@
+<section id="sec-h-lec-12" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 12 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-12">第 12 讲 · 每次会话结束前都做好交接</h1>
+    <p>让 agent 为一个 SaaS 产品开发了三周功能，每次会话都做了很多事情，但从不清理。三周后：主分支有 12 个未合并的分支，pytest 只有 61% 的测试通过，下一个 agent 需要 45 分钟才能弄清楚当前状态。这就是没有 Clean State 策略的后果。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>五个清洁状态维度</h2>
+    <p>会话结束时，harness 需要在五个维度上保持干净：</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">维度</th><th scope="col">检查项</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">构建</th><td>主分支构建通过，没有已知的构建破坏</td></tr>
+        <tr><th scope="row">测试</th><td>全部测试通过，或失败项已在 PROGRESS.md 中文档化</td></tr>
+        <tr><th scope="row">进度</th><td>PROGRESS.md 精确反映当前状态，下一个 agent 可以直接读取继续</td></tr>
+        <tr><th scope="row">工件</th><td>临时文件、调试脚本、实验性代码已清理或已标注</td></tr>
+        <tr><th scope="row">启动就绪</th><td>有新 agent 接手，按 AGENTS.md 的初始化流程能在 5 分钟内开始工作</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="harness-section">
+    <h2>"以后再清理"等于"永远不清理"</h2>
+    <p>技术债务有个特性：容易积累，难以偿还。在 agent 工程里，清理债务的代价更高——每次新会话开始时，agent 要先弄清楚"哪些是应该保留的，哪些是应该删掉的"，而这个判断没有额外的上下文是无法做出的。</p>
+    <p>因此，清理必须是<strong>即时的</strong>，不能是"以后再说"。每个会话结束时，有一个固定的清理清单：</p>
+    <div class="codeblock">
+      <pre><code>## 会话结束检查清单
+- [ ] 测试全部通过（或失败项已记录）
+- [ ] 临时调试文件已删除
+- [ ] PROGRESS.md 已更新
+- [ ] 未完成的工作项已加入 DECISIONS.md
+- [ ] 分支状态干净或已推送</code></pre></div>
+    <p>双模式清理：即时清理（每个会话结束时，5–10 分钟）+ 周度深度清理（每周一次，30 分钟，处理积累的技术债）。两者缺一不可：即时清理防止债务堆积，周度清理处理即时清理遗漏的系统性问题。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>幂等清理脚本</h2>
+    <p>清理操作应该是幂等的：跑多少次结果都一样，不会因为重复执行而破坏状态。</p>
+    <div class="codeblock">
+      <pre><code>#!/bin/bash
+# cleanup.sh — 幂等，可多次执行
+
+# 删除临时测试文件（不影响正式测试）
+find . -name "test_temp_*.py" -delete 2>/dev/null || true
+find . -name "debug_*.log" -delete 2>/dev/null || true
+
+# 验证构建仍然通过
+npm run build || { echo "BUILD FAILED after cleanup"; exit 1; }
+
+# 验证测试仍然通过
+npm test || { echo "TESTS FAILED after cleanup"; exit 1; }</code></pre></div>
+    <p>长期数据（12 周，5 个 AI 代理参与的真实项目）：</p>
+    <ul>
+      <li>无 Clean State 策略：第 12 周构建通过率 68%，测试通过率 61%，会话启动时间 45 分钟。</li>
+      <li>有 Clean State 策略：第 12 周构建通过率 97%，测试通过率 95%，会话启动时间 8 分钟。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>质量文档与 Harness 简化</h2>
+    <p>好的质量文档格式：当前通过状态（构建/测试/类型检查）、已知问题、遗留技术债、下一个 agent 的行动项、需要人类决策的项目。这个文档是下一次会话的冷启动指南。</p>
+    <p>模型能力提升后，harness 应该相应简化。能力越强，越多的事情可以内化到模型判断里，越少需要显式约束。不要把三年前设计的 harness 照搬到今天的模型上——定期重新评估哪些约束还有必要，哪些可以去掉。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-11">← 第 11 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-13">第 13 讲 →</a>
+  </nav>
+</section>

@@ -1,0 +1,3318 @@
+<section class="llm-mod llm-m-happy-source llm-happy-extras" id="llm-happy-extras"><div class="module-wrapper"><div class="llm-hero" style="--hero-a:#0f766e;--hero-b:#2563eb;"><h1>🧰 Happy-LLM：扩展专题与工程案例</h1><p>文本数据处理、生成策略、思考预算、多模态微调与 CDDRS</p><div class="source-meta">来源：Datawhale China · Happy-LLM（本地离线融合）</div></div><div class="callout callout-info"><p>📌 本节保留 Happy-LLM 原教程的概念、公式、代码与图示，并按 Tech Reader 的单文件离线规范转换。外部图片已复制并登记为本地资源。</p></div><div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/text-data-processing/readme.md</div><p>本补充章节旨在对大模型数据处理做一个简单的梳理与具体的代码实现，帮助大家对于大模型的数据处理有一个更加清晰的认识。</p>
+<div class="section" id="llm-happy-extras-src1-s1"><h2>1.理解词嵌入</h2>
+<p>在深度神经网络模型中，由于文本是分类数据，模型无法直接处理原始文本，因此需要将词语表示为连续值向量传输给模型。这一处理过程我们称之为词嵌入，其本质是将<strong>离散对象</strong>（如词语）映射到<strong>连续向量</strong>空间中的点，目的是将非数值数据转换为神经网络可处理的格式。</p>
+<p>通过将每个词映射为高维空间中的点（如“猫”=[0.2, -1.7, ...]），使语义相似的词（如“猫”和“狗”）向量距离更近，而无关词（如“猫”和“汽车”）距离更远。这种向量化表示既保留词语关系（“国王-男性+女性≈女王”），又能作为神经网络的输入，是大模型理解语言的基础。</p>
+<p>我们可以看一下下面的代码示例</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+import re
+
+# 示例文本（可自行修改并且测试）
+text = &quot;Hello, how are you today? I hope you are doing well.&quot;
+
+# 简单分词函数
+def tokenize(text):
+    # 按非字母数字字符分割文本，并保留分隔符
+    tokens = re.findall(r&#39;\w+|[^\w\s]&#39;, text)
+    return tokens
+# 构建词汇表
+def build_vocab(tokens):
+    unique_tokens = sorted(set(tokens))
+    vocab = {token: i for i, token in enumerate(unique_tokens)}
+    vocab_size = len(vocab)
+    return vocab, vocab_size
+# 文本编码
+def encode_text(tokens, vocab):
+    return [vocab.get(token, vocab[&#39;&lt;unk&gt;&#39;]) for token in tokens]
+
+# 创建词嵌入模型
+class WordEmbeddingModel(nn.Module):
+    def __init__(self, vocab_size, embedding_dim):
+        super(WordEmbeddingModel, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        
+    def forward(self, inputs):
+        return self.embedding(inputs)
+
+# 可视化词向量
+def visualize_embeddings(embeddings, token_ids, vocab):
+    reverse_vocab = {i: token for token, i in vocab.items()}
+    pca = PCA(n_components=2)
+    embeddings_2d = pca.fit_transform(embeddings.detach().numpy())
+    # 绘制散点图
+    plt.figure(figsize=(10, 8))
+    for i, token_id in enumerate(token_ids):
+        plt.scatter(embeddings_2d[i, 0], embeddings_2d[i, 1], marker=&#39;o&#39;)
+        plt.annotate(reverse_vocab[token_id], 
+                     (embeddings_2d[i, 0], embeddings_2d[i, 1]),
+                     xytext=(5, 2), 
+                     textcoords=&#39;offset points&#39;,
+                     ha=&#39;right&#39;, 
+                     va=&#39;bottom&#39;)
+    plt.title(&#39;Word Embeddings Visualization&#39;)
+    plt.xlabel(&#39;Principal Component 1&#39;)
+    plt.ylabel(&#39;Principal Component 2&#39;)
+    plt.grid(True)
+    plt.savefig(&#39;word_embeddings.png&#39;)
+    plt.show()
+
+def main():
+    tokens = tokenize(text)
+    print(f&quot;Tokens: {tokens}&quot;)
+    tokens_with_special = tokens + [&#39;&lt;pad&gt;&#39;, &#39;&lt;unk&gt;&#39;]
+    
+    # 构建词汇表
+    vocab, vocab_size = build_vocab(tokens_with_special)
+    print(f&quot;Vocabulary size: {vocab_size}&quot;)
+    print(f&quot;Vocabulary: {vocab}&quot;)
+    
+    # 编码文本
+    encoded_text = encode_text(tokens, vocab)
+    print(f&quot;Encoded text: {encoded_text}&quot;)
+    input_tensor = torch.tensor(encoded_text, dtype=torch.long)
+    
+    # 初始化模型
+    embedding_dim = 10  # 词向量维度，即提到的词空间
+    model = WordEmbeddingModel(vocab_size, embedding_dim)
+    # 获取词向量
+    embeddings = model(input_tensor)
+    print(f&quot;Embeddings shape: {embeddings.shape}&quot;)  # 这里应该是 [序列长度, 嵌入维度]
+    
+    print(f&quot;Word vector for &#39;{tokens[0]}&#39;: {embeddings[0].detach().numpy()}&quot;)
+    print(f&quot;Word vector for &#39;{tokens[1]}&#39;: {embeddings[1].detach().numpy()}&quot;)
+    # 可视化词向量（仅用于低维演示，实际应用中词向量维度通常较高）
+    if embedding_dim &gt;= 2:
+        visualize_embeddings(embeddings, encoded_text, vocab)
+    
+    # 计算词之间的相似度
+    print(&quot;\n词相似度分析:&quot;)
+    for i, token_i in enumerate(tokens[:5]):  # 只分析前5个词
+        for j, token_j in enumerate(tokens[:5]):
+            if i != j:
+                # 计算余弦相似度
+                sim = F.cosine_similarity(embeddings[i].unsqueeze(0), 
+                                         embeddings[j].unsqueeze(0))
+                print(f&quot; &#39;{token_i}&#39; 和 &#39;{token_j}&#39; 的相似度: {sim.item():.4f}&quot;)
+
+if __name__ == &quot;__main__&quot;:
+    main()    </code></pre></div>
+<p>Tokens: [&#39;Hello&#39;, &#39;,&#39;, &#39;how&#39;, &#39;are&#39;, &#39;you&#39;, &#39;today&#39;, &#39;?&#39;, &#39;I&#39;, &#39;hope&#39;, &#39;you&#39;, &#39;are&#39;, &#39;doing&#39;, &#39;well&#39;, &#39;.&#39;] Vocabulary size: 14 Vocabulary: {&#39;,&#39;: 0, &#39;.&#39;: 1, &#39;&lt;pad&gt;&#39;: 2, &#39;&lt;unk&gt;&#39;: 3, &#39;?&#39;: 4, &#39;Hello&#39;: 5, &#39;I&#39;: 6, &#39;are&#39;: 7, &#39;doing&#39;: 8, &#39;hope&#39;: 9, &#39;how&#39;: 10, &#39;today&#39;: 11, &#39;well&#39;: 12, &#39;you&#39;: 13} Encoded text: [5, 0, 10, 7, 13, 11, 4, 6, 9, 13, 7, 8, 12, 1] Embeddings shape: torch.Size([14, 10]) Word vector for &#39;Hello&#39;: [-0.16787808 -0.46388683 -0.4728546   0.59449345 -0.23820949  0.34212282 0.6591729  -0.10877569  0.60686487 -1.771871  ] Word vector for &#39;,&#39;: [ 0.19194137 -1.2824519   1.1420391  -0.8361696  -0.578317    0.1025617 1.2452478  -0.08552601  0.9869009  -0.04940421]</p>
+<p><figure class="happy-figure"><img src="@asset/happy-llm/extra-chapter/text-data-processing/image/output_1_1-279535745e.png" alt="png" loading="lazy"><figcaption>png</figcaption></figure></p>
+<p>词相似度分析: &#39;Hello&#39; 和 &#39;,&#39; 的相似度: 0.2132 &#39;Hello&#39; 和 &#39;how&#39; 的相似度: -0.0277 &#39;Hello&#39; 和 &#39;are&#39; 的相似度: 0.1024 &#39;Hello&#39; 和 &#39;you&#39; 的相似度: 0.1597 &#39;,&#39; 和 &#39;Hello&#39; 的相似度: 0.2132 &#39;,&#39; 和 &#39;how&#39; 的相似度: -0.0801 &#39;,&#39; 和 &#39;are&#39; 的相似度: -0.6096 &#39;,&#39; 和 &#39;you&#39; 的相似度: 0.2355 &#39;how&#39; 和 &#39;Hello&#39; 的相似度: -0.0277 &#39;how&#39; 和 &#39;,&#39; 的相似度: -0.0801 &#39;how&#39; 和 &#39;are&#39; 的相似度: 0.1170 &#39;how&#39; 和 &#39;you&#39; 的相似度: -0.0412 &#39;are&#39; 和 &#39;Hello&#39; 的相似度: 0.1024 &#39;are&#39; 和 &#39;,&#39; 的相似度: -0.6096 &#39;are&#39; 和 &#39;how&#39; 的相似度: 0.1170 &#39;are&#39; 和 &#39;you&#39; 的相似度: 0.2203 &#39;you&#39; 和 &#39;Hello&#39; 的相似度: 0.1597 &#39;you&#39; 和 &#39;,&#39; 的相似度: 0.2355 &#39;you&#39; 和 &#39;how&#39; 的相似度: -0.0412 &#39;you&#39; 和 &#39;are&#39; 的相似度: 0.2203</p>
+<p>这下我们就能够很清楚的在散点图中看到不同词语之间的距离。</p>
+</div>
+<div class="section" id="llm-happy-extras-src1-s2"><h2>2.分词</h2>
+<p>分词是将输入文本拆分为单个标记（可以是单词、标点符号等）的过程，举个例子，我们可以把句子“Hello, world!”拆成一小块一小块的形式，如``<code>[&quot;Hello&quot;, &quot;,&quot;, &quot;world&quot;, &quot;!&quot;]</code>``，使计算机能够逐块处理语言，进一步转换为模型可处理的数值形式。</p>
+<p>我们可以从简单的分词方法入手，例如使用 Python 的正则表达式（re 库）按空白字符拆分文本，但这种方法可能导致标点符号与单词粘连（如 “Hello,” 中的逗号未分离）。</p>
+<p>为此，我们可以在代码当中修改正则表达式，在空白字符、逗号、句号等处进行拆分，使单词与标点符号成为独立列表项。</p>
+<p>同时，在处理的过程中需注意保留空白字符或移除冗余空白，例如处理 Python 代码时需保留缩进，而普通文本可移除。 值得注意的是：通常不将文本转为小写，因为大小写有助于模型区分专有名词、理解句子结构。 实现代码如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import re
+import tiktoken
+from collections import defaultdict
+
+class SimpleTokenizer:
+    &quot;&quot;&quot;简单分词器实现&quot;&quot;&quot;
+    def __init__(self, text=None):
+        self.vocab = {}
+        self.reverse_vocab = {}
+        self.vocab_size = 0
+        self.special_tokens = {
+            &#39;&lt;pad&gt;&#39;: 0,
+            &#39;&lt;unk&gt;&#39;: 1,
+            &#39;&lt;bos&gt;&#39;: 2,
+            &#39;&lt;eos&gt;&#39;: 3
+        }
+        if text:
+            self.build_vocab(text)
+
+    def tokenize(self, text):
+        &quot;&quot;&quot;将文本分割为标记列表&quot;&quot;&quot;
+        # 保留空白字符的分词
+        tokens = re.findall(r&#39;\S+|\s+&#39;, text)
+        return tokens
+    
+    def build_vocab(self, text):
+        &quot;&quot;&quot;构建词汇表&quot;&quot;&quot;
+        self.vocab = self.special_tokens.copy()
+        self.vocab_size = len(self.special_tokens)
+        tokens = self.tokenize(text)
+        token_counts = defaultdict(int)
+        for token in tokens:
+            token_counts[token] += 1
+        sorted_tokens = sorted(token_counts.items(), key=lambda x: (-x[1], x[0]))
+        for token, _ in sorted_tokens:
+            if token not in self.vocab:
+                self.vocab[token] = self.vocab_size
+                self.vocab_size += 1
+        self.reverse_vocab = {v: k for k, v in self.vocab.items()}
+    
+    def encode(self, text):
+        &quot;&quot;&quot;将文本转换为标记ID序列&quot;&quot;&quot;
+        tokens = self.tokenize(text)
+        return [self.vocab.get(token, self.vocab[&#39;&lt;unk&gt;&#39;]) for token in tokens]
+    
+    def decode(self, token_ids):
+        &quot;&quot;&quot;将标记ID序列转换回文本&quot;&quot;&quot;
+        tokens = []
+        for token_id in token_ids:
+            if token_id in self.reverse_vocab:
+                tokens.append(self.reverse_vocab[token_id])
+            else:
+                tokens.append(&#39;&lt;unk&gt;&#39;)
+        text = &#39;&#39;
+        prev_token = None
+        for token in tokens:
+            if prev_token and prev_token.isspace():
+                text += token
+            else:
+                text = text.rstrip() + token
+            prev_token = token
+            
+        return text
+
+
+class BPETokenizer:
+    &quot;&quot;&quot;基于字节对编码(BPE)的分词器&quot;&quot;&quot;
+    def __init__(self, model_name=&quot;gpt2&quot;):
+        &quot;&quot;&quot;
+        初始化BPE分词器
+        model_name: 模型名称，如&quot;gpt2&quot;或&quot;cl100k_base&quot;(OpenAI的text-embedding-ada-002使用)
+        &quot;&quot;&quot;
+        self.encoder = tiktoken.get_encoding(model_name)
+        self.vocab_size = self.encoder.n_vocab
+    
+    def tokenize(self, text):
+        &quot;&quot;&quot;将文本转换为BPE标记列表&quot;&quot;&quot;
+        token_ids = self.encoder.encode(text)
+        tokens = [self.encoder.decode_single_token_bytes(token_id) for token_id in token_ids]
+        return tokens
+    
+    def encode(self, text):
+        &quot;&quot;&quot;将文本转换为BPE标记ID序列&quot;&quot;&quot;
+        return self.encoder.encode(text)
+    
+    def decode(self, token_ids):
+        &quot;&quot;&quot;将BPE标记ID序列转换回文本&quot;&quot;&quot;
+        return self.encoder.decode(token_ids)
+
+if __name__ == &quot;__main__&quot;:
+    sample_text = &quot;Hello, how are you today? I hope you are doing well.&quot;
+    print(&quot;=== 简单分词器 ===&quot;)
+    simple_tokenizer = SimpleTokenizer(sample_text)
+    tokens = simple_tokenizer.tokenize(sample_text)
+    print(f&quot;分词结果: {tokens}&quot;)
+    encoded = simple_tokenizer.encode(sample_text)
+    print(f&quot;编码结果: {encoded}&quot;)
+    decoded = simple_tokenizer.decode(encoded)
+    print(f&quot;解码结果: {decoded}&quot;)
+    print(f&quot;词汇表大小: {simple_tokenizer.vocab_size}&quot;)
+    print(&quot;\n=== BPE分词器 (GPT-2) ===&quot;)
+    bpe_tokenizer = BPETokenizer(&quot;gpt2&quot;)
+    bpe_tokens = bpe_tokenizer.tokenize(sample_text)
+    print(f&quot;BPE分词结果: {bpe_tokens}&quot;)
+    bpe_encoded = bpe_tokenizer.encode(sample_text)
+    print(f&quot;BPE编码结果: {bpe_encoded}&quot;)
+    bpe_decoded = bpe_tokenizer.decode(bpe_encoded)
+    print(f&quot;BPE解码结果: {bpe_decoded}&quot;)
+    print(f&quot;BPE词汇表大小: {bpe_tokenizer.vocab_size}&quot;)    </code></pre></div>
+<p>=== 简单分词器 === 分词结果: [&#39;Hello,&#39;, &#39; &#39;, &#39;how&#39;, &#39; &#39;, &#39;are&#39;, &#39; &#39;, &#39;you&#39;, &#39; &#39;, &#39;today?&#39;, &#39; &#39;, &#39;I&#39;, &#39; &#39;, &#39;hope&#39;, &#39; &#39;, &#39;you&#39;, &#39; &#39;, &#39;are&#39;, &#39; &#39;, &#39;doing&#39;, &#39; &#39;, &#39;well.&#39;] 编码结果: [7, 4, 11, 4, 5, 4, 6, 4, 12, 4, 8, 4, 10, 4, 6, 4, 5, 4, 9, 4, 13] 解码结果: Hello, how are you today? I hope you are doing well. 词汇表大小: 14</p>
+<p>=== BPE分词器 (GPT-2) === BPE分词结果: [b&#39;Hello&#39;, b&#39;,&#39;, b&#39; how&#39;, b&#39; are&#39;, b&#39; you&#39;, b&#39; today&#39;, b&#39;?&#39;, b&#39; I&#39;, b&#39; hope&#39;, b&#39; you&#39;, b&#39; are&#39;, b&#39; doing&#39;, b&#39; well&#39;, b&#39;.&#39;] BPE编码结果: [15496, 11, 703, 389, 345, 1909, 30, 314, 2911, 345, 389, 1804, 880, 13] BPE解码结果: Hello, how are you today? I hope you are doing well. BPE词汇表大小: 50257</p>
+</div>
+<div class="section" id="llm-happy-extras-src1-s3"><h2>3.将标记转换为标记ID</h2>
+<p>将标记转换为标记 ID 是连接文本与数值向量的中间步骤，其核心是构建 “词汇表”—— 一个从唯一标记到唯一整数的映射（如图 2.6 所示）。词汇表的构建过程是：从分词后的文本中提取所有唯一标记，按字母顺序排序后，为每个标记分配一个整数 ID。例如，《判决》分词后得到 1130 个唯一标记，词汇表便会将这些标记分别映射到 0 至 1129 的整数。</p>
+<p>有了词汇表，我们就能通过 “编码” 将文本转换为标记 ID（例如 “Hello” 对应某个整数），也能通过 “解码” 将标记 ID 转回文本。这一过程可通过分词器类实现，例如 SimpleTokenizerV1 包含 encode 和 decode 方法：encode 先对文本分词，再用词汇表映射为 ID；decode 则将 ID 通过反向映射转回文本，并处理标点符号前的空格问题。</p>
+<p>但需注意，若文本中出现词汇表外的标记（如 “Hello” 未出现在《判决》中），编码时会报错，这说明训练集的规模和多样性对扩展词汇表至关重要，也引出了后续处理未知词汇的需求。</p>
+<p>整体实现代码如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import re
+from collections import Counter
+from typing import List, Dict, Tuple, Optional, Set
+class Tokenizer:
+    &quot;&quot;&quot;将文本转换为标记并映射到ID的分词器&quot;&quot;&quot;
+    
+    def __init__(self, special_tokens: Optional[Dict[str, int]] = None):
+        &quot;&quot;&quot;
+        初始化分词器
+        
+        Args:
+            special_tokens: 特殊标记及其ID的字典，默认为None
+        &quot;&quot;&quot;
+        self.vocab: Dict[str, int] = {}  # 词汇表: 标记 -&gt; ID
+        self.reverse_vocab: Dict[int, str] = {}  # 反向词汇表: ID -&gt; 标记
+        self.special_tokens = special_tokens or {
+            &quot;&lt;pad&gt;&quot;: 0,  # 填充标记
+            &quot;&lt;unk&gt;&quot;: 1,  # 未知标记
+            &quot;&lt;bos&gt;&quot;: 2,  # 序列开始标记
+            &quot;&lt;eos&gt;&quot;: 3   # 序列结束标记
+        }
+        self.vocab_size: int = len(self.special_tokens)  # 词汇表大小
+        # 初始化词汇表，添加特殊标记
+        for token, idx in self.special_tokens.items():
+            self.vocab[token] = idx
+            self.reverse_vocab[idx] = token
+    
+    def build_vocab(self, texts: List[str], min_freq: int = 1) -&gt; None:
+        &quot;&quot;&quot;
+        从文本构建词汇表
+        
+        Args:
+            texts: 文本列表
+            min_freq: 最小词频，低于此频率的词将被忽略
+        &quot;&quot;&quot;
+        # 统计词频
+        token_counts = Counter()
+        for text in texts:
+            tokens = self.tokenize(text)
+            token_counts.update(tokens)
+        # 按频率排序，频率相同则按字母顺序
+        sorted_tokens = sorted(
+            [(token, count) for token, count in token_counts.items() if count &gt;= min_freq],
+            key=lambda x: (-x[1], x[0])  
+        )
+        # 为每个标记分配ID
+        for token, _ in sorted_tokens:
+            if token not in self.vocab:
+                self.vocab[token] = self.vocab_size
+                self.reverse_vocab[self.vocab_size] = token
+                self.vocab_size += 1
+    
+    def tokenize(self, text: str) -&gt; List[str]:
+        &quot;&quot;&quot;
+        将文本分割为标记列表
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            标记列表
+        &quot;&quot;&quot;
+        tokens = re.findall(r&#39;\w+|[^\w\s]|\s+&#39;, text)
+        return tokens
+    
+    def encode(self, text: str, add_special_tokens: bool = False) -&gt; List[int]:
+        &quot;&quot;&quot;
+        将文本转换为标记ID列表
+        
+        Args:
+            text: 输入文本
+            add_special_tokens: 是否添加特殊标记
+            
+        Returns:
+            标记ID列表
+        &quot;&quot;&quot;
+        tokens = self.tokenize(text)
+        encoded = [self.vocab.get(token, self.vocab[&quot;&lt;unk&gt;&quot;]) for token in tokens]
+        
+        if add_special_tokens:
+            encoded = [self.vocab[&quot;&lt;bos&gt;&quot;]] + encoded + [self.vocab[&quot;&lt;eos&gt;&quot;]]
+            
+        return encoded
+    
+    def decode(self, ids: List[int], remove_special_tokens: bool = False) -&gt; str:
+        &quot;&quot;&quot;
+        将标记ID列表转换回文本
+        Args:
+            ids: 标记ID列表
+            remove_special_tokens: 是否移除特殊标记
+        Returns:
+            文本
+        &quot;&quot;&quot;
+        tokens = []
+        for idx in ids:
+            if idx in self.reverse_vocab:
+                token = self.reverse_vocab[idx]
+                if remove_special_tokens and token in self.special_tokens:
+                    continue
+                tokens.append(token)
+            else:
+                tokens.append(&quot;&lt;unk&gt;&quot;)
+        text = &#39;&#39;.join(tokens)
+        return re.sub(r&#39;\s+&#39;, &#39; &#39;, text).strip()
+
+def test_tokenizer():
+    &quot;&quot;&quot;测试Tokenizer类的功能&quot;&quot;&quot;
+    print(&quot;===== 测试 Tokenizer =====&quot;)
+    texts = [
+        &quot;Hello, how are you today?&quot;,
+        &quot;I hope you are doing well.&quot;,
+        &quot;This is a test of the tokenizer.&quot;
+    ]
+
+    tokenizer = Tokenizer()
+    tokenizer.build_vocab(texts)
+    print(f&quot;词汇表大小: {tokenizer.vocab_size}&quot;)
+    print(f&quot;前10个词汇项: {list(tokenizer.vocab.items())[:10]}&quot;)
+    sample_text = &quot;Hello, this is a test!&quot;
+    tokens = tokenizer.tokenize(sample_text)
+    print(f&quot;\n分词结果: {tokens}&quot;)
+    encoded = tokenizer.encode(sample_text)
+    print(f&quot;编码结果: {encoded}&quot;)
+    encoded_with_special = tokenizer.encode(sample_text, add_special_tokens=True)
+    print(f&quot;带特殊标记的编码结果: {encoded_with_special}&quot;)
+    decoded = tokenizer.decode(encoded)
+    print(f&quot;解码结果: {decoded}&quot;)
+    decoded_with_special = tokenizer.decode(encoded_with_special, remove_special_tokens=True)
+    print(f&quot;移除特殊标记的解码结果: {decoded_with_special}&quot;)
+    unknown_text = &quot;This is a unicorn 🦄 test.&quot;
+    encoded_unknown = tokenizer.encode(unknown_text)
+    decoded_unknown = tokenizer.decode(encoded_unknown)
+    print(f&quot;\n包含未知词汇的文本: {unknown_text}&quot;)
+    print(f&quot;编码结果: {encoded_unknown}&quot;)
+    print(f&quot;解码结果: {decoded_unknown}&quot;)
+
+if __name__ == &quot;__main__&quot;:
+    test_tokenizer()    </code></pre></div>
+<p>===== 测试 Tokenizer ===== 词汇表大小: 24 前10个词汇项: [(&#39;&lt;pad&gt;&#39;, 0), (&#39;&lt;unk&gt;&#39;, 1), (&#39;&lt;bos&gt;&#39;, 2), (&#39;&lt;eos&gt;&#39;, 3), (&#39; &#39;, 4), (&#39;.&#39;, 5), (&#39;are&#39;, 6), (&#39;you&#39;, 7), (&#39;,&#39;, 8), (&#39;?&#39;, 9)]</p>
+<p>分词结果: [&#39;Hello&#39;, &#39;,&#39;, &#39; &#39;, &#39;this&#39;, &#39; &#39;, &#39;is&#39;, &#39; &#39;, &#39;a&#39;, &#39; &#39;, &#39;test&#39;, &#39;!&#39;] 编码结果: [10, 8, 4, 1, 4, 17, 4, 13, 4, 19, 1] 带特殊标记的编码结果: [2, 10, 8, 4, 1, 4, 17, 4, 13, 4, 19, 1, 3] 解码结果: Hello, &lt;unk&gt; is a test&lt;unk&gt; 移除特殊标记的解码结果: Hello, is a test</p>
+<p>包含未知词汇的文本: This is a unicorn 🦄 test. 编码结果: [12, 4, 17, 4, 13, 4, 1, 4, 1, 4, 19, 5] 解码结果: This is a &lt;unk&gt; &lt;unk&gt; test.</p>
+</div>
+<div class="section" id="llm-happy-extras-src1-s4"><h2>4.添加特殊上下文标记</h2>
+<p>为解决未知词汇问题并增强模型对上下文的理解，需引入特殊标记。常见的特殊标记包括：&lt;|unk|&gt;（表示未知词汇）、（分隔不同文本来源）、[BOS]（序列开始）、[EOS]（序列结束）、[PAD]（填充短文本至统一长度）等。</p>
+<p>例如，修改词汇表加入 &lt;|unk|&gt; 和后，分词器（如 SimpleTokenizerV2）在遇到未知词时会自动替换为 &lt;|unk|&gt;，并在不同文本间插入作为分隔。这一调整使模型能处理未见过的词汇，并区分独立文本来源。需注意，GPT 模型通常仅使用作为分隔符和填充符，而不依赖 &lt;|unk|&gt;，因为其采用的字节对编码（BPE）分词器能通过子词分解处理未知词，这也是后续将介绍的更高效方法。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import re
+from typing import List, Dict, Optional, Set
+
+class Tokenizer:
+    &quot;&quot;&quot;带有特殊上下文标记的分词器&quot;&quot;&quot;
+    def __init__(self, special_tokens: Optional[Dict[str, int]] = None):
+        &quot;&quot;&quot;
+        初始化分词器
+        
+        Args:
+            special_tokens: 特殊标记及其ID的字典，默认为None
+        &quot;&quot;&quot;
+        # 设置默认特殊标记
+        self.default_special_tokens = {
+            &quot;&lt;pad&gt;&quot;: 0,  # 填充标记
+            &quot;&lt;unk&gt;&quot;: 1,  # 未知标记
+            &quot;&lt;bos&gt;&quot;: 2,  # 序列开始标记
+            &quot;&lt;eos&gt;&quot;: 3,  # 序列结束标记
+            &quot;&lt;sep&gt;&quot;: 4,  # 分隔标记
+            &quot;&lt;cls&gt;&quot;: 5,  # 分类标记
+        }
+        # 合并用户提供的特殊标记
+        self.special_tokens = {**self.default_special_tokens, **(special_tokens or {})}
+        # 初始化词汇表
+        self.vocab: Dict[str, int] = {}
+        self.reverse_vocab: Dict[int, str] = {}
+        self.vocab_size: int = len(self.special_tokens)
+        # 添加特殊标记到词汇表
+        for token, idx in self.special_tokens.items():
+            self.vocab[token] = idx
+            self.reverse_vocab[idx] = token
+    
+    def build_vocab(self, texts: List[str], min_freq: int = 1) -&gt; None:
+        &quot;&quot;&quot;
+        从文本构建词汇表
+        
+        Args:
+            texts: 文本列表
+            min_freq: 最小词频，低于此频率的词将被忽略
+        &quot;&quot;&quot;
+        # 统计词频
+        token_counts = {}
+        for text in texts:
+            tokens = self.tokenize(text)
+            for token in tokens:
+                token_counts[token] = token_counts.get(token, 0) + 1
+        
+        # 按频率排序，频率相同则按字母顺序
+        sorted_tokens = sorted(
+            [(token, count) for token, count in token_counts.items() if count &gt;= min_freq],
+            key=lambda x: (-x[1], x[0])  # 按频率降序，字母升序
+        )
+        
+        # 为每个标记分配ID
+        for token, _ in sorted_tokens:
+            if token not in self.vocab:
+                self.vocab[token] = self.vocab_size
+                self.reverse_vocab[self.vocab_size] = token
+                self.vocab_size += 1
+    
+    def tokenize(self, text: str) -&gt; List[str]:
+        &quot;&quot;&quot;
+        将文本分割为标记列表
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            标记列表
+        &quot;&quot;&quot;
+        # 简单的分词：按非字母数字字符分割，保留空格和标点符号
+        tokens = re.findall(r&#39;\w+|[^\w\s]|\s+&#39;, text)
+        return tokens
+    
+    def encode(self, text: str, add_special_tokens: bool = False) -&gt; List[int]:
+        &quot;&quot;&quot;
+        将文本转换为标记ID列表
+        
+        Args:
+            text: 输入文本
+            add_special_tokens: 是否添加特殊标记
+            
+        Returns:
+            标记ID列表
+        &quot;&quot;&quot;
+        tokens = self.tokenize(text)
+        encoded = [self.vocab.get(token, self.vocab[&quot;&lt;unk&gt;&quot;]) for token in tokens]
+        if add_special_tokens:
+            encoded = [self.vocab[&quot;&lt;bos&gt;&quot;]] + encoded + [self.vocab[&quot;&lt;eos&gt;&quot;]]
+        return encoded
+    def decode(self, ids: List[int], remove_special_tokens: bool = False) -&gt; str:
+        &quot;&quot;&quot;
+        将标记ID列表转换回文本
+        Args:
+            ids: 标记ID列表
+            remove_special_tokens: 是否移除特殊标记
+        Returns:
+            文本
+        &quot;&quot;&quot;
+        tokens = []
+        for idx in ids:
+            if idx in self.reverse_vocab:
+                token = self.reverse_vocab[idx]
+                if remove_special_tokens and token in self.special_tokens:
+                    continue
+                tokens.append(token)
+            else:
+                tokens.append(&quot;&lt;unk&gt;&quot;)
+        text = &#39;&#39;.join(tokens)
+        return re.sub(r&#39;\s+&#39;, &#39; &#39;, text).strip()
+    
+    def add_special_token(self, token: str) -&gt; int:
+        &quot;&quot;&quot;
+        添加新的特殊标记
+        Args:
+            token: 特殊标记字符串
+        Returns:
+            新标记的ID
+        &quot;&quot;&quot;
+        if token in self.vocab:
+            return self.vocab[token]
+        new_id = self.vocab_size
+        self.vocab[token] = new_id
+        self.reverse_vocab[new_id] = token
+        self.vocab_size += 1
+        return new_id
+    
+def test_special_tokens():
+    &quot;&quot;&quot;测试特殊标记的功能&quot;&quot;&quot;
+    print(&quot;===== 测试特殊标记 =====&quot;)
+    texts = [
+        &quot;Hello, how are you today?&quot;,
+        &quot;I hope you are doing well.&quot;,
+        &quot;This is a test of the tokenizer.&quot;
+    ]
+    tokenizer = Tokenizer()
+    tokenizer.build_vocab(texts)
+    sample_text = &quot;Hello, this is a test!&quot;
+    encoded = tokenizer.encode(sample_text, add_special_tokens=True)
+    decoded = tokenizer.decode(encoded, remove_special_tokens=True)
+    
+    print(f&quot;原始文本: {sample_text}&quot;)
+    print(f&quot;编码结果: {encoded}&quot;)
+    print(f&quot;解码结果: {decoded}&quot;)
+    print(&quot;\n--- 测试特殊标记 ---&quot;)
+    print(f&quot;特殊标记: {tokenizer.special_tokens}&quot;)
+    # 测试&lt;bos&gt;和&lt;eos&gt;
+    encoded_with_bos_eos = tokenizer.encode(sample_text, add_special_tokens=True)
+    print(f&quot;带&lt;bos&gt;和&lt;eos&gt;的编码: {encoded_with_bos_eos}&quot;)
+    # 测试&lt;SEP&gt;标记 - 连接两个句子
+    print(&quot;\n--- 测试&lt;SEP&gt;标记 ---&quot;)
+    sentence1 = &quot;What is your name?&quot;
+    sentence2 = &quot;My name is Doubao.&quot;
+    encoded1 = tokenizer.encode(sentence1)
+    encoded2 = tokenizer.encode(sentence2)
+    # 添加&lt;SEP&gt;标记
+    encoded_combined = [tokenizer.vocab[&quot;&lt;bos&gt;&quot;]] + \
+                       encoded1 + \
+                       [tokenizer.vocab[&quot;&lt;sep&gt;&quot;]] + \
+                       encoded2 + \
+                       [tokenizer.vocab[&quot;&lt;eos&gt;&quot;]]
+    decoded_combined = tokenizer.decode(encoded_combined, remove_special_tokens=True)
+    print(f&quot;句子1: {sentence1}&quot;)
+    print(f&quot;句子2: {sentence2}&quot;)
+    print(f&quot;合并后的编码: {encoded_combined}&quot;)
+    print(f&quot;合并后的解码: {decoded_combined}&quot;)
+    # 测试添加新的特殊标记
+    print(&quot;\n--- 测试添加新的特殊标记 ---&quot;)
+    new_token = &quot;&lt;mask&gt;&quot;
+    new_token_id = tokenizer.add_special_token(new_token)
+    print(f&quot;添加新特殊标记: {new_token} (ID: {new_token_id})&quot;)
+    
+    # 测试使用新的特殊标记
+    masked_text = &quot;This is a &lt;mask&gt; sentence.&quot;
+    encoded_masked = tokenizer.encode(masked_text, add_special_tokens=True)
+    decoded_masked = tokenizer.decode(encoded_masked, remove_special_tokens=False)
+    
+    print(f&quot;带&lt;mask&gt;的文本: {masked_text}&quot;)
+    print(f&quot;编码结果: {encoded_masked}&quot;)
+    print(f&quot;解码结果: {decoded_masked}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    test_special_tokens()    </code></pre></div>
+<p>===== 测试特殊标记 ===== 原始文本: Hello, this is a test! 编码结果: [2, 12, 10, 6, 1, 6, 19, 6, 15, 6, 21, 1, 3] 解码结果: Hello, is a test</p>
+<hr>
+<p>特殊标记: {&#39;&lt;pad&gt;&#39;: 0, &#39;&lt;unk&gt;&#39;: 1, &#39;&lt;bos&gt;&#39;: 2, &#39;&lt;eos&gt;&#39;: 3, &#39;&lt;sep&gt;&#39;: 4, &#39;&lt;cls&gt;&#39;: 5} 带&lt;bos&gt;和&lt;eos&gt;的编码: [2, 12, 10, 6, 1, 6, 19, 6, 15, 6, 21, 1, 3]</p>
+<hr>
+<p>句子1: What is your name? 句子2: My name is Doubao. 合并后的编码: [2, 1, 6, 19, 6, 1, 6, 1, 11, 4, 1, 6, 1, 6, 19, 6, 1, 7, 3] 合并后的解码: is ? is .</p>
+<hr>
+<p>添加新特殊标记: &lt;mask&gt; (ID: 26) 带&lt;mask&gt;的文本: This is a &lt;mask&gt; sentence. 编码结果: [2, 14, 6, 19, 6, 15, 6, 1, 1, 1, 6, 1, 7, 3] 解码结果: &lt;bos&gt;This is a &lt;unk&gt;&lt;unk&gt;&lt;unk&gt; &lt;unk&gt;.&lt;eos&gt;</p>
+</div>
+<div class="section" id="llm-happy-extras-src1-s5"><h2>5.字节对编码</h2>
+<p>字节对编码（BPE）是一种高级分词方法，被 GPT-2、GPT-3 等主流 LLMs 采用，其核心优势是能处理未知词汇 —— 将未见过的单词分解为子词单元（如图 2.11 所示）。例如，“someunknownPlace” 可拆分为已知的子词标记，无需依赖 &lt;|unk|&gt;。</p>
+<p>BPE 的实现可借助 tiktoken 库（OpenAI 开源），其基于 Rust 实现，高效且兼容 GPT 模型的分词逻辑。使用时，先通过 tiktoken.get_encoding (&quot;gpt2&quot;) 实例化分词器，再用 encode 方法将文本转换为标记 ID，decode 方法则可还原文本。例如，“Hello, do you like tea?” 经 BPE 编码后，会生成一系列整数 ID，解码后能准确还原原始文本，即使包含 “someunknownPlace” 这类未知词，也能通过子词拆分正确处理。</p>
+<p>BPE 的词汇表规模固定（如 GPT-2 为 50257），通过迭代合并高频字符或子词构建，既控制了词汇表大小，又能覆盖几乎所有可能的文本，是平衡效率与泛化能力的理想选择。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import re
+import tiktoken
+from collections import defaultdict, Counter
+from typing import List, Dict, Tuple, Optional, Set, Union
+
+class SimpleBPETokenizer:
+    &quot;&quot;&quot;简单实现的BPE分词器&quot;&quot;&quot;
+    
+    def __init__(self, vocab_size: int = 100):
+        &quot;&quot;&quot;
+        初始化BPE分词器
+        
+        Args:
+            vocab_size: 目标词汇表大小
+        &quot;&quot;&quot;
+        self.vocab_size = vocab_size
+        self.vocab = {}  # 词汇表: 标记 -&gt; ID
+        self.reverse_vocab = {}  # 反向词汇表: ID -&gt; 标记
+        self.bpe_ranks = {}  # BPE合并规则的优先级
+        self.special_tokens = {
+            &quot;&lt;pad&gt;&quot;: 0,
+            &quot;&lt;unk&gt;&quot;: 1,
+            &quot;&lt;bos&gt;&quot;: 2,
+            &quot;&lt;eos&gt;&quot;: 3
+        }
+        self.vocab_size_actual = len(self.special_tokens)
+        
+        # 初始化词汇表，添加特殊标记
+        for token, idx in self.special_tokens.items():
+            self.vocab[token] = idx
+            self.reverse_vocab[idx] = token
+    
+    def _get_stats(self, pairs: Dict[Tuple[str, str], int]) -&gt; Dict[Tuple[str, str], int]:
+        &quot;&quot;&quot;计算所有相邻字节对的频率&quot;&quot;&quot;
+        stats = defaultdict(int)
+        for word, freq in pairs.items():
+            symbols = word.split()
+            for i in range(len(symbols) - 1):
+                stats[symbols[i], symbols[i + 1]] += freq
+        return stats
+    
+    def _merge_vocab(self, pair: Tuple[str, str], v_in: Dict[str, int]) -&gt; Dict[str, int]:
+        &quot;&quot;&quot;合并最频繁的字节对&quot;&quot;&quot;
+        v_out = {}
+        bigram = re.escape(&#39; &#39;.join(pair))
+        p = re.compile(r&#39;(?&lt;!\S)&#39; + bigram + r&#39;(?!\S)&#39;)
+        for word in v_in:
+            w_out = p.sub(&#39;&#39;.join(pair), word)
+            v_out[w_out] = v_in[word]
+        return v_out
+    
+    def _word_to_pairs(self, word: str) -&gt; Set[Tuple[str, str]]:
+        &quot;&quot;&quot;将单词拆分为相邻字节对&quot;&quot;&quot;
+        symbols = word.split()
+        pairs = set()
+        if len(symbols) &lt; 2:
+            return pairs
+        for i in range(len(symbols) - 1):
+            pairs.add((symbols[i], symbols[i + 1]))
+        return pairs
+    
+    def build_vocab(self, texts: List[str]) -&gt; None:
+        &quot;&quot;&quot;
+        从文本构建BPE词汇表
+        
+        Args:
+            texts: 文本列表
+        &quot;&quot;&quot;
+        # 初始化词汇表，包含所有单个字符
+        token_counts = Counter()
+        for text in texts:
+            # 将文本拆分为字符，用空格分隔
+            words = [&#39; &#39;.join(list(text))]
+            for word in words:
+                token_counts[word] += 1
+        
+        # 统计初始的字符词汇表
+        chars = set()
+        for text in texts:
+            chars.update(text)
+        
+        # 添加字符到词汇表
+        for char in sorted(chars):
+            if char not in self.vocab:
+                self.vocab[char] = self.vocab_size_actual
+                self.reverse_vocab[self.vocab_size_actual] = char
+                self.vocab_size_actual += 1
+        
+        # 开始BPE合并过程
+        num_merges = self.vocab_size - self.vocab_size_actual
+        if num_merges &lt;= 0:
+            return
+        
+        pairs = token_counts.copy()
+        for i in range(num_merges):
+            # 计算所有相邻字节对的频率
+            stats = self._get_stats(pairs)
+            if not stats:
+                break
+            
+            # 选择最频繁的字节对
+            best = max(stats, key=stats.get)
+            
+            # 记录合并规则的优先级
+            self.bpe_ranks[best] = i
+            
+            # 合并词汇表中的字节对
+            pairs = self._merge_vocab(best, pairs)
+            
+            # 将新合并的标记添加到词汇表
+            new_token = &#39;&#39;.join(best)
+            if new_token not in self.vocab:
+                self.vocab[new_token] = self.vocab_size_actual
+                self.reverse_vocab[self.vocab_size_actual] = new_token
+                self.vocab_size_actual += 1
+    
+    def _get_pairs(self, word: List[str]) -&gt; Set[Tuple[str, str]]:
+        &quot;&quot;&quot;获取单词中所有相邻标记对&quot;&quot;&quot;
+        pairs = set()
+        prev_char = word[0]
+        for char in word[1:]:
+            pairs.add((prev_char, char))
+            prev_char = char
+        return pairs
+    
+    def bpe(self, token: str) -&gt; List[str]:
+        &quot;&quot;&quot;
+        对单个标记应用BPE算法
+        
+        Args:
+            token: 输入标记
+            
+        Returns:
+            BPE分词后的标记列表
+        &quot;&quot;&quot;
+        if token in self.special_tokens:
+            return [token]
+        
+        word = list(token)
+        if len(word) == 0:
+            return []
+        if len(word) == 1:
+            return [word[0]]
+        
+        pairs = self._get_pairs(word)
+        
+        while True:
+            # 找到优先级最高的字节对
+            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float(&#39;inf&#39;)))
+            if bigram not in self.bpe_ranks:
+                break
+            
+            first, second = bigram
+            new_word = []
+            i = 0
+            while i &lt; len(word):
+                try:
+                    j = word.index(first, i)
+                    new_word.extend(word[i:j])
+                    i = j
+                except:
+                    new_word.extend(word[i:])
+                    break
+                
+                if i &lt; len(word) - 1 and word[i + 1] == second:
+                    new_word.append(first + second)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            
+            word = new_word
+            if len(word) == 1:
+                break
+            else:
+                pairs = self._get_pairs(word)
+        
+        return word
+    
+    def tokenize(self, text: str) -&gt; List[str]:
+        &quot;&quot;&quot;
+        将文本分词为BPE标记
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            BPE标记列表
+        &quot;&quot;&quot;
+        tokens = []
+        for token in text.split():
+            if token in self.special_tokens:
+                tokens.append(token)
+            else:
+                tokens.extend(self.bpe(token))
+        return tokens
+    
+    def encode(self, text: str, add_special_tokens: bool = False) -&gt; List[int]:
+        &quot;&quot;&quot;
+        将文本编码为BPE标记ID列表
+        
+        Args:
+            text: 输入文本
+            add_special_tokens: 是否添加特殊标记
+            
+        Returns:
+            BPE标记ID列表
+        &quot;&quot;&quot;
+        tokens = self.tokenize(text)
+        encoded = [self.vocab.get(token, self.vocab[&quot;&lt;unk&gt;&quot;]) for token in tokens]
+        
+        if add_special_tokens:
+            encoded = [self.vocab[&quot;&lt;bos&gt;&quot;]] + encoded + [self.vocab[&quot;&lt;eos&gt;&quot;]]
+            
+        return encoded
+    
+    def decode(self, ids: List[int], remove_special_tokens: bool = False) -&gt; str:
+        &quot;&quot;&quot;
+        将BPE标记ID列表解码为文本
+        
+        Args:
+            ids: BPE标记ID列表
+            remove_special_tokens: 是否移除特殊标记
+            
+        Returns:
+            解码后的文本
+        &quot;&quot;&quot;
+        tokens = []
+        for idx in ids:
+            if idx in self.reverse_vocab:
+                token = self.reverse_vocab[idx]
+                if remove_special_tokens and token in self.special_tokens:
+                    continue
+                tokens.append(token)
+            else:
+                tokens.append(&quot;&lt;unk&gt;&quot;)
+        
+        # 简单的后处理：合并标记
+        text = &#39;&#39;.join(tokens)
+        return text
+
+
+# 测试代码
+def test_simple_bpe_tokenizer():
+    &quot;&quot;&quot;测试简单实现的BPE分词器&quot;&quot;&quot;
+    print(&quot;===== 测试简单BPE分词器 =====&quot;)
+    
+    # 示例文本
+    texts = [
+        &quot;Hello, how are you today?&quot;,
+        &quot;I hope you are doing well.&quot;,
+        &quot;This is a test of the BPE tokenizer.&quot;
+    ]
+    
+    # 初始化BPE分词器
+    tokenizer = SimpleBPETokenizer(vocab_size=50)
+    
+    # 构建词汇表
+    tokenizer.build_vocab(texts)
+    
+    print(f&quot;词汇表大小: {tokenizer.vocab_size_actual}&quot;)
+    print(f&quot;前10个词汇项: {list(tokenizer.vocab.items())[:10]}&quot;)
+    
+    # 测试分词
+    sample_text = &quot;Hello, this is a test!&quot;
+    tokens = tokenizer.tokenize(sample_text)
+    print(f&quot;\n分词结果: {tokens}&quot;)
+    
+    # 测试编码
+    encoded = tokenizer.encode(sample_text, add_special_tokens=True)
+    print(f&quot;编码结果: {encoded}&quot;)
+    
+    # 测试解码
+    decoded = tokenizer.decode(encoded, remove_special_tokens=True)
+    print(f&quot;解码结果: {decoded}&quot;)
+    
+    # 测试包含未知词汇的文本
+    unknown_text = &quot;This is a unicorn 🦄 test.&quot;
+    encoded_unknown = tokenizer.encode(unknown_text)
+    decoded_unknown = tokenizer.decode(encoded_unknown)
+    print(f&quot;\n包含未知词汇的文本: {unknown_text}&quot;)
+    print(f&quot;编码结果: {encoded_unknown}&quot;)
+    print(f&quot;解码结果: {decoded_unknown}&quot;)
+    
+    print(&quot;\n所有测试完成!&quot;)
+
+
+def test_tiktoken_bpe():
+    &quot;&quot;&quot;测试tiktoken库的BPE分词器&quot;&quot;&quot;
+    print(&quot;\n===== 测试tiktoken BPE分词器 =====&quot;)
+    
+    # 初始化tiktoken BPE分词器
+    try:
+        tokenizer = tiktoken.get_encoding(&quot;gpt2&quot;)
+    except KeyError:
+        # 如果没有安装gpt2编码，尝试使用cl100k_base (用于text-embedding-ada-002)
+        tokenizer = tiktoken.get_encoding(&quot;cl100k_base&quot;)
+    
+    print(f&quot;词汇表大小: {tokenizer.n_vocab}&quot;)
+    
+    # 测试分词
+    sample_text = &quot;Hello, this is a test!&quot;
+    tokens = tokenizer.encode(sample_text)
+    print(f&quot;\n编码结果 (ID): {tokens}&quot;)
+    
+    # 转换ID为字节
+    token_bytes = [tokenizer.decode_single_token_bytes(token) for token in tokens]
+    print(f&quot;编码结果 (字节): {token_bytes}&quot;)
+    
+    # 测试解码
+    decoded = tokenizer.decode(tokens)
+    print(f&quot;解码结果: {decoded}&quot;)
+    
+    # 测试包含未知词汇的文本
+    unknown_text = &quot;This is a unicorn 🦄 test.&quot;
+    encoded_unknown = tokenizer.encode(unknown_text)
+    decoded_unknown = tokenizer.decode(encoded_unknown)
+    print(f&quot;\n包含未知词汇的文本: {unknown_text}&quot;)
+    print(f&quot;编码结果: {encoded_unknown}&quot;)
+    print(f&quot;解码结果: {decoded_unknown}&quot;)
+    
+    # 计算文本的token数量
+    print(f&quot;\n文本 &#39;{sample_text}&#39; 的token数量: {len(tokens)}&quot;)
+
+if __name__ == &quot;__main__&quot;:
+    test_simple_bpe_tokenizer()
+    test_tiktoken_bpe()    </code></pre></div>
+<p>===== 测试简单BPE分词器 ===== 词汇表大小: 46 前10个词汇项: [(&#39;&lt;pad&gt;&#39;, 0), (&#39;&lt;unk&gt;&#39;, 1), (&#39;&lt;bos&gt;&#39;, 2), (&#39;&lt;eos&gt;&#39;, 3), (&#39; &#39;, 4), (&#39;,&#39;, 5), (&#39;.&#39;, 6), (&#39;?&#39;, 7), (&#39;B&#39;, 8), (&#39;E&#39;, 9)]</p>
+<p>分词结果: [&#39;Hello,&#39;, &#39;t&#39;, &#39;h&#39;, &#39;is&#39;, &#39;is&#39;, &#39;a&#39;, &#39;t&#39;, &#39;e&#39;, &#39;s&#39;, &#39;t&#39;, &#39;!&#39;] 编码结果: [2, 44, 28, 19, 41, 41, 14, 28, 16, 27, 28, 1, 3] 解码结果: Hello,thisisatest</p>
+<p>包含未知词汇的文本: This is a unicorn 🦄 test. 编码结果: [13, 19, 41, 41, 14, 29, 23, 20, 1, 24, 26, 23, 1, 28, 16, 27, 28, 6] 解码结果: Thisisauni&lt;unk&gt;orn&lt;unk&gt;test.</p>
+<p>所有测试完成!</p>
+<p>===== 测试tiktoken BPE分词器 ===== 词汇表大小: 50257</p>
+<p>编码结果 (ID): [15496, 11, 428, 318, 257, 1332, 0] 编码结果 (字节): [b&#39;Hello&#39;, b&#39;,&#39;, b&#39; this&#39;, b&#39; is&#39;, b&#39; a&#39;, b&#39; test&#39;, b&#39;!&#39;] 解码结果: Hello, this is a test!</p>
+<p>包含未知词汇的文本: This is a unicorn 🦄 test. 编码结果: [1212, 318, 257, 44986, 12520, 99, 226, 1332, 13] 解码结果: This is a unicorn 🦄 test.</p>
+<p>文本 &#39;Hello, this is a test!&#39; 的token数量: 7</p>
+</div>
+<div class="section" id="llm-happy-extras-src1-s6"><h2>6.使用滑动窗口进行数据采样</h2>
+<p>LLMs 通过 “下一个词预测” 任务预训练，即给定输入文本块，预测紧随其后的下一个词（如图 2.12 所示）。为生成训练所需的输入 - 目标对，需采用 “滑动窗口” 方法：在分词后的文本上滑动固定大小的窗口，窗口内的文本作为输入，窗口右侧紧邻的词作为目标（输入右移一位即为目标）。</p>
+<p>例如，若窗口大小（上下文长度）为 4，输入为 [标记 1, 标记 2, 标记 3, 标记 4]，则目标为 [标记 2, 标记 3, 标记 4, 标记 5]。为高效生成批量样本，可结合 PyTorch 的 Dataset 和 DataLoader：Dataset 负责按窗口滑动生成输入 - 目标对，DataLoader 则将这些对打包为批次（如图 2.13 所示），支持设置批次大小、步长（窗口移动距离）等参数。</p>
+<p>步长决定样本重叠程度：步长为 1 时，相邻样本高度重叠；步长等于窗口大小时，样本无重叠。合理设置步长可平衡数据利用率与过拟合风险，最终生成的输入 - 目标对以张量形式输入模型，为训练提供数据支持。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import torch
+from torch.utils.data import Dataset, DataLoader
+from typing import List, Tuple, Optional
+
+class TextWindowDataset(Dataset):
+    &quot;&quot;&quot;使用滑动窗口对文本进行采样的数据集&quot;&quot;&quot;
+    
+    def __init__(self, 
+                 text: List[int], 
+                 context_length: int, 
+                 stride: int = 1,
+                 pad_id: int = 0):
+        &quot;&quot;&quot;
+        初始化文本窗口数据集
+        
+        Args:
+            text: 已编码的文本（整数列表）
+            context_length: 上下文长度（窗口大小）
+            stride: 滑动窗口的步长，默认为1
+            pad_id: 填充标记的ID
+        &quot;&quot;&quot;
+        self.text = text
+        self.context_length = context_length
+        self.stride = stride
+        self.pad_id = pad_id
+        
+        # 计算有效样本数量
+        self.num_samples = max(0, (len(text) - context_length) // stride + 1)
+        
+    def __len__(self) -&gt; int:
+        &quot;&quot;&quot;返回数据集的样本数量&quot;&quot;&quot;
+        return self.num_samples
+    
+    def __getitem__(self, idx: int) -&gt; Tuple[torch.Tensor, torch.Tensor]:
+        &quot;&quot;&quot;
+        获取单个样本
+        
+        Args:
+            idx: 样本索引
+            
+        Returns:
+            元组(inputs, targets)，其中inputs是输入序列，targets是目标序列
+        &quot;&quot;&quot;
+        # 计算窗口起始位置
+        start = idx * self.stride
+        
+        # 确保窗口不超出文本长度
+        end = start + self.context_length
+        if end &gt; len(self.text):
+            # 截取最后可能的有效窗口
+            end = len(self.text)
+            start = end - self.context_length
+        
+        # 提取输入序列和目标序列
+        inputs = self.text[start:end]
+        targets = self.text[start+1:end+1]  # 目标是输入的下一个标记
+        
+        # 如果目标序列长度不足，用pad_id填充
+        if len(targets) &lt; self.context_length:
+            targets = targets + [self.pad_id] * (self.context_length - len(targets))
+        
+        # 转换为张量
+        inputs = torch.tensor(inputs, dtype=torch.long)
+        targets = torch.tensor(targets, dtype=torch.long)
+        
+        return inputs, targets
+
+
+def create_data_loader(text: List[int], 
+                       context_length: int, 
+                       batch_size: int, 
+                       stride: int = 1,
+                       shuffle: bool = False) -&gt; DataLoader:
+    &quot;&quot;&quot;
+    创建文本窗口数据加载器
+    
+    Args:
+        text: 已编码的文本（整数列表）
+        context_length: 上下文长度
+        batch_size: 批次大小
+        stride: 滑动窗口步长
+        shuffle: 是否打乱数据
+        
+    Returns:
+        数据加载器
+    &quot;&quot;&quot;
+    dataset = TextWindowDataset(
+        text=text,
+        context_length=context_length,
+        stride=stride
+    )
+    
+    data_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle
+    )
+    
+    return data_loader
+
+
+# 测试代码
+def test_sliding_window():
+    &quot;&quot;&quot;测试滑动窗口数据采样&quot;&quot;&quot;
+    print(&quot;===== 测试滑动窗口数据采样 =====&quot;)
+    
+    # 示例文本（已编码）
+    encoded_text = [101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
+    print(f&quot;原始文本: {encoded_text}&quot;)
+    
+    # 参数设置
+    context_length = 4
+    stride = 2
+    batch_size = 2
+    
+    # 创建数据集
+    dataset = TextWindowDataset(
+        text=encoded_text,
+        context_length=context_length,
+        stride=stride
+    )
+    
+    # 打印数据集信息
+    print(f&quot;\n数据集大小: {len(dataset)}&quot;)
+    
+    # 测试获取单个样本
+    print(&quot;\n--- 测试获取单个样本 ---&quot;)
+    for i in range(min(3, len(dataset))):
+        inputs, targets = dataset[i]
+        print(f&quot;样本 {i}:&quot;)
+        print(f&quot;  输入: {inputs}&quot;)
+        print(f&quot;  目标: {targets}&quot;)
+    
+    # 创建数据加载器
+    data_loader = create_data_loader(
+        text=encoded_text,
+        context_length=context_length,
+        batch_size=batch_size,
+        stride=stride,
+        shuffle=False
+    )
+    
+    # 测试批次数据
+    print(&quot;\n--- 测试批次数据 ---&quot;)
+    for i, (batch_inputs, batch_targets) in enumerate(data_loader):
+        print(f&quot;批次 {i}:&quot;)
+        print(f&quot;  输入形状: {batch_inputs.shape}&quot;)
+        print(f&quot;  输入数据:&quot;)
+        print(batch_inputs)
+        print(f&quot;  目标形状: {batch_targets.shape}&quot;)
+        print(f&quot;  目标数据:&quot;)
+        print(batch_targets)
+    
+    # 测试不同步长
+    print(&quot;\n--- 测试不同步长 ---&quot;)
+    for stride in [1, 2, 3]:
+        dataset = TextWindowDataset(
+            text=encoded_text,
+            context_length=context_length,
+            stride=stride
+        )
+        print(f&quot;步长为 {stride} 时的样本数: {len(dataset)}&quot;)
+        
+        # 打印前两个样本
+        if len(dataset) &gt; 0:
+            inputs, targets = dataset[0]
+            print(f&quot;  第一个样本输入: {inputs}&quot;)
+            print(f&quot;  第一个样本目标: {targets}&quot;)
+        
+        if len(dataset) &gt; 1:
+            inputs, targets = dataset[1]
+            print(f&quot;  第二个样本输入: {inputs}&quot;)
+            print(f&quot;  第二个样本目标: {targets}&quot;)
+if __name__ == &quot;__main__&quot;:
+    test_sliding_window()</code></pre></div>
+<p>===== 测试滑动窗口数据采样 ===== 原始文本: [101, 102, 103, 104, 105, 106, 107, 108, 109, 110]</p>
+<p>数据集大小: 4</p>
+<hr>
+<p>样本 0: 输入: tensor([101, 102, 103, 104]) 目标: tensor([102, 103, 104, 105]) 样本 1: 输入: tensor([103, 104, 105, 106]) 目标: tensor([104, 105, 106, 107]) 样本 2: 输入: tensor([105, 106, 107, 108]) 目标: tensor([106, 107, 108, 109])</p>
+<hr>
+<p>批次 0: 输入形状: torch.Size([2, 4]) 输入数据: tensor([[101, 102, 103, 104], [103, 104, 105, 106]]) 目标形状: torch.Size([2, 4]) 目标数据: tensor([[102, 103, 104, 105], [104, 105, 106, 107]]) 批次 1: 输入形状: torch.Size([2, 4]) 输入数据: tensor([[105, 106, 107, 108], [107, 108, 109, 110]]) 目标形状: torch.Size([2, 4]) 目标数据: tensor([[106, 107, 108, 109], [108, 109, 110,   0]])</p>
+<hr>
+<p>步长为 1 时的样本数: 7 第一个样本输入: tensor([101, 102, 103, 104]) 第一个样本目标: tensor([102, 103, 104, 105]) 第二个样本输入: tensor([102, 103, 104, 105]) 第二个样本目标: tensor([103, 104, 105, 106]) 步长为 2 时的样本数: 4 第一个样本输入: tensor([101, 102, 103, 104]) 第一个样本目标: tensor([102, 103, 104, 105]) 第二个样本输入: tensor([103, 104, 105, 106]) 第二个样本目标: tensor([104, 105, 106, 107]) 步长为 3 时的样本数: 3 第一个样本输入: tensor([101, 102, 103, 104]) 第一个样本目标: tensor([102, 103, 104, 105]) 第二个样本输入: tensor([104, 105, 106, 107]) 第二个样本目标: tensor([105, 106, 107, 108])</p>
+</div>
+<div class="section" id="llm-happy-extras-src1-s7"><h2>7.创建词嵌入</h2>
+<p>词嵌入是将标记 ID 转换为连续向量的过程，是 LLM 处理文本的最终数值形式（如图 2.15 所示）。神经网络需连续向量进行运算，因此需通过 “嵌入层” 实现这一转换。嵌入层本质是一个权重矩阵：行数等于词汇表大小，列数为嵌入维度（如 3 维、256 维），每个标记 ID 对应矩阵中的一行，即该标记的嵌入向量。</p>
+<p>例如，词汇表大小为 6、嵌入维度为 3 的嵌入层，其权重矩阵为 6×3 的随机初始化矩阵（训练中会优化）。当输入标记 ID 为 [2, 3, 5, 1] 时，嵌入层会提取矩阵中对应行，得到 4×3 的嵌入向量矩阵。</p>
+<p>在 PyTorch 中，可通过 torch.nn.Embedding 实现嵌入层，其核心是 “查找操作”—— 根据 ID 快速检索对应嵌入向量。嵌入维度需权衡：更高维度（如 GPT-3 的 12288 维）能捕捉更多语义，但计算成本更高；较低维度（如 256 维）适合实验。嵌入层的权重会通过训练不断优化，使向量能更好地表示标记的语义和上下文</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
+from typing import List, Dict, Tuple, Optional, Set
+
+class Vocabulary:
+    &quot;&quot;&quot;词汇表管理类&quot;&quot;&quot;
+    
+    def __init__(self, special_tokens: Optional[Dict[str, int]] = None):
+        &quot;&quot;&quot;
+        初始化词汇表
+        
+        Args:
+            special_tokens: 特殊标记及其ID的字典
+        &quot;&quot;&quot;
+        self.token_to_idx = special_tokens or {
+            &quot;&lt;pad&gt;&quot;: 0,
+            &quot;&lt;unk&gt;&quot;: 1,
+            &quot;&lt;bos&gt;&quot;: 2,
+            &quot;&lt;eos&gt;&quot;: 3
+        }
+        self.idx_to_token = {v: k for k, v in self.token_to_idx.items()}
+        self.vocab_size = len(self.token_to_idx)
+    
+    def add_token(self, token: str) -&gt; int:
+        &quot;&quot;&quot;
+        添加标记到词汇表
+        
+        Args:
+            token: 要添加的标记
+            
+        Returns:
+            标记的ID
+        &quot;&quot;&quot;
+        if token not in self.token_to_idx:
+            self.token_to_idx[token] = self.vocab_size
+            self.idx_to_token[self.vocab_size] = token
+            self.vocab_size += 1
+        return self.token_to_idx[token]
+    
+    def build_from_texts(self, texts: List[List[str]]) -&gt; None:
+        &quot;&quot;&quot;
+        从文本列表构建词汇表
+        
+        Args:
+            texts: 文本列表，每个文本是标记列表
+        &quot;&quot;&quot;
+        for text in texts:
+            for token in text:
+                self.add_token(token)
+    
+    def encode(self, tokens: List[str]) -&gt; List[int]:
+        &quot;&quot;&quot;
+        将标记列表编码为ID列表
+        
+        Args:
+            tokens: 标记列表
+            
+        Returns:
+            ID列表
+        &quot;&quot;&quot;
+        return [self.token_to_idx.get(token, self.token_to_idx[&quot;&lt;unk&gt;&quot;]) for token in tokens]
+    
+    def decode(self, ids: List[int]) -&gt; List[str]:
+        &quot;&quot;&quot;
+        将ID列表解码为标记列表
+        
+        Args:
+            ids: ID列表
+            
+        Returns:
+            标记列表
+        &quot;&quot;&quot;
+        return [self.idx_to_token.get(idx, &quot;&lt;unk&gt;&quot;) for idx in ids]
+
+
+class CBOWDataset(Dataset):
+    &quot;&quot;&quot;连续词袋模型(CBOW)的数据集&quot;&quot;&quot;
+    
+    def __init__(self, texts: List[List[str]], vocab: Vocabulary, context_size: int = 2):
+        &quot;&quot;&quot;
+        初始化CBOW数据集
+        
+        Args:
+            texts: 文本列表，每个文本是标记列表
+            vocab: 词汇表
+            context_size: 上下文大小(每侧的词数)
+        &quot;&quot;&quot;
+        self.context_size = context_size
+        self.vocab = vocab
+        self.data = []
+        
+        # 构建训练样本
+        for text in texts:
+            encoded_text = vocab.encode(text)
+            for i in range(context_size, len(encoded_text) - context_size):
+                context = []
+                # 收集左右上下文
+                for j in range(-context_size, context_size + 1):
+                    if j != 0:  # 跳过中心词
+                        context.append(encoded_text[i + j])
+                target = encoded_text[i]  # 中心词
+                self.data.append((context, target))
+    
+    def __len__(self) -&gt; int:
+        &quot;&quot;&quot;返回数据集大小&quot;&quot;&quot;
+        return len(self.data)
+    
+    def __getitem__(self, idx: int) -&gt; Tuple[torch.Tensor, torch.Tensor]:
+        &quot;&quot;&quot;
+        获取单个样本
+        
+        Args:
+            idx: 样本索引
+            
+        Returns:
+            元组(context, target)，其中context是上下文词ID，target是目标词ID
+        &quot;&quot;&quot;
+        context, target = self.data[idx]
+        return torch.tensor(context, dtype=torch.long), torch.tensor(target, dtype=torch.long)
+
+
+class CBOW(nn.Module):
+    &quot;&quot;&quot;连续词袋模型(CBOW)&quot;&quot;&quot;
+    
+    def __init__(self, vocab_size: int, embedding_dim: int):
+        &quot;&quot;&quot;
+        初始化CBOW模型
+        
+        Args:
+            vocab_size: 词汇表大小
+            embedding_dim: 嵌入维度
+        &quot;&quot;&quot;
+        super(CBOW, self).__init__()
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.linear = nn.Linear(embedding_dim, vocab_size)
+        
+    def forward(self, inputs: torch.Tensor) -&gt; torch.Tensor:
+        &quot;&quot;&quot;
+        前向传播
+        
+        Args:
+            inputs: 输入张量，形状为[batch_size, context_size*2]
+            
+        Returns:
+            输出张量，形状为[batch_size, vocab_size]
+        &quot;&quot;&quot;
+        # 获取上下文词的嵌入
+        embeds = self.embeddings(inputs)
+        # 对上下文嵌入取平均
+        context_mean = torch.mean(embeds, dim=1)
+        # 通过线性层预测中心词
+        output = self.linear(context_mean)
+        return output
+
+
+def train_cbow_model(texts: List[List[str]], embedding_dim: int = 100, 
+                     context_size: int = 2, epochs: int = 10, 
+                     batch_size: int = 32, lr: float = 0.01) -&gt; nn.Embedding:
+    &quot;&quot;&quot;
+    训练CBOW模型并返回词嵌入
+    
+    Args:
+        texts: 文本列表，每个文本是标记列表
+        embedding_dim: 嵌入维度
+        context_size: 上下文大小
+        epochs: 训练轮数
+        batch_size: 批次大小
+        lr: 学习率
+        
+    Returns:
+        训练好的词嵌入层
+    &quot;&quot;&quot;
+    # 构建词汇表
+    vocab = Vocabulary()
+    vocab.build_from_texts(texts)
+    
+    # 创建数据集和数据加载器
+    dataset = CBOWDataset(texts, vocab, context_size)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    
+    # 初始化模型、损失函数和优化器
+    model = CBOW(vocab.vocab_size, embedding_dim)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    
+    # 训练模型
+    for epoch in range(epochs):
+        total_loss = 0
+        for context, target in dataloader:
+            # 前向传播
+            output = model(context)
+            loss = criterion(output, target)
+            
+            # 反向传播和优化
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+        
+        print(f&quot;Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}&quot;)
+    
+    # 返回训练好的词嵌入层
+    return model.embeddings
+
+
+# 测试代码
+def test_word_embedding():
+    &quot;&quot;&quot;测试词嵌入功能&quot;&quot;&quot;
+    print(&quot;===== 测试词嵌入 =====&quot;)
+    
+    # 示例文本
+    texts = [
+        [&quot;I&quot;, &quot;like&quot;, &quot;to&quot;, &quot;play&quot;, &quot;football&quot;],
+        [&quot;Football&quot;, &quot;is&quot;, &quot;a&quot;, &quot;popular&quot;, &quot;sport&quot;],
+        [&quot;I&quot;, &quot;enjoy&quot;, &quot;watching&quot;, &quot;football&quot;, &quot;matches&quot;],
+        [&quot;Do&quot;, &quot;you&quot;, &quot;play&quot;, &quot;any&quot;, &quot;sports&quot;],
+        [&quot;Sports&quot;, &quot;are&quot;, &quot;good&quot;, &quot;for&quot;, &quot;health&quot;]
+    ]
+    
+    # 训练CBOW模型获取词嵌入
+    embedding_dim = 10
+    context_size = 2
+    embeddings = train_cbow_model(
+        texts=texts,
+        embedding_dim=embedding_dim,
+        context_size=context_size,
+        epochs=50,
+        batch_size=4,
+        lr=0.01
+    )
+    
+    # 获取词汇表
+    vocab = Vocabulary()
+    vocab.build_from_texts(texts)
+    
+    # 测试词嵌入查找
+    test_words = [&quot;I&quot;, &quot;football&quot;, &quot;sports&quot;, &quot;unknown&quot;]
+    print(&quot;\n词嵌入示例:&quot;)
+    for word in test_words:
+        word_id = vocab.encode([word])[0]
+        word_vector = embeddings(torch.tensor(word_id, dtype=torch.long)).detach().numpy()
+        print(f&quot;{word}: {word_vector[:5]}... (shape: {word_vector.shape})&quot;)
+    
+    # 计算词之间的相似度
+    print(&quot;\n词相似度分析:&quot;)
+    target_words = [&quot;football&quot;, &quot;sports&quot;, &quot;play&quot;]
+    for target in target_words:
+        target_id = vocab.encode([target])[0]
+        target_vector = embeddings(torch.tensor(target_id, dtype=torch.long))
+        
+        print(f&quot;\n与 &#39;{target}&#39; 最相似的词:&quot;)
+        similarities = []
+        for word, idx in vocab.token_to_idx.items():
+            if word in [&quot;&lt;pad&gt;&quot;, &quot;&lt;unk&gt;&quot;, &quot;&lt;bos&gt;&quot;, &quot;&lt;eos&gt;&quot;]:
+                continue
+            
+            word_vector = embeddings(torch.tensor(idx, dtype=torch.long))
+            # 计算余弦相似度
+            sim = torch.cosine_similarity(target_vector.unsqueeze(0), 
+                                         word_vector.unsqueeze(0)).item()
+            similarities.append((word, sim))
+        
+        # 按相似度排序
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        
+        # 打印前3个相似词
+        for word, sim in similarities[:3]:
+            print(f&quot;  {word}: {sim:.4f}&quot;)
+
+if __name__ == &quot;__main__&quot;:
+    test_word_embedding()    </code></pre></div>
+<p>===== 测试词嵌入 ===== Epoch 1/50, Loss: 3.1725 Epoch 2/50, Loss: 3.2624 Epoch 3/50, Loss: 3.1252 Epoch 4/50, Loss: 2.7059 Epoch 5/50, Loss: 2.4706 Epoch 6/50, Loss: 2.3471 Epoch 7/50, Loss: 2.5184 Epoch 8/50, Loss: 2.4183 Epoch 9/50, Loss: 2.3172 Epoch 10/50, Loss: 2.2042 Epoch 11/50, Loss: 2.2335 Epoch 12/50, Loss: 1.9774 Epoch 13/50, Loss: 1.8652 Epoch 14/50, Loss: 1.7527 Epoch 15/50, Loss: 1.8568 Epoch 16/50, Loss: 1.6976 Epoch 17/50, Loss: 1.4242 Epoch 18/50, Loss: 1.2158 Epoch 19/50, Loss: 1.1381 Epoch 20/50, Loss: 1.0590 Epoch 21/50, Loss: 1.2977 Epoch 22/50, Loss: 1.3026 Epoch 23/50, Loss: 0.9900 Epoch 24/50, Loss: 0.7884 Epoch 25/50, Loss: 1.0041 Epoch 26/50, Loss: 0.8770 Epoch 27/50, Loss: 0.8645 Epoch 28/50, Loss: 0.7021 Epoch 29/50, Loss: 0.8588 Epoch 30/50, Loss: 0.6019 Epoch 31/50, Loss: 0.4728 Epoch 32/50, Loss: 0.5092 Epoch 33/50, Loss: 0.4671 Epoch 34/50, Loss: 0.4910 Epoch 35/50, Loss: 0.5640 Epoch 36/50, Loss: 0.5198 Epoch 37/50, Loss: 0.4731 Epoch 38/50, Loss: 0.4264 Epoch 39/50, Loss: 0.3248 Epoch 40/50, Loss: 0.2492 Epoch 41/50, Loss: 0.2738 Epoch 42/50, Loss: 0.3748 Epoch 43/50, Loss: 0.2021 Epoch 44/50, Loss: 0.2448 Epoch 45/50, Loss: 0.1978 Epoch 46/50, Loss: 0.2853 Epoch 47/50, Loss: 0.1764 Epoch 48/50, Loss: 0.1442 Epoch 49/50, Loss: 0.1716 Epoch 50/50, Loss: 0.2133</p>
+<p>词嵌入示例: I: [-0.0588957  -0.14068426 -0.7404043  -1.8865429  -2.6835012 ]... (shape: (10,)) football: [ 0.637025    0.14052066 -0.848007    0.2889565  -0.2740498 ]... (shape: (10,)) sports: [-1.045044   -0.70745003 -2.0171206   1.0361644   0.60308105]... (shape: (10,)) unknown: [-0.14042336  0.71746343  0.11502329 -0.5219049   0.10613117]... (shape: (10,))</p>
+<p>词相似度分析:</p>
+<p>与 &#39;football&#39; 最相似的词: football: 1.0000 is: 0.7577 health: 0.6264</p>
+<p>与 &#39;sports&#39; 最相似的词: sports: 1.0000 health: 0.5747 is: 0.5725</p>
+<p>与 &#39;play&#39; 最相似的词: play: 1.0000 popular: 0.6973 is: 0.6605</p>
+</div>
+<div class="section" id="llm-happy-extras-src1-s8"><h2>8.编码词位置</h2>
+<p>LLM 的自注意力机制本身不感知词的位置，因此需加入 “位置嵌入” 以传达词在序列中的顺序信息（如图 2.17 所示）。位置嵌入有两种类型：绝对位置嵌入（与具体位置绑定，如第 1 个词用特定向量，第 2 个词用另一向量）和相对位置嵌入（关注词之间的距离，如 “相距 2 个位置”）。</p>
+<p>GPT 模型采用绝对位置嵌入，其实现方式是：创建另一个嵌入层，输入为 0 至上下文长度 - 1 的位置索引（如窗口大小为 4 时，输入为 [0, 1, 2, 3]），输出与词嵌入维度相同的位置向量。最终输入嵌入是词嵌入与位置嵌入的总和（如图 2.19 所示），例如某词的嵌入向量为 [1.2, -0.2, -0.1]，其位置嵌入为 [0.5, 0.3, 0.1]，则最终输入为 [1.7, 0.1, 0.0]。</p>
+<p>位置嵌入的维度与词嵌入一致，确保两者可直接相加，且会随模型训练优化，使模型能学习到词序对语义的影响（如 “我爱你” 与 “你爱我” 的区别）。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import torch
+import tiktoken
+# 1初始化分词器（使用GPT-2的BPE分词器）
+tokenizer = tiktoken.get_encoding(&quot;gpt2&quot;)
+# 定义嵌入参数
+vocab_size = 50257  # GPT-2的词汇表大小
+output_dim = 256    # 嵌入维度（示例用256，实际GPT-3为12288）
+context_length = 4  # 上下文长度（即输入序列的最大长度）
+
+# 创建词嵌入层和位置嵌入层
+token_embedding_layer = torch.nn.Embedding(vocab_size, output_dim)
+pos_embedding_layer = torch.nn.Embedding(context_length, output_dim)
+
+# 生成位置索引（0到context_length-1）
+pos_indices = torch.arange(context_length)  # 形状: [4]
+pos_embeddings = pos_embedding_layer(pos_indices)  # 形状: [4, 256]
+
+# 测试：将词ID转换为嵌入并添加位置嵌入
+def test_position_embedding():
+    # 示例输入词ID
+    input_ids = torch.tensor([
+        [40, 367, 2885, 1464],    # 第一句的词ID
+        [1807, 3619, 402, 271],   # 第二句的词ID
+        [10899, 2138, 257, 7026]  # 第三句的词ID
+    ])
+    batch_size, seq_len = input_ids.shape
+    print(f&quot;输入词ID形状: {input_ids.shape}&quot;)  # 应输出: torch.Size([3, 4])
+
+    # 生成词嵌入
+    token_embeddings = token_embedding_layer(input_ids)
+    print(f&quot;词嵌入形状: {token_embeddings.shape}&quot;)  # 应输出: torch.Size([3, 4, 256])
+
+    # 添加位置嵌入
+    input_embeddings = token_embeddings + pos_embeddings
+    print(f&quot;添加位置嵌入后的形状: {input_embeddings.shape}&quot;)  # 应输出: torch.Size([3, 4, 256])
+
+    # 验证位置嵌入的唯一性
+    print(&quot;\n位置嵌入向量（前3个位置的前5维）:&quot;)
+    for i in range(3):
+        print(f&quot;位置 {i}: {pos_embeddings[i, :5]}&quot;)
+
+# 执行测试
+if __name__ == &quot;__main__&quot;:
+    test_position_embedding()</code></pre></div>
+<p>输入词ID形状: torch.Size([3, 4]) 词嵌入形状: torch.Size([3, 4, 256]) 添加位置嵌入后的形状: torch.Size([3, 4, 256])</p>
+<p>位置嵌入向量（前3个位置的前5维）: 位置 0: tensor([-0.3552, -0.5629, -1.4778,  0.7029, -0.0278], grad_fn=&lt;SliceBackward0&gt;) 位置 1: tensor([-0.7520,  0.3258,  0.5109, -1.2897,  0.2495], grad_fn=&lt;SliceBackward0&gt;) 位置 2: tensor([-0.6930,  0.9321, -0.9753,  0.5288,  0.8013], grad_fn=&lt;SliceBackward0&gt;)</p>
+</div>
+<div class="section" id="llm-happy-extras-src1-s9"><h2>贡献者主页</h2>
+<table><thead><tr><th>贡献者</th><th>学校</th><th>研究方向</th><th>GitHub主页</th></tr></thead><tbody><tr><td>蔡鋆捷</td><td>福州大学</td><td>Computer Vision（CV），Natural Language Processing（NLP）</td><td>https://github.com/xinala-781</td></tr></tbody></table>
+</div></div>
+<div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/generation-method/readme.md</div><blockquote>代码已更新到 Happy-LLM 仓库第五章的代码中。</blockquote>
+<div class="section" id="llm-happy-extras-src2-s1"><h2>贪婪解码（Greedy Decoding）</h2>
+<h3>原理说明</h3>
+<p>贪婪解码是最简单直接的文本生成策略。在每一步生成时，它总是选择概率最大的那个token作为下一个token，然后继续生成，直到遇到停止条件或达到最大长度。</p>
+<p><strong>核心思想</strong>：局部最优选择 → 希望全局最优</p>
+<p><strong>数学表达</strong>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>token_t = argmax P(token_t | token_1, token_2, ..., token_{t-1})</code></pre></div>
+<h3>代码实现</h3>
+<p>基于我们实现的 <code>_greedy_decode</code> 方法：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def _greedy_decode(self, logits: torch.Tensor) -&gt; torch.Tensor:
+    &quot;&quot;&quot;
+    贪婪解码：选择概率最大的token
+
+    Args:
+        logits: 模型输出的logits，形状为 (batch_size, vocab_size)
+
+    Returns:
+        选择的token索引，形状为 (batch_size, 1)
+    &quot;&quot;&quot;
+    _, idx_next = torch.topk(logits, k=1, dim=-1)
+    return idx_next</code></pre></div>
+<p><strong>关键步骤解析</strong>：</p>
+<ol>
+<li><code>torch.topk(logits, k=1, dim=-1)</code>：找到logits中最大值的位置</li>
+<li>返回最大概率token的索引</li>
+<li>该token被添加到序列中，继续下一轮生成</li>
+</ol>
+<h3>使用示例</h3>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 在 generate_super 函数中调用贪婪解码
+output = model.generate_super(
+    input_ids,
+    do_sample=False,      # 不使用采样
+    num_beams=1,          # 不使用束搜索
+    temperature=0.0,      # 温度为0确保确定性
+    max_new_tokens=100
+)</code></pre></div>
+<h3>优缺点分析</h3>
+<p><strong>优点</strong>：</p>
+<ul>
+<li>✅ <strong>速度快</strong>：每步只需要一次前向传播和简单的argmax操作</li>
+<li>✅ <strong>结果确定</strong>：相同的输入总是产生相同的输出</li>
+<li>✅ <strong>内存效率高</strong>：不需要维护多个候选序列</li>
+<li>✅ <strong>实现简单</strong>：算法逻辑直观易懂</li>
+</ul>
+<p><strong>缺点</strong>：</p>
+<ul>
+<li>❌ <strong>容易陷入局部最优</strong>：每步的局部最优不一定等于全局最优</li>
+<li>❌ <strong>缺乏多样性</strong>：总是产生相同的序列，缺乏创造性</li>
+<li>❌ <strong>可能产生重复内容</strong>：容易陷入重复循环</li>
+<li>❌ <strong>忽略长程依赖</strong>：不考虑序列的整体连贯性</li>
+</ul>
+<h3>典型例子</h3>
+<p>假设模型生成了以下概率分布：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>输入: &quot;今天天气&quot;
+下一token概率:
+- &quot;很&quot; (0.4)
+- &quot;不错&quot; (0.3)
+- &quot;真好&quot; (0.2)
+- &quot;不太好&quot; (0.1)</code></pre></div>
+<p>贪婪解码会选择&quot;很&quot;，生成&quot;今天天气很&quot;，然后继续这个过程。</p>
+<h3>使用场景</h3>
+<ul>
+<li><strong>确定性任务</strong>：如数学计算、代码生成</li>
+<li><strong>需要一致性的应用</strong>：如API服务、自动化脚本</li>
+<li><strong>计算资源受限的环境</strong>：需要快速生成结果</li>
+<li><strong>基准测试</strong>：作为其他算法的对比基准</li>
+</ul>
+</div>
+<div class="section" id="llm-happy-extras-src2-s2"><h2>采样解码（Sampling Decoding）</h2>
+<h3>原理说明</h3>
+<p>采样解码不是选择概率最大的token，而是基于模型的概率分布进行随机采样。这样可以在每次生成时产生不同的结果，增加文本的多样性和创造性。</p>
+<p><strong>核心思想</strong>：基于概率分布随机选择 → 增加多样性</p>
+<p><strong>数学表达</strong>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>token_t ~ P(token_t | token_1, token_2, ..., token_{t-1})</code></pre></div>
+<h3>关键参数</h3>
+<h4>1. Temperature（温度）</h4>
+<ul>
+<li><strong>作用</strong>：控制概率分布的平滑程度</li>
+<li><strong>原理</strong>：将logits除以temperature，然后进行softmax</li>
+<li><strong>效果</strong>：</li>
+<li><code>temperature &gt; 1</code>：分布更平滑，增加随机性</li>
+<li><code>temperature &lt; 1</code>：分布更尖锐，更接近贪婪解码</li>
+<li><code>temperature → 0</code>：等价于贪婪解码</li>
+</ul>
+<h4>2. Top-k Sampling</h4>
+<ul>
+<li><strong>作用</strong>：限制候选token的范围</li>
+<li><strong>原理</strong>：只考虑概率最高的k个token，其他token概率设为0</li>
+<li><strong>效果</strong>：避免选择概率很低的&quot;奇怪&quot;token，提高质量</li>
+</ul>
+<h3>代码实现</h3>
+<p>基于我们实现的 <code>_random_sample</code> 方法：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def _random_sample(self, logits: torch.Tensor, temperature: float = 1.0, top_k: int = None) -&gt; torch.Tensor:
+    &quot;&quot;&quot;
+    随机采样：基于概率分布随机选择token
+
+    Args:
+        logits: 模型输出的logits，形状为 (batch_size, vocab_size)
+        temperature: 温度参数，控制随机性
+        top_k: 只考虑概率最高的k个token
+
+    Returns:
+        选择的token索引，形状为 (batch_size, 1)
+    &quot;&quot;&quot;
+    # 1. 温度缩放
+    logits = logits / temperature
+
+    # 2. Top-k过滤
+    if top_k is not None:
+        v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+        logits[logits &lt; v[:, [-1]]] = -float(&#39;Inf&#39;)
+
+    # 3. 计算概率并采样
+    probs = F.softmax(logits, dim=-1)
+    idx_next = torch.multinomial(probs, num_samples=1)
+    return idx_next</code></pre></div>
+<p><strong>关键步骤解析</strong>：</p>
+<ol>
+<li><strong>温度缩放</strong>：调整概率分布的平滑程度</li>
+<li><strong>Top-k过滤</strong>：移除低概率候选，提高质量</li>
+<li><strong>概率归一化</strong>：使用softmax得到概率分布</li>
+<li><strong>随机采样</strong>：根据概率分布随机选择token</li>
+</ol>
+<h3>使用示例</h3>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 基本采样
+output = model.generate_super(
+    input_ids,
+    do_sample=True,         # 启用采样
+    num_beams=1,           # 不使用束搜索
+    temperature=0.8,       # 中等温度
+    max_new_tokens=100
+)
+
+# 带top-k的采样
+output = model.generate_super(
+    input_ids,
+    do_sample=True,
+    num_beams=1,
+    temperature=1.0,       # 较高温度增加随机性
+    top_k=50,             # 只考虑前50个候选
+    max_new_tokens=100
+)</code></pre></div>
+<h3>温度参数详解</h3>
+<p><strong>不同温度的效果对比</strong>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 示例概率分布
+original_probs = [0.6, 0.2, 0.1, 0.05, 0.05]
+
+# Temperature = 0.1 (低温度，接近贪婪)
+scaled_probs = [0.85, 0.08, 0.04, 0.015, 0.015]
+# 结果：很可能选择第一个token
+
+# Temperature = 1.0 (标准温度)
+scaled_probs = [0.6, 0.2, 0.1, 0.05, 0.05]
+# 结果：按原始概率采样
+
+# Temperature = 2.0 (高温度，增加随机性)
+scaled_probs = [0.35, 0.25, 0.18, 0.11, 0.11]
+# 结果：各个token都有机会被选中</code></pre></div>
+<h3>Top-k机制详解</h3>
+<p><strong>Top-k过滤过程</strong>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 假设词汇表大小为1000，top_k=50
+logits = [0.1, 2.3, 0.5, 1.8, 0.3, 3.2, 0.9, 0.2, 1.5, 0.7, ...]  # 1000个值
+
+# 步骤1：找到前50个最大值
+v, _ = torch.topk(logits, 50)
+threshold = v[-1]  # 第50大的值
+
+# 步骤2：过滤
+logits[logits &lt; threshold] = -float(&#39;Inf&#39;)
+# 结果：只有50个token有非零概率，其他950个token概率为0</code></pre></div>
+<h3>优缺点分析</h3>
+<p><strong>优点</strong>：</p>
+<ul>
+<li>✅ <strong>多样性好</strong>：每次生成可能产生不同的结果</li>
+<li>✅ <strong>创造性高</strong>：能产生意想不到的内容</li>
+<li>✅ <strong>避免重复</strong>：不容易陷入重复循环</li>
+<li>✅ <strong>可调性强</strong>：通过参数控制随机程度</li>
+</ul>
+<p><strong>缺点</strong>：</p>
+<ul>
+<li>❌ <strong>结果不确定</strong>：相同输入可能产生不同输出</li>
+<li>❌ <strong>质量不稳定</strong>：可能产生低质量或不连贯的内容</li>
+<li>❌ <strong>需要调参</strong>：temperature和top_k需要仔细调节</li>
+<li>❌ <strong>计算开销</strong>：需要计算完整的概率分布</li>
+</ul>
+<h3>使用场景</h3>
+<ul>
+<li><strong>创意写作</strong>：故事生成、诗歌创作</li>
+<li><strong>对话系统</strong>：让对话更加自然和有趣</li>
+<li><strong>数据增强</strong>：生成多样化的训练数据</li>
+<li><strong>探索性任务</strong>：需要探索多种可能性的场景</li>
+</ul>
+</div>
+<div class="section" id="llm-happy-extras-src2-s3"><h2>束搜索（Beam Search）</h2>
+<h3>原理说明</h3>
+<p>束搜索是一种启发式搜索算法，它在每一步生成时保留多个候选序列（束），而不是只选择一个最佳序列。通过维护多条路径，它能够在计算效率和生成质量之间取得平衡。</p>
+<p><strong>核心思想</strong>：维护多条候选路径 → 选择累积概率最高的序列</p>
+<p><strong>算法流程</strong>：</p>
+<ol>
+<li><strong>初始化</strong>：从输入序列开始</li>
+<li><strong>扩展</strong>：为每个候选序列生成多个扩展</li>
+<li><strong>评分</strong>：计算每个新序列的累积概率</li>
+<li><strong>筛选</strong>：保留分数最高的N个候选</li>
+<li><strong>重复</strong>：继续扩展直到结束条件</li>
+</ol>
+<h3>关键概念</h3>
+<h4>束宽度（Beam Width）</h4>
+<ul>
+<li><strong>定义</strong>：每步保留的候选序列数量</li>
+<li><strong>权衡</strong>：</li>
+<li>宽度=1：等价于贪婪解码</li>
+<li>宽度越大：搜索空间越大，质量越高，但计算成本也越大</li>
+</ul>
+<h4>累积概率</h4>
+<ul>
+<li><strong>计算方式</strong>：序列概率 = 各个token概率的乘积</li>
+<li><strong>数值稳定性</strong>：通常使用对数概率求和</li>
+<li><strong>公式</strong>：<code>log P(sequence) = Σ log P(token_i | context)</code></li>
+</ul>
+<h3>代码实现</h3>
+<p>基于我们实现的 <code>_beam_search</code> 方法：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def _beam_search(self, idx: torch.Tensor, max_new_tokens: int, num_beams: int,
+                 temperature: float = 1.0, top_k: int = None, stop_id: int = None) -&gt; torch.Tensor:
+    &quot;&quot;&quot;
+    束搜索：维护多个候选序列，选择最优路径
+
+    Args:
+        idx: 输入序列，形状为 (batch_size, seq_len)
+        max_new_tokens: 最大生成token数量
+        num_beams: 束宽度，表示保留的候选路径数量
+        temperature: 温度参数，控制分布的平滑程度
+        top_k: top-k过滤参数，限制候选token范围
+        stop_id: 停止生成的token ID，遇到则停止
+
+    Returns:
+        生成的token序列，形状为 (batch_size, generated_length)
+    &quot;&quot;&quot;
+    # 1. 初始化束
+    beams = [idx.clone() for _ in range(num_beams)]
+    beam_scores = torch.zeros(num_beams, device=idx.device)
+    beam_scores[0] = 0.0  # 第一个候选是原始序列
+    beam_scores[1:] = float(&#39;-inf&#39;)  # 其他候选初始分数为负无穷
+
+    # 2. 主循环：逐步生成token
+    for step in range(max_new_tokens):
+        new_beams = []
+        new_scores = []
+
+        # 3. 扩展每个候选序列
+        for beam_idx, beam in enumerate(beams):
+            if beam_scores[beam_idx] == float(&#39;-inf&#39;):
+                continue  # 跳过无效候选
+
+            # 前向传播获取logits
+            output = self(beam)
+            logits = output.logits[:, -1, :]
+
+            # 应用温度和top-k
+            if temperature != 1.0:
+                logits = logits / temperature
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits &lt; v[:, [-1]]] = -float(&#39;Inf&#39;)
+
+            # 计算对数概率
+            log_probs = F.log_softmax(logits, dim=-1)
+
+            # 获取前num_beams个候选token
+            top_log_probs, top_indices = torch.topk(log_probs, k=num_beams, dim=-1)
+
+            # 4. 为当前候选生成多个扩展
+            for k in range(num_beams):
+                token = top_indices[:, k:k+1]
+                log_prob = top_log_probs[:, k]
+
+                new_beam = torch.cat([beam, token], dim=1)
+                new_score = beam_scores[beam_idx] + log_prob.item()
+
+                new_beams.append(new_beam)
+                new_scores.append(new_score)
+
+        # 5. 筛选最佳候选
+        if not new_beams:
+            break
+
+        # 按分数排序，选择前num_beams个
+        sorted_indices = sorted(range(len(new_scores)), key=lambda i: new_scores[i], reverse=True)
+        beams = [new_beams[i] for i in sorted_indices[:num_beams]]
+        beam_scores = [new_scores[i] for i in sorted_indices[:num_beams]]
+
+        # 检查停止条件
+        if stop_id is not None and beams[0][0, -1] == stop_id:
+            break
+
+    # 6. 返回最佳序列
+    return beams[0][:, idx.shape[1]:]  # 只返回生成部分</code></pre></div>
+<h3>束搜索过程示例</h3>
+<p>假设束宽度=3，输入=&quot;今天天气&quot;：</p>
+<p><strong>第1步扩展</strong>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>候选1: &quot;今天天气很好&quot; (分数: 0.4)
+候选2: &quot;今天天气不错&quot; (分数: 0.3)
+候选3: &quot;今天天气真好&quot; (分数: 0.2)</code></pre></div>
+<p><strong>第2步扩展</strong>（每个候选再扩展3个）：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>候选1.1: &quot;今天天气很好啊&quot; (分数: 0.4 + 0.1 = 0.5)
+候选1.2: &quot;今天天气很好。&quot; (分数: 0.4 + 0.2 = 0.6) ← 保留
+候选1.3: &quot;今天天气很好，&quot; (分数: 0.4 + 0.05 = 0.45)
+
+候选2.1: &quot;今天天气不错啊&quot; (分数: 0.3 + 0.15 = 0.45)
+候选2.2: &quot;今天天气不错。&quot; (分数: 0.3 + 0.1 = 0.4) ← 保留
+候选2.3: &quot;今天天气不错，&quot; (分数: 0.3 + 0.08 = 0.38)
+
+候选3.1: &quot;今天天气真好啊&quot; (分数: 0.2 + 0.12 = 0.32)
+候选3.2: &quot;今天天气真好。&quot; (分数: 0.2 + 0.25 = 0.45) ← 保留
+候选3.3: &quot;今天天气真好，&quot; (分数: 0.2 + 0.1 = 0.3)</code></pre></div>
+<p><strong>筛选结果</strong>（保留分数最高的3个）：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>最佳候选: &quot;今天天气很好。&quot; (分数: 0.6)
+次佳候选: &quot;今天天气不错。&quot; (分数: 0.4)
+第三候选: &quot;今天天气真好。&quot; (分数: 0.45)</code></pre></div>
+<h3>使用示例</h3>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 基本束搜索
+output = model.generate_super(
+    input_ids,
+    do_sample=False,        # 不使用采样
+    num_beams=3,           # 束宽度为3
+    temperature=1.0,       # 标准温度
+    max_new_tokens=100
+)
+
+# 带top-k的束搜索
+output = model.generate_super(
+    input_ids,
+    do_sample=False,
+    num_beams=5,           # 更大的束宽度
+    temperature=0.8,       # 稍微降低温度
+    top_k=50,             # 限制候选范围
+    max_new_tokens=100
+)</code></pre></div>
+<h3>优缺点分析</h3>
+<p><strong>优点</strong>：</p>
+<ul>
+<li>✅ <strong>质量较高</strong>：比贪婪解码质量更好</li>
+<li>✅ <strong>确定性</strong>：结果相对稳定（相同输入产生相同输出）</li>
+<li>✅ <strong>平衡性好</strong>：在质量和效率之间取得平衡</li>
+<li>✅ <strong>避免明显错误</strong>：不容易选择明显不合适的token</li>
+</ul>
+<p><strong>缺点</strong>：</p>
+<ul>
+<li>❌ <strong>计算开销大</strong>：需要维护多个候选序列</li>
+<li>❌ <strong>内存占用高</strong>：存储多个候选序列和分数</li>
+<li>❌ <strong>仍可能局部最优</strong>：虽然比贪婪好，但仍可能错过全局最优</li>
+<li>❌ <strong>多样性有限</strong>：仍然偏向高概率路径，创造性不如采样</li>
+</ul>
+<h3>束宽度选择建议</h3>
+<table><thead><tr><th>束宽度</th><th>适用场景</th><th>优点</th><th>缺点</th></tr></thead><tbody><tr><td>1-2</td><td>实时应用、计算资源有限</td><td>速度快、资源占用少</td><td>质量相对较低</td></tr><tr><td>3-5</td><td>一般对话、文本生成</td><td>质量较好、速度适中</td><td>资源占用中等</td></tr><tr><td>6-10</td><td>高质量生成、翻译</td><td>质量很高</td><td>计算开销大</td></tr><tr><td>10+</td><td>专业应用、研究</td><td>最高质量</td><td>开销很大</td></tr></tbody></table>
+<h3>使用场景</h3>
+<ul>
+<li><strong>机器翻译</strong>：需要准确性和流畅性的平衡</li>
+<li><strong>文本摘要</strong>：生成连贯的摘要内容</li>
+<li><strong>对话系统</strong>：生成有逻辑的回复</li>
+<li><strong>代码生成</strong>：需要语法正确和逻辑合理</li>
+<li><strong>长文本生成</strong>：如文章写作、报告生成</li>
+</ul>
+</div>
+<div class="section" id="llm-happy-extras-src2-s4"><h2>辅助模型投机解码（Assisted Decoding）</h2>
+<h3>原理说明</h3>
+<p>投机解码是一种<strong>用小模型加速大模型推理</strong>的技术。它通过&quot;草稿-验证&quot;的方式，让小先生成候选token，然后大家模型快速验证，减少大模型的前向传播次数。</p>
+<p><strong>核心思想</strong>：小模型投机生成 → 大模型批量验证 → 减少大模型计算负担</p>
+<h3>工作流程</h3>
+<h4>1. 草稿生成阶段</h4>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>输入: &quot;今天天气&quot;
+小模型快速生成草稿: &quot;今天天气很好，适合出门散步&quot;</code></pre></div>
+<h4>2. 验证阶段</h4>
+<p>大模型一次性验证整个草稿序列：</p>
+<ul>
+<li>✅ 接受的token：&quot;今天天气很好，&quot;</li>
+<li>❌ 拒绝的token：从&quot;适合&quot;开始拒绝</li>
+<li>🔧 大模型重新生成：&quot;适合在家休息&quot;</li>
+</ul>
+<h4>3. 最终结果</h4>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>输出: &quot;今天天气很好，适合在家休息&quot;</code></pre></div>
+<h3>关键优势</h3>
+<p><strong>速度提升</strong>：</p>
+<ul>
+<li>小模型推理快 → 生成多个候选token</li>
+<li>大模型批量验证 → 一次处理多个token</li>
+<li>减少90%+的大模型前向传播</li>
+</ul>
+<p><strong>质量保证</strong>：</p>
+<ul>
+<li>大模型有最终否决权</li>
+<li>只有大模型认可的token才会被保留</li>
+<li>不会降低生成质量</li>
+</ul>
+<h3>具体例子对比</h3>
+<p><strong>传统方式</strong>（大模型逐个生成）：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>第1步: 大模型 → &quot;今天&quot;
+第2步: 大模型 → &quot;今天天气&quot;
+第3步: 大模型 → &quot;今天天气很&quot;
+第4步: 大模型 → &quot;今天天气很好&quot;
+第5步: 大模型 → &quot;今天天气很好，&quot;
+第6步: 大模型 → &quot;今天天气很好，适合&quot;
+... (每步都需要大模型前向传播)</code></pre></div>
+<p><strong>投机解码</strong>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>第1步: 小模型快速草稿 → &quot;今天天气很好，适合出门散步&quot;
+第2步: 大模型批量验证 → 接受&quot;今天天气很好，&quot;，拒绝&quot;适合出门散步&quot;
+第3步: 大模型重新生成 → &quot;适合在家休息&quot;</code></pre></div>
+<p>这样原本需要6次大模型推理的过程，现在只需要2次！</p>
+<h3>技术实现要点</h3>
+<h4>1. 草稿长度控制</h4>
+<ul>
+<li><strong>草稿不宜过长</strong>：通常2-10个token</li>
+<li><strong>接受率平衡</strong>：太长接受率低，太短加速效果不明显</li>
+<li><strong>动态调整</strong>：根据接受率调整草稿长度</li>
+</ul>
+<h4>2. 验证机制</h4>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 伪代码
+def assisted_decoding(input_ids, assistant_model, main_model):
+    # 小模型生成草稿
+    draft_tokens = assistant_model.generate_draft(input_ids, max_draft_len=5)
+
+    # 大模型验证
+    accepted_count = main_model.verify_draft(input_ids, draft_tokens)
+
+    # 构建最终结果
+    if accepted_count == len(draft_tokens):
+        return draft_tokens  # 全部接受
+    else:
+        # 部分接受，大模型重新生成剩余部分
+        accepted_part = draft_tokens[:accepted_count]
+        remaining_part = main_model.generate_remaining(input_ids + accepted_part)
+        return accepted_part + remaining_part</code></pre></div>
+<h3>总结</h3>
+<p>投机解码本质上是用<strong>计算资源换时间</strong>，通过小模型的&quot;投机&quot;来减少大模型的计算负担。它是一种聪明的工程优化，在不牺牲质量的前提下显著提升推理速度。</p>
+</div></div>
+<div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/s1-vllm-thinking-budget/readme.md</div><p>首先，我们来了解一下AI教母李飞飞教授关于 Test-time scaling 的论文：<a href="http://arxiv.org/abs/2501.19393" target="_blank" rel="noreferrer"><em>《s1: Simple test-time scaling》</em></a></p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-1-8015eb04c1.png" alt="alt text" width="50%">
+</div>
+<p>论文大致讲了个什么事情呢？简单来说，提出了一种新的测试时间缩放方法，旨在提高模型在推理阶段的效率和准确性。通过调整模型的思考预算，可以在不同的任务和数据集上实现更好的性能。</p>
+<p>就是说对于一些复杂问题，需要用推理链来解决的问题，我们可以通过调整模型的思考预算来提高推理效率和准确性。上图也可以看到当思考预算增加时，模型的性能会有明显提升。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-2-b50e8b6186.png" alt="alt text" width="50%">
+</div>
+<p>插一句题外话，论文中判断问题难易程度的方式是通过让 Qwen2.5-32B-Instruct 模型回答问题，答对的问题就是简单问题，答错的就是复杂问题。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-3-03e2dbf179.png" alt="alt text" width="50%">
+</div>
+<p>论文也做了消融实验来探讨，在未满足思考预算时插入一些不同的特定词（如：Wait！）对模型最终性能的影响。结果表明，插入特定词可以有效地引导模型进行更深入的思考，并且“Wait，Wait”的效果最好。</p>
+<div class="section" id="llm-happy-extras-src3-s1"><h2>代码实现</h2>
+<p>我们使用 vLLM 来实现模型的思考预算。vLLM 是一个高性能的推理引擎，支持大规模语言模型的高效推理。以下为代码实现的步骤：</p>
+<blockquote>考虑到部分同学配置环境可能会遇到一些问题，我们在 ucloud 平台准备了环境镜像，点击下方链接并直接创建 ucloud 示例即可。 https://www.compshare.cn/images/8gfTTB5y0ql6?referral_code=ELukJdQS3vvCwYIfgsQf2C</blockquote>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/thinking-budget-e88ac2bd44.png" alt="alt text" width="80%">
+</div>
+<p>左侧为不使用思考预算的推理过程，右侧为使用思考预算的推理过程。可以看到，使用思考预算后，模型会在推理过程中插入特定词来引导模型进行更深入的思考。</p>
+<p>以下为核心代码实现，完整代码请参考 [<em>s1.py</em>](./s1.py)</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def run_thinking_budget_sample(llm_model, tokenizer, user_input, thinking_budget):
+    input_text = build_input(user_input, tokenizer)
+    input_token_count = count_token(input_text, tokenizer)
+
+    iteration_count= 0
+    max_token = input_token_count + thinking_budget
+
+    sampling_params = SamplingParams(
+        temperature=0.7,
+        max_tokens=4096,
+        skip_special_tokens=False
+    )
+
+    think_token_count = 0
+
+    while True:
+
+        wait_sampling_params = SamplingParams(
+            temperature=0.7,
+            max_tokens=thinking_budget - think_token_count,
+            stop=&#39;&lt;/think&gt;&#39;,
+            skip_special_tokens=False
+        )
+
+        outputs = llm_model.generate(
+            input_text,
+            wait_sampling_params
+        )
+        total_token, think_token_count = count_thinking_token(outputs, tokenizer)
+
+        print(f&#39;第{iteration_count}次迭代，思考token数：{think_token_count}&#39;)
+
+        if think_token_count &gt; thinking_budget:
+            break
+        input_text = total_token + &quot;\nWait!\n&quot;
+
+        # \nWait a moment. Was there any loophole in my thought just now?!\n
+        # \nWait!\n
+
+        iteration_count += 1
+
+    final_outputs = llm_model.generate(
+        outputs[0].prompt + outputs[0].outputs[0].text + &quot;\n&lt;/think&gt;\n&quot;,
+        sampling_params
+    )   
+    
+    total_content = final_outputs[0].prompt + final_outputs[0].outputs[0].text
+    thinking_content = total_content.split(&quot;&lt;think&gt;&quot;)[-1].split(&quot;&lt;/think&gt;&quot;)[0]
+
+    print(total_content)
+
+    print(f&quot;迭代次数：{iteration_count}, 输入token数：{input_token_count}, 思考token数：{count_token(thinking_content, tokenizer)}, 总token数：{count_token(total_content, tokenizer)}&quot;)</code></pre></div>
+<p>首先是要定义一个函数 <code>run_thinking_budget_sample</code>，该函数接收模型、tokenizer、用户输入和思考预算作为参数。然后构建输入文本并计算输入的 token 数量。</p>
+<p>因为<code>max_tokens</code> 参数是指生成的最大 token 数量，所以我们需要计算输入文本的 token 数量，并将其与思考预算相加，得到 <code>max_token = thinking_budget - think_token_count</code>。如果思考 token 数量超过了思考预算，就停止迭代。另外还需要在 <code>SamplingParams</code> 中设置 <code>stop</code> 参数为 <code>&lt;/think&gt;</code>，这样模型在生成文本时会在遇到 <code>&lt;/think&gt;</code> 时停止生成。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>wait_sampling_params = SamplingParams(
+    temperature=0.7,
+    max_tokens=thinking_budget - think_token_count,
+    stop=&#39;&lt;/think&gt;&#39;,
+    skip_special_tokens=False
+)</code></pre></div>
+<p>另外还需要在每次迭代中，使用 <code>llm_model.generate</code> 方法生成文本，并计算思考 token 数量。如果思考 token 数量超过了思考预算，就停止迭代。否则，将生成的文本添加到输入文本中，并在文本末尾添加 <code>\nWait!\n</code>，以引导模型进行更深入的思考。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>while True:
+    wait_sampling_params = SamplingParams(
+        temperature=0.7,
+        max_tokens=thinking_budget - think_token_count,
+        stop=&#39;&lt;/think&gt;&#39;,
+        skip_special_tokens=False
+    )
+
+    outputs = llm_model.generate(
+        input_text,
+        wait_sampling_params
+    )
+    total_token, think_token_count = count_thinking_token(outputs, tokenizer)
+
+    print(f&#39;第{iteration_count}次迭代，思考token数：{think_token_count}&#39;)
+
+    if think_token_count &gt; thinking_budget:
+        break
+    input_text = total_token + &quot;\nWait!\n&quot;
+
+    # \nWait a moment. Was there any loophole in my thought just now?!\n
+    # \nWait!\n
+
+    iteration_count += 1</code></pre></div>
+<p>当达到思考预算后，使用 <code>llm_model.generate</code> 方法生成最终的输出文本，并将其打印出来。最后输出迭代次数、输入 token 数量、思考 token 数量和总 token 数量。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>final_outputs = llm_model.generate(
+    outputs[0].prompt + outputs[0].outputs[0].text + &quot;\n&lt;/think&gt;\n&quot;,
+    sampling_params
+)   
+
+total_content = final_outputs[0].prompt + final_outputs[0].outputs[0].text
+thinking_content = total_content.split(&quot;&lt;think&gt;&quot;)[-1].split(&quot;&lt;/think&gt;&quot;)[0]
+
+print(total_content)
+
+print(f&quot;迭代次数：{iteration_count}, 输入token数：{input_token_count}, 思考token数：{count_token(thinking_content, tokenizer)}, 总token数：{count_token(total_content, tokenizer)}&quot;)</code></pre></div>
+<p>此时我们还需要另外一个 <code>SamplingParams</code> 对象来设置最终生成文本的参数。<code>max_tokens</code> 参数设置为 4096，模型根据思考过程进行总结最后得出答案，这个过程也需要很多tokn，此时设置为多少都可以，通常设置为一个较大的值即可。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>sampling_params = SamplingParams(
+    temperature=0.7,
+    max_tokens=4096,
+    skip_special_tokens=False
+)</code></pre></div>
+<p>以上为核心代码实现，完整代码请参考 [<em>s1.py</em>](./s1.py)。在实际使用中，可以根据具体的任务和数据集调整思考预算和其他参数，以获得更好的性能。</p>
+</div>
+<div class="section" id="llm-happy-extras-src3-s2"><h2>结果分析</h2>
+<p>使用思考预算后，模型在推理过程中能够更深入地思考问题，从而提高了推理效率和准确性。但是也发现了一些有趣的现象。</p>
+<p>例如，在某些情况下，就算插入了<code>Wait!</code>，模型并不会按照论文中所示进行多种不同方式尝试解答，或是反思之前的思考过程是否正确。而且还会出现模型在思考过程中重复生成相同的内容，导致思考 token 数量超过思考预算的情况。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-4-5cbd17e128.png" alt="alt text" width="70%">
+</div>
+<p>当然，也有可能本身测试的模型只有14B参数，导致其在思考过程中的能力受到限制。</p>
+<p>经过测试下来，有可能强行使用特定词（如：Wait!）来引导模型进行更深入的思考，可能会促使模型产生 “一条道走到黑” 的想法。</p>
+<p>部分实验测试记录在 [<em>output</em>](./output/) 中。</p>
+</div></div>
+<div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/vlm-concatenation-finetune/README.md</div><ul>
+<li>作者：情感机器实验室——陈少宏</li>
+</ul>
+<ul>
+<li>邮箱：&lt;shaohon_chen@115lab.club&gt;</li>
+</ul>
+<ul>
+<li>GitHub：<a href="https://github.com/ShaohonChen/Qwen3-SmVL" target="_blank" rel="noreferrer">https://github.com/ShaohonChen/Qwen3-SmVL</a></li>
+<li>SwanLab：<a href="https://swanlab.cn/@ShaohonChen/Qwen3-SmVL/overview" target="_blank" rel="noreferrer">https://swanlab.cn/@ShaohonChen/Qwen3-SmVL/overview</a></li>
+<li>数据集：<a href="https://huggingface.co/datasets/HuggingFaceM4/the_cauldron" target="_blank" rel="noreferrer">https://huggingface.co/datasets/HuggingFaceM4/the_cauldron</a></li>
+</ul>
+<blockquote>💚 <strong>特别感谢</strong>  </blockquote>
+<blockquote>感谢 <a href="https://github.com/zhihuazhao-bit" target="_blank" rel="noreferrer">@zhihuazhao-bit</a> 帮我审阅和修复了提交代码中众多的小 bug，并在 NV 上完成了测试。</blockquote>
+<blockquote>感谢 <a href="https://github.com/KMnO4-zx" target="_blank" rel="noreferrer">@KMnO4-zx</a> 对教程文章内容的审核与修正。</blockquote>
+<div class="section" id="llm-happy-extras-src4-s1"><h2>摘要</h2>
+<p>最近Huggingface团队发布了超小多模态模型SmolVLM2，可以做到端侧1GB显存推理。在怀着惊喜试用后发现，虽然模型有极其强大的视觉文本理解能力，但是模型却无法理解中文。这对一个“四六级压线过”的笔者来说十分不友好。刚好前段时间做SwanLab硬件检测适配时有一台未到期的沐曦曦云C500服务器，因此萌生了使用<strong>沐曦GPU芯片</strong>微调、把当前中文小模型扛把子Qwen3与SmolVLM2直接微调拼接的想法。</p>
+<p>本教程将介绍一种模型拼接的思路，将SmolVLM2的视觉模块（0.09B）与Qwen3最小的模型（0.6B）进行对齐微调，最终使得Qwen模型具备一定的视觉理解能力。由于笔者时间有限且考虑到文章篇幅的原因，因此该系列预计将以系列的方式放出。篇幅规划如下：</p>
+<ul>
+<li><strong>第一篇</strong>：如何构建和微调一个拼接模型（<strong>本篇博客</strong>）</li>
+<li><strong>第二篇</strong>：模型测评、数据集优化、回答人类对齐</li>
+<li><strong>第三篇</strong>：微调技巧介绍、视觉位置编码改动与模型结构优化</li>
+</ul>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/ppap-87d827eb21.png" alt="PPAP" width="400" />
+  <figcaption>I have a Qwen, I have a SmolVLM...</figcaption>
+  </figure>
+</div>
+<div style="background-color:#fff3cd; color:black; padding:10px; border-radius:4px; border:1px solid #fbe5b0; width: 90%; max-width: 100%; margin: auto;">
+<p>⚠️关于算力的注意：本教程涉及VLM微调训练，对算力要求较高，需要40G及以上的GPU显存才能运行本教程的训练代码。</p>
+</div>
+</div>
+<div class="section" id="llm-happy-extras-src4-s2"><h2>目录</h2>
+<ul>
+<li>[SmolVLM2的背景知识](#SmolVLM2的背景知识)</li>
+<li>[模型拼接和微调思路简介](#模型拼接和微调思路简介)</li>
+<li>[模型拼接实现和关键代码讲解](#模型拼接实现和关键代码讲解)</li>
+<li>[微调数据集构建](#微调数据集构建)</li>
+<li>[微调方法与代码实现](#微调方法与代码实现)</li>
+<li>[微调训练&amp;结果展示](#微调训练&amp;结果展示)</li>
+<li>[代码及数据集链接汇总](#代码及数据集链接汇总)</li>
+</ul>
+</div>
+<div class="section" id="llm-happy-extras-src4-s3"><h2>SmolVLM2的背景知识</h2>
+<p>首先，我们先回顾一下SmolVLM2模型的构建方案，SmolVLM2模型的整体包括三大块：视觉模型层，特征映射层和大语言模型层，见下图：</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/smolvlm2-665836f168.png" alt="smolvlm2" width="400" />
+  <figcaption>SmolVLM2的架构图</figcaption>
+  </figure>
+</div>
+<p>这个设计是现在比较常见的VLM方案。核心设计思想就是让视觉模型的输出特征与经过embedding的文本特征直接拼接后输入到语言模型（LLM）当中，没有交叉注意力等模块。相比于早期LLaVA等架构，这种最大的优点就是可以最大程度复用已有的语言模型。以Qwen2.5-VL为例，其3B、7B、72B模型大小指的只是LLM部分，并没有包含Vision模块，实际上3B模型的参数量接近4B，视觉模块大概0.4B左右，三个不同大小的VLM使用的是统一的视觉模型。对于一些较大的VLM来说，构建视觉模型时绝大多数的训练都集中在特征映射模块和视觉模块，只在最后阶段为了最终效果进行整体微调时才会调整语言模块。保证了VLM的语言能力。</p>
+<p>下面简述一下各个模块的细节：</p>
+<ul>
+<li>视觉模型层：SmolVLM2-256M版本用的是Google的SigLip模型，一个基于ViT的视觉模型，选用的是最小的SigLip-93M的版本，HF论文里没具体写是直接用的SigLip的参数还是他们从零构建的（有注意到的读者可以评论留言下）。在SmolVLM2代码中对应的是<code>SmolVLMVisionTransformer</code>类</li>
+</ul>
+<ul>
+<li>特征映射层：就是一个简单的MLP，不过SmolVLM2中为了降低图像分辨率还做了一个Pixel shuffle来降低图像分辨率，进一步减少视觉的Token占用，减少了文本长度。HF团队在论文里提到对于参数量较小的VLM来说使用Pixel shuffle还能提升性能。但可训练参数其实就是一个单层的神经网络，这个模块的核心作用就是做特征对齐，将视觉特征从768维（SigLip的维度）映射到576维（SmolLLM2的维度）</li>
+</ul>
+<ul>
+<li>大语言模型：SmolVLM2-256M模型使用的文本模型是SmolLM-135M版本。可能是由于模型较小，HF团队在论文中说到训练时仅采用两阶段训练：大规模图文训练+针对视频任务的专门微调。为了保障模型的文本能力HF团队在训练数据中参杂了大概14%的纯文本微调数据。不过考虑到视觉模块本身参数量（93M）大小接近于文本模型（135M），因此笔者推测相比于冻结文本模型，数据平衡在这之中会起到更关键的作用。</li>
+</ul>
+<p>HF团队在原文中还提到了许多影像小模型VLM性能的trick，感兴趣的读者可以进一步参考SmolVLM2的论文</p>
+</div>
+<div class="section" id="llm-happy-extras-src4-s4"><h2>模型拼接和微调思路简介</h2>
+<p>正所谓顶级食材（模型）只需要最简单的烹饪。模型拼接的思路非常简单直接，基本就三步：</p>
+<ol>
+<li>调整SmolVLM2的“上下文控制格式”，使得其与Qwen3兼容。</li>
+</ol>
+<ol>
+<li>将模型的文本部分直接从SmolLM2换成Qwen3-0.6B，包括其文本tokenizer和词嵌入、文本模型、以及模型最后输出的语言模型头（LM Head）。</li>
+</ol>
+<ol>
+<li>需要重新初始化特征映射层的MLP，从768-&gt;576的单层神经网络改成768-&gt;1024的单层神经网络即可。</li>
+</ol>
+<p>整体架构和对图文对前后处理依旧保持SmolVLM2的流程不变，具体改动见下图：</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/concatation-e7a5e48bee.png" alt="concatation" width="400" />
+  <figcaption>将Qwen3-0.6B替换SmolVLM2的语言模型部分</figcaption>
+  </figure>
+</div>
+<p>笔者接下来详细介绍下为了实现“拼接”，具体改动的地方，供之后有类似的任务的读者参考。</p>
+</div>
+<div class="section" id="llm-happy-extras-src4-s5"><h2>模型拼接实现和关键代码讲解</h2>
+<h3>第一处改动：SmolVLM2的Tokenizers部分</h3>
+<p>首先需要改动的就是需要改动的是SmolVLM2的Tokenizers部分，这里面主要是涉及两个问题：</p>
+<ul>
+<li>第一个问题是要将SmolVLM2用于指示图像位置的特殊令牌（Special Token）加入到Qwen3的Tokenizer当中，这么做的目的是防止SmolVLM2的图像Token<code>&lt;image&gt;</code>被切分为<code>&lt;</code>、<code>image</code>、<code>&gt;</code>三块。幸运的是，Qwen3本身在Tokenizers中预留了未来用于多模态的特殊特殊令牌<code>&lt;|image_pad|&gt;</code>。因此读者直接使用了<code>&lt;|image_pad|&gt;</code>代替了<code>&lt;image&gt;</code>。用于在文本中预留图像特征的插入点。</li>
+</ul>
+<ul>
+<li>第二个问题是：SmolVLM2的chat_template和Qwen3的chat_template差别极大。chat_template的作用是通过格式化文本让模型清楚知道不同Token所代表的背景信息。用最近比较流行的话来说就是“上下文工程”（Context Engineering）。</li>
+</ul>
+<p>这里我列举了一下Qwen3、SmolVLM2、Qwen2.5-VL在聊天场景下的上下文，供读者参考。</p>
+<p><strong>Qwen3聊天上下文格式</strong></p>
+<p>以给一张图片，问题是“你的名字是什么?”，模型回答是“我的名字是Qwen”为例子。模型的上下文如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">txt</span></div><pre><code>&lt;|im_start|&gt;user
+你的名字是什么?&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+我的名字是Qwen&lt;|im_end|&gt;
+</code></pre></div>
+<p>注意Qwen3上下文是没有预留图像位置的，但相比于一般的LLM和VLM多了一个用于插入模型思考过程的<code>&lt;think&gt;&lt;\think&gt;</code>，以及包含额外的函数调用控制文本。为了便于读者理解，读者在在下面举了一个函数调用的例子。这些函数调用上下文用于控制模型调用外部函数、API或者MCP接口和接收其返回的信息。</p>
+<p>考虑到篇幅限制，本文就不粘贴带函数调用、推理、思考等一系列上下文的信息了（笔者打印了下发现实在太长了）。感兴趣的读者可以在Qwen3的官方文处了解详细设计</p>
+<ul>
+<li><a href="https://qwen.readthedocs.io/zh-cn/latest/framework/function_call.html#the-example-case" target="_blank" rel="noreferrer">Qwen3函数调用案例</a></li>
+</ul>
+<p>可以说正是这些复杂的上下文信息让模型有可能实现推理、调用函数等多样化的能力。包括多模态理解任务也需要先对上下文进行设计。</p>
+<p><strong>SmdwadwdoVLM2聊天上下文格式：</strong></p>
+<p>以给一张图片，问题是“How many dog in there.”，模型回答是“There are Three dogs.”为例子。三种不同模型的上下文如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">txt</span></div><pre><code>&lt;|im_start|&gt;User:&lt;fake_token_around_image&gt;&lt;row_1_col_1&gt;&lt;image&gt;...&lt;image&gt;&lt;fake_token_around_image&gt;&lt;row_1_col_2&gt;&lt;image&gt;...&lt;image&gt;&lt;fake_token_around_image&gt;&lt;row_1_col_3&gt;&lt;image&gt;...&lt;image&gt;...&lt;fake_token_around_image&gt;&lt;row_4_col_4&gt;&lt;image&gt;...&lt;image&gt;
+
+&lt;fake_token_around_image&gt;&lt;global-img&gt;&lt;image&gt;...&lt;image&gt;&lt;fake_token_around_image&gt;How many dog in there.&lt;end_of_utterance&gt;
+Assistant: There are Three dogs.&lt;end_of_utterance&gt;
+Assistant:</code></pre></div>
+<p>看起来非常乱，是因为有大量的<code>&lt;image&gt;</code>占位符。<code>&lt;image&gt;...&lt;image&gt;</code>之间是许多的<code>&lt;image&gt;</code>，笔者为了文章观感删掉了大量的占位符。注意模型的回车、空格均为上下文的一部分，在进行推理时需要严格遵守缩进关系。</p>
+<p>但是我们仍能找到熟悉的内容，如<code>User:</code>，<code>Assistant:</code>等用于提示模型用户的输入与模型应当输出的位置。这些关键词和Qwen类似。</p>
+<p>读者注意到了除了<code>&lt;fake_token_around_image&gt;</code>，<code>&lt;image&gt;</code>等用于指示图像的词，还出现了&lt;row_1_col_1&gt;这种位置指示符，这是因为SmolVLM2为了防止降采样对图像分辨率影响，专门使用了<code>image splitting</code>技术，简单来说就是将全局图和高清的局部图共同输入到模型当中（见下图<code>image splitting</code>模块），感兴趣的读者可在文末找到HF的技术报告了解详细技术。</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/image-split-379eb30f80.png" alt="image-split" width="400" />
+  <figcaption>SmolVLM2的完整推理流程，可以看到在图像输入前使用`image splitting`进行了预切分</figcaption>
+  </figure>
+</div>
+<p><strong>本博文的拼接模型Qwen3-SmVL模型</strong></p>
+<p>相比于Qwen3，SmolVLM2少了很多上下控制的</p>
+<p>为了尽可能保存或者说预留Qwen3的思考、函数调用等能力，笔者最终选择将SmolVLM2对于图像特征的排列插入到Qwen3的上下文格式当中。最终上下文格式如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">txt</span></div><pre><code>&lt;|im_start|&gt;user
+&lt;vision_start&gt;&lt;row_1_col_1&gt;&lt;|image_pad|&gt;（图像插入的地方）&lt;|image_pad|&gt;&lt;vision_start&gt;
+（用户提问的地方）
+&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+（模型回答的地方）&lt;|im_end|&gt;
+&lt;|endoftext|&gt;</code></pre></div>
+<p>可以看到读者尽量保持了与Qwen3的风格和复用特殊令牌。这样能够使得后续拼接的Qwen3-0.6B模型不至于受到上下文差异过大带来的性能损耗。实际上在设计微调上下文时应尽量与模型先前训练的任务接近，以减少微调带来的性能损失。</p>
+<p>transformers实现模型上下文格式控制的代码并非python语言，而是一种前端文本格式控制的语言Jinja。这个语言的变量作用域设计简直可以说是有魔法在里面。配合上Qwen3功能丰富且复杂的上下文策略，让笔者花了2个小时用于修改chat_teamplate。这里笔者不赘述如何修改chat_template，感兴趣的读者可以去文末代码链接寻找<code>chat_template.jinja</code>文件，笔者专门将chat_template模版拿出来，并且做了格式化方便读者阅读。未来有时间了笔者专门写一篇模型上下文控制与jinja语言的博客。</p>
+<h3>第二处改动：替换SmolVLM2的SmolLM2模型为Qwen3-0.6B</h3>
+<p>替换模型这块没什么复杂的，主要是需要处理Transformers比较复杂的嵌套逻辑。Tranformers通常建议模型将预训练模型backbone和下游任务分开来。改动逻辑图如下：</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/change_model-9c816e2d3b.png" alt="change_model" width="400" />
+  <figcaption>替换smolvlm2的文本模块和语言模型头</figcaption>
+  </figure>
+</div>
+<p>以Qwen3为例，预训练Backbone模型为<code>Qwen3Model</code>，仅仅包含embedding层、各个Decoder层，最后输出的是所有输入token的hidden state。负责下游任务的Qwen3提供了包括：用于因果语言序列生成的<code>Qwen3ForCausalLM</code>，也就是大家常用的语言生成。负责句子分类<code>Qwen3ForSequenceClassification</code>，使用最后一个生成的token输入到一个单层MLP做序列级分类，做句子情绪分类等可以用这个下游模型；<code>Qwen3ForTokenClassification</code>用于做Token级分类，比如语言实体抽取任务可以使用这个下游模型。<code>Qwen3ForQuestionAnswering</code>则是专门做抽取式问答任务的模型，核心思想是输入（问题，参考文本）让模型从参考文本中找到与问题最相关的一段，这类任务由于RAG系统的出现没那么流行了，未来笔者专门出一个系列的教程阐述除了因果语言序列生成以外的任务则怎么微调。</p>
+<p><strong>关键代码如下</strong></p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>from transformers import (
+    AutoProcessor,
+    AutoModelForImageTextToText,
+    AutoTokenizer,
+    AutoModelForCausalLM
+)
+
+# 替换text模型和head
+smolvlm2_02B_model = AutoModelForImageTextToText.from_pretrained(
+    &quot;model/SmolVLM2-256M-Video-Instruct&quot;,
+    torch_dtype=torch.bfloat16,
+    _attn_implementation=&quot;eager&quot;,
+).to(device)
+
+qwen3_06b_model = AutoModelForCausalLM.from_pretrained(
+    &quot;model/Qwen3-0.6B&quot;, torch_dtype=torch.bfloat16
+).to(device)
+
+smolvlm2_02B_model.model.text_model = qwen3_06b_model.model
+smolvlm2_02B_model.lm_head = qwen3_06b_model.lm_head
+...</code></pre></div>
+<p>接下来比较复杂的是替换所有的关键变量，比如模型内用于在文本序列中为图像特征预留的占位符<code>image_token_id</code>，用于指示停止生成的<code>eos_token_id</code>，和计算loss值会用到的<code>vocab_size</code>，Qwen的词表大小为151936，远远大过SmolVLM2的词表49280。具体代码如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>...
+# 替换词表大小
+smolvlm2_02B_model.vocab_size = qwen3_06b_model.vocab_size
+smolvlm2_02B_model.model.vocab_size = qwen3_06b_model.vocab_size
+smolvlm2_02B_model.config.vocab_size = qwen3_06b_model.vocab_size
+smolvlm2_02B_model.config.text_config.vocab_size = qwen3_06b_model.vocab_size
+smolvlm2_02B_model.model.config.vocab_siz = qwen3_06b_model.vocab_size
+smolvlm2_02B_model.model.config.text_config.vocab_size = qwen3_06b_model.vocab_size
+# 替换图像token
+smolvlm2_02B_model.image_token_id = 151655
+smolvlm2_02B_model.model.image_token_id = 151655
+smolvlm2_02B_model.config.image_token_id = 151655
+smolvlm2_02B_model.model.config.image_token_id = 151655
+# 替换模型生成停止符
+smolvlm2_02B_model.generation_config.eos_token_id = 151645
+···</code></pre></div>
+<p>上面的代码可以看到在替换各个变量时需要将嵌套模型的变量一起替换掉，笔者之前训练时就因为仅仅替换了<code>SmolVLMForConditionalGeneration</code>而忘记替换<code>SmolVLMModel</code>中的<code>image_token_id</code>，导致语言模型接收不到图像特征，最后表现出来就是loss下降的极快且低，grad_norm看起来也学到位了，一推理效果特别差，附上错误训练的损失图：</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/fail_train-705627f413.png" alt="fail_train" width="800" />
+  <figcaption>SwanLab记录训练结果展示：蓝色为错误训练的完整微调loss图，可以看到损失下降很快，然而实际推理会发现模型并没有图像理解能力。冻结语言模型头（红色）后发现grad_norm为零且loss不收敛，正确的应该是黄色</figcaption>
+  </figure>
+</div>
+<p>笔者最早没发现改动错误，先做完整微调（蓝色曲线）后发现损失下降很快达到了0.1以下，结果实际一推理发现模型完全没有图像理解能力，就补了一个冻结语言模型只微调视觉模型的实验（红色曲线），结果发现损失完全没下降，才定位到了视觉特征传入有问题。后续修复后正确的损失下降过程见黄色图像。</p>
+<h3>第三处改动：构建和替换特征映射层</h3>
+<p>这个相对较简单，只需要重新构建一个维度对齐的<code>SmolVLMConnector</code>即可。Qwen3的hidden_dim是1024，SigLip的hidden_dim是768，因此构建一个768➡️1024映射的<code>SmolVLMConnector</code>即可。代码如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>···
+# 构建配置并且创建连接器
+@dataclass
+class VisionConfig:
+    hidden_size: int = 768
+
+@dataclass
+class TextConfig:
+    hidden_size: int = 1024
+
+@dataclass
+class ConnectConfig:
+    scale_factor: int = 4
+    vision_config: VisionConfig = VisionConfig()
+    text_config: TextConfig = TextConfig()
+
+new_connector_config = ConnectConfig()
+
+# 替换 SigLit 到 LLM 的 connector 层
+new_connector = SmolVLMConnector(new_connector_config).to(device).to(torch.bfloat16)
+smolvlm2_02B_model.model.connector = new_connector
+···</code></pre></div>
+</div>
+<div class="section" id="llm-happy-extras-src4-s6"><h2>微调数据集构建</h2>
+<p>笔者最初计划寻找中文多模态数据集，但发现相关的资料比较少。因此决定先用英文的多模态数据集凑合一下。之后再考虑通过数据合成的方式将部分数据翻译为中文。关于数据合成和配比的问题将在之后的博客讨论。</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/the_cauldron-c005c5c3a0.png" alt="the_cauldron" width="400" />
+  <figcaption>the_cauldron数据集logo</figcaption>
+  </figure>
+</div>
+<p>这里为了方便本项目直接使用HuggingFace团队整合的多模态数据集the Cauldron数据集，Cauldron翻译成中文类似于煮东西的“釜”，不知道HF团队是不是玩“炼丹”的梗。这个数据集整合了50个视觉微调任务数据集的训练集，用于微调Huggingface发布的多模态模型Idefics2模型。这50多个数据集都被处理成了一致的格式（见下图），共有1,880,992条数据，完整下载约169G，非常方便使用。</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/data_show-6c3cfbeb12.png" alt="data_show" width="800" />
+  <figcaption>数据集样本展示</figcaption>
+  </figure>
+</div>
+<p>不过可惜数据集的文本都是英文内容，且绝大多数数据集的回复非常短，只有一个词，这也给后面模型训练带来了麻烦。本篇博客暂时不讨论关于数据构建和配比的问题，后续有时间了专门做相关的实验。本博客先以为Qwen3模型带来视觉能力为核心目标。</p>
+<p>数据集的下载链接如下，国内推荐用modelscope下载：</p>
+<ul>
+<li><a href="https://huggingface.co/datasets/HuggingFaceM4/the_cauldron" target="_blank" rel="noreferrer">HuggingFace Hub</a></li>
+<li><a href="https://modelscope.cn/datasets/AI-ModelScope/the_cauldron" target="_blank" rel="noreferrer">ModelScope</a></li>
+</ul>
+<p>笔者在实际测试时发现&quot;mimic_cgd&quot;，&quot;localized_narratives&quot;，&quot;okvqa&quot;，&quot;ocrvqa&quot;，&quot;clevr_math&quot;这几个子数据集加载有点异常，建议使用此数据集训练的读者手动处理下，社区也有用户反馈这几个数据可以在原始来源处额外下载，未来笔者将会补全这几个数据集重新上传一次完整版的the Cauldron数据集。</p>
+</div>
+<div class="section" id="llm-happy-extras-src4-s7"><h2>微调方法与代码实现</h2>
+<h3>冻结模型参数微调</h3>
+<p>整体微调方法采用了CLM模型通常的Teacher Forcing的学习方法，损失就是标准的交叉熵损失。考虑到此次本教程的目标是先确保模型具备中文多模态能力（优化模型性能等之后撰写其他博客），因此为了实验效率，在对齐微调阶段<strong>采用冻结视觉模型与文本模型，仅微调特征映射器和语言模型头</strong>的方法。</p>
+<p>冻结模型参数的核心代码如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def freeze_model(qwen_smvl):
+    for _, param in qwen_smvl.model.text_model.named_parameters():
+        param.requires_grad = False
+    for _, param in qwen_smvl.model.vision_model.named_parameters():
+        param.requires_grad = False
+    return qwen_smvl</code></pre></div>
+<p>冻结后训练参数、模型总参数、与占比如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">txt</span></div><pre><code>trainable params: 12.00M || all params: 662.87M || trainable%: 1.81</code></pre></div>
+<h3>文本长度，损失掩码和截断策略</h3>
+<p><strong>文本长度</strong></p>
+<p>由于视觉特征需要占据大量的文本长度，笔者简单测试了下the_cauldron图像占0.8K到1.3K左右的token。而数据集中大多数文本token数在200-500左右，极少情况会有3-4K的情况。因此笔者统一采用2K的文本长度，超出部分截断处理。</p>
+<p>这里有一个不同于文本微调的细节要注意，文本截断长度不能小于图像token，否则会导致模型在进行特征拼接时报错（当然图像特征如果被截断了，这条训练数据也就没意义了）。因此对于显存不足64G的同学如果需要适当缩短文本长度（不建议低于1.5K），最好连同图像分辨率也缩小些。在后面的博客我们会专门增加对减少图片token占用的研究。</p>
+<p>同样由于文本长度受限，且图像特征没法截断，我们也没使用“packing dataset”的方法提升模型的训练效率。</p>
+<p>考虑到部分数据集存在多张图片的情况，考虑到本次训练仅采用2k的文本长度（与之对比HF在训练SmolVLM-256M版本采用的是8K的文本长度，2.2B版使用了16K的文本长度）。针对单条数据中存在多张图片的情况仅仅选用第一张。</p>
+<p><strong>损失掩码</strong></p>
+<p>在采用Teacher Forcing的学习方法时，文本微调中损失掩码有两种策略：</p>
+<ul>
+<li>对包含“用户问题”和“模型回复”的完整文本进行微调优化</li>
+<li>仅对“模型回复”部分进行微调优化</li>
+</ul>
+<p>这两种策略的对比如下图：</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/mask-389e11f575.png" alt="mask" width="800" />
+  <figcaption>两种微调掩码策略的差异，通常建议选择“仅微调模型回答部分”以增强泛化性</figcaption>
+  </figure>
+</div>
+<p>通常来说使用“仅微调模型回复部分”的策略模型更容易泛化（这点与HF在SmolVLM2的论文提到的trick）。然而笔者为了提高训练效率选择了完整文本微调。可以在后续博客中增加消融实验做进一步对比。</p>
+<p>值得注意的是，在进行完整文本微调时，需要单独屏蔽Image Token以防止对图像占位token计算损失，影响模型表现。</p>
+<p><strong>关键代码如下：</strong></p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def data_collate_fix2k(examples, processor, device, max_length=2048):
+    batch_text = []
+    batch_image = []
+    for example in examples:
+        images = example[&quot;images&quot;][:1]  # 只允许一张图，不然显存压力太大
+        batch_image.append(images)
+        image_num = len(images)
+        chat_texts = example[&quot;texts&quot;][0]
+        messages = [
+            {
+                &quot;role&quot;: &quot;user&quot;,
+                &quot;content&quot;: [{&quot;type&quot;: &quot;image&quot;}] * image_num
+                + [{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: chat_texts[&quot;user&quot;]}],
+            },
+            {
+                &quot;role&quot;: &quot;assistant&quot;,
+                &quot;content&quot;: [{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: chat_texts[&quot;assistant&quot;]}],
+            },
+        ]
+        text = processor.apply_chat_template(
+            messages, enable_thinking=False, add_generation_prompt=False
+        )
+
+        batch_text.append(text)
+
+    batch = processor(
+        text=batch_text,
+        images=batch_image,
+        max_length=max_length,
+        return_tensors=&quot;pt&quot;,
+        padding=&quot;max_length&quot;,
+        truncation=True,
+    )
+    labels = batch[&quot;input_ids&quot;].clone()
+    labels[labels == processor.tokenizer.pad_token_id] = -100
+    labels[labels == processor.image_token_id] = -100
+    batch[&quot;labels&quot;] = labels
+    return batch.to(device, dtype=torch.bfloat16)</code></pre></div>
+<h3>微调超参数设置</h3>
+<p><strong>学习率</strong></p>
+<p>由于仅仅针对特征映射层（connector）进行训练，且conntector由于要对齐Qwen3的维度因此参数为随机初始化（理论上可以采用一些独特的初始化策略提升性能，但考虑到模型较小因此笔者没关注初始化策略）。因此学习率设置为lora中较为流行的1e-4学习率策略。</p>
+<p>为了保障有效收敛，学习率衰减基本是必备的trick，采用的是社区比较流行的cosine学习率衰减，衰减至0。warm up为整体步长的10%（在超过1000k step的情况下固定为50）。</p>
+<p><strong>batch size</strong></p>
+<p>Batch size通常来说越大越好，然而由于VLM模型的文本长度太大，因此采用每卡1 batch和4梯度累加（grad accelerate），在8卡训练中等效32 Batch size。</p>
+<p><strong>训练参数设置代码</strong></p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>training_args = TrainingArguments(
+    seed=42,
+    data_seed=42,
+    max_steps=200,
+    # num_train_epochs=1,  # 训练1个epoch 约1k steps
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=4,
+    dataloader_pin_memory=False,
+    warmup_ratio=0.1,
+    learning_rate=1e-4,
+    lr_scheduler_type=&quot;cosine&quot;,
+    weight_decay=0.01,
+    logging_steps=5,
+    eval_strategy=&quot;steps&quot;,
+    eval_steps=0.125,
+    save_strategy=&quot;steps&quot;,
+    save_steps=0.125,
+    save_total_limit=8,
+    optim=&quot;adamw_torch&quot;,
+    bf16=True,
+    output_dir=f&quot;./model/freeze_except_connector_cocovqa&quot;,
+    overwrite_output_dir=False,
+    report_to=&quot;swanlab&quot;,
+    run_name=&quot;freeze_except_connector_cocovqa&quot;,
+    remove_unused_columns=False,
+    gradient_checkpointing=False,
+)</code></pre></div>
+<h3>训练环境</h3>
+<p>微调代码基于沐曦的C500国产通用计算GPU实现，显存为64G。沐曦的AI芯片基本完全兼容pytorch和huggingface transformers场景，并且在做多模态训练时相比较其他国产AI芯片罕见的没有兼容性问题。读者在尝试本项目代码时可以采用Nvidia显存40G以上的显卡运行本教程。</p>
+<p><strong>笔者个人感觉沐曦的GPU整体适配效果还是非常好的，没遇到适配性的问题。体验上和用NV的GPU做训练没什么区别</strong>。笔者自己也用过好几款国产GPU，沐曦的体验肯定是名列前茅的，包括代码中有指定flash attention在沐曦GPU上都能成功迁移，这点非常值得给沐曦团队点个赞。希望国产GPU生态能越发展越好，造福广大炼丹师；）。</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/muxi-gpu-a4615a5217.jpg" alt="muxi-gpu" width="400" />
+  <figcaption>沐曦国产GPU，笔者用的云端服务器没见过真机，因此找了张网图</figcaption>
+  </figure>
+</div>
+<p>训练环境的话除了安装GPU对应的驱动和pytorch外，本教程需要额外安装Huggingface全家桶，如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">txt</span></div><pre><code>torch   # 推荐版本&gt;=6.0
+torchvision
+transformers&gt;=4.53.0
+accelerate
+datasets
+num2words   # SmolVLM2需要</code></pre></div>
+<p>额外补充一句，如果采用沐曦GPU训练的话，需要在沐曦官方文档处寻找<a href="https://developer.metax-tech.com/softnova/index" target="_blank" rel="noreferrer">沐曦版torch</a>的安装方式进行下载。其他HF环境和NV基本一样。附赠一个沐曦查看GPU的命令：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>mx-smi</code></pre></div>
+<p>效果如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>=================== MetaX System Management Interface Log ===================
+Timestamp                                         : Sat Jul 12 14:58:51 2025
+
+Attached GPUs                                     : 8
++---------------------------------------------------------------------------------+
+| MX-SMI 2.1.12                       Kernel Mode Driver Version: 2.12.13         |
+| MACA Version: 2.29.0.19             BIOS Version: 1.22.3.0                      |
+|------------------------------------+---------------------+----------------------+
+| GPU         NAME                   | Bus-id              | GPU-Util             |
+| Temp        Pwr:Usage/Cap          | Memory-Usage        |                      |
+|====================================+=====================+======================|
+| 0           MetaX C500             | 0000:0e:00.0        | 0%                   |
+| 36C         69W / 350W             | 5680/65536 MiB      |                      |
++------------------------------------+---------------------+----------------------+
+| 1           MetaX C500             | 0000:0f:00.0        | 0%                   |
+| 38C         70W / 350W             | 4986/65536 MiB      |                      |
++------------------------------------+---------------------+----------------------+
+| 2           MetaX C500             | 0000:10:00.0        | 0%                   |
+| 37C         69W / 350W             | 4986/65536 MiB      |                      |
++------------------------------------+---------------------+----------------------+
+| 3           MetaX C500             | 0000:12:00.0        | 1%                   |
+| 37C         71W / 350W             | 4986/65536 MiB      |                      |
++------------------------------------+---------------------+----------------------+
+| 4           MetaX C500             | 0000:35:00.0        | 0%                   |
+| 37C         70W / 350W             | 4986/65536 MiB      |                      |
++------------------------------------+---------------------+----------------------+
+| 5           MetaX C500             | 0000:36:00.0        | 1%                   |
+| 36C         68W / 350W             | 4986/65536 MiB      |                      |
++------------------------------------+---------------------+----------------------+
+| 6           MetaX C500             | 0000:37:00.0        | 0%                   |
+| 39C         73W / 350W             | 4986/65536 MiB      |                      |
++------------------------------------+---------------------+----------------------+
+| 7           MetaX C500             | 0000:38:00.0        | 0%                   |
+| 38C         71W / 350W             | 4986/65536 MiB      |                      |
++------------------------------------+---------------------+----------------------+
+
++---------------------------------------------------------------------------------+
+| Process:                                                                        |
+|  GPU                    PID         Process Name                 GPU Memory     |
+|                                                                  Usage(MiB)     |
+|=================================================================================|
+|  0                  3496691         python3.10                   4066           |
+|  0                  3496692         python3.10                   102            |
+|  0                  3496693         python3.10                   102            |
+|  0                  3496694         python3.10                   102            |
+|  0                  3496695         python3.10                   102            |
+|  0                  3496696         python3.10                   102            |
+|  0                  3496697         python3.10                   102            |
+|  0                  3496698         python3.10                   170            |
+|  1                  3496692         python3.10                   4154           |
+|  2                  3496693         python3.10                   4154           |
+|  3                  3496694         python3.10                   4154           |
+|  4                  3496695         python3.10                   4154           |
+|  5                  3496696         python3.10                   4154           |
+|  6                  3496697         python3.10                   4154           |
+|  7                  3496698         python3.10                   4154           |
++---------------------------------------------------------------------------------+</code></pre></div>
+<h3>训练代码实现</h3>
+<p>在构建训练代码时，笔者使用HuggingFace Transfomers框架的Trainer类来完成训练代码。Trainer类实现的训练逻辑基本能完成大部分微调任务。这里唯一需要提到的是笔者使用了Qwen3-0.6B而非通常此类任务该使用的Qwen3-0.6B-Base模型，Qwen3-0.6B相比于Qwen3-0.6B-Base模型经过了指令遵从微调、对齐等，能实现聊天问答功能。</p>
+<p>通常来说对经过微调的模型进行持续训练会一定程度带来性能损失，然而此次微调时笔者冻结了LLM参数，因此需要选用经过微调的模型来实现多模态问答能力。</p>
+<p>笔者在训练过程中使用的是bfloat16精度，相比于float16来说bfloat16增加了尾数位数，训练过程中精度会更高些。</p>
+<p>在前期进行方案验证阶段笔者采用的是cocoqa数据集，并且进行200steps的微调训练。在确定方案可行后笔者计划使用完整数据集进行微调训练，然而考虑到训练数据量仅仅只有整个模型的12M，因此笔者按参数量与训练Token的比值为1:10采样数据集，即总共从数据集中采样出60K条数据用于实际训练（文本长度按照2k计算，实际上有padding部分因此实际参与token数小于120M）。笔者认为参与训练的数量是足以令模型收敛的，后续实验也证明了模型确实能达到我们所期望的效果。</p>
+<p><strong>训练关键代码实现</strong></p>
+<p>代码比较长是因为增加了断点续训的能力</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>################
+# 开启训练
+################
+last_checkpoint = None  # load last checkpoint if available
+if (
+    os.path.isdir(training_args.output_dir)
+    and not training_args.overwrite_output_dir
+):
+    last_checkpoint = get_last_checkpoint(training_args.output_dir)
+    if last_checkpoint is None and len(os.listdir(training_args.output_dir)) &gt; 0:
+        raise ValueError(
+            f&quot;Output directory ({training_args.output_dir}) already exists&quot;
+        )
+    print(
+        f&quot;Checkpoint detected, resuming training at {last_checkpoint}.&quot;
+    )
+# Init Trainer
+trainer = Trainer(
+    model=qwen_smvl,
+    args=training_args,
+    train_dataset=raw_data[&quot;train&quot;],
+    eval_dataset=raw_data[&quot;test&quot;],
+    data_collator=collate_fn,
+)
+trainer.train(resume_from_checkpoint=last_checkpoint)
+qwen_smvl.save_pretrained(training_args.output_dir)</code></pre></div>
+<p>完整代码见[代码及数据集链接汇总](#代码及数据集链接汇总)</p>
+<p>或者直接由[完整项目GitHub地址]()</p>
+</div>
+<div class="section" id="llm-happy-extras-src4-s8"><h2>微调训练&amp;结果展示</h2>
+<h3>环境安装与微调代码执行</h3>
+<p><strong>代码准备与环境安装</strong></p>
+<p>可以在<a href="https://github.com/ShaohonChen/Qwen3-SmVL" target="_blank" rel="noreferrer">GitHub仓库地址</a>处找到实验的完整代码。使用git clone后使用如下命令安装环境</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>pip install -r requirements.txt</code></pre></div>
+<p><strong>数据集和模型下载</strong></p>
+<p>笔者附上自动下载脚本，注意该脚本使用<a href="https://modelscope.cn/" target="_blank" rel="noreferrer">魔塔社区</a>完成模型与数据集的下载</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>bash download_resource.sh</code></pre></div>
+<h3>小批量微调训练</h3>
+<p>为了进行快速验证，笔者首先使用cocoqa数据集并且进行了200steps的训练，所有参数与前文所述一致。通过</p>
+<p>运行实验命令如下，推荐使用8卡进行训练，在8张沐曦GPU卡上预计需要使用20min</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code># 单GPU训练
+CUDA_VISIBLE_DEVICES=0 python train.py ./cocoqa_train.yaml
+# 8GPU训练
+accelerate launch --num_process 8 train.py ./cocoqa_train.yaml</code></pre></div>
+<p>注意，本项目使用SwanLab进行训练日志记录与分析，如果未登陆SwanLab需要使用<code>swanlab login</code>进行登陆。运行后看到如下结果即代表实验成功开启：</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/run-bc19b1bf46.png" alt="run" width="800" />
+  <figcaption>成功训练后可以看到SwanLab链接</figcaption>
+  </figure>
+</div>
+<p>下面是笔者完成小批量微调训练的训练损失、测试损失结果图</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/cocoqa_swanlab-e84d061d9f.png" alt="cocoqa_swanlab" width="800" />
+  <figcaption>SwanLab训练可视化分析结果，可以看到最后训练损失和测试损失都收敛在0.65左右</figcaption>
+  </figure>
+</div>
+<p>模型在完成训练后会自动使用一张狗狗图片配合问题“图中有什么动物？”让模型根据图片进行推理，推理结果如下：</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/bad_case-4c63624334.png" alt="bad_case" width="800" />
+  <figcaption>SwanLab记录了模型训练好后的推理结果，可以看到模型能正常理解和回复中文</figcaption>
+  </figure>
+</div>
+<p>当时看到模型对着三只狗的图片回答“兔子”时笔者一时认为炼丹失败了，当然如果实际炼丹失败后模型是不会输出动物类型的，而是输出一些乱码或者告诉用户并没有看到图片。识别错误的原因实际上是由于训练步数过少导致的。后续加大训练步数与数据量后模型能正常识别出狗狗并且能准确的说出有三只狗。</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/dog-8d4b13a9c0.png" alt="dog" width="250" />
+  <figcaption>附上三只眼神忧伤的狗子，难道长得很像兔子吗？</figcaption>
+  </figure>
+</div>
+<p>PS: 作者公开了在<a href="https://swanlab.cn/@ShaohonChen/Qwen3-SmVL/overview" target="_blank" rel="noreferrer">SwanLab上的训练结果</a>，感兴趣的读者可以自己查看，SwanLab也支持Clone作者的训练日志，大家可以在自己训练时clone笔者的项目去做对照。</p>
+<h3>完整微调训练结果展示</h3>
+<p>运行实验命令如下，推荐使用8卡进行训练，在8片沐曦C500芯片上预计需要使用1.5h</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code># 单GPU训练
+CUDA_VISIBLE_DEVICES=0 python train.py ./full_train.yaml
+# 8GPU训练
+accelerate launch --num_processes 8 train.py ./full_train.yaml</code></pre></div>
+<p>下图展示了使用完整微调数据对比于小批量训练，可以看到全量数据微调时loss变得更为抖动，这是由于数据类型的丰富给模型的学习带来了一定的挑战。</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/fulldata_swanlab-13d3e21ec4.png" alt="fulldata_swanlab" width="800" />
+  <figcaption>红色为完整训练loss，黄色为小批量训练结果</figcaption>
+  </figure>
+</div>
+<p>进一步对比完整训练和小批量训练的训练和测试损失，可以看到完整训练的模型训练损失达到了0.61，远低于仅仅使用cocoqa模型的效果，评估损失也远低于前者，维持在0.58左右。</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/evalloss-b5e677ba01.png" alt="evalloss" width="800" />
+  <figcaption>红色为完整训练loss，黄色为小批量训练结果</figcaption>
+  </figure>
+</div>
+<p>这里值得一提的是，由于我们选用的测试集比较小（仅有64条数据），因此训练损失和测试损失的差距并不能直接理解为过拟合的证据。实际上在大模型训练上，如果数据集足够大的情况下，通常可以认为训练损失等同于评估损失。</p>
+<p>此外，模型通过分析1k步之后的训练损失、平均梯度范数（Grad Norm）变化。此时训练任务已过半，且学习率开始快速衰减。如下图，可以看到学习率快速衰减的情况下模型损失并没有明显的进一步下降，这说明模型已经实现了充分训练。</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/1kstep-5b9806ebd5.png" alt="1kstep" width="800" />
+  <figcaption>1k step之后模型的训练损失变化</figcaption>
+  </figure>
+</div>
+<p>在训练效率方面，可以看到我们仍没有充分榨干沐曦GPU的性能，当然这也是由于多模态任务的网络本身架构上比较复杂，其中包含许多对图像、文本的拼接工作，这也导致了GPU性能没法完全利用。</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/mx-gpu-use-b43ec09007.png" alt="mx-gpu-use" width="800" />
+  <figcaption>SwanLab对沐曦C500训效率自动记录</figcaption>
+  </figure>
+</div>
+<p>同样在完成训练后使用狗狗图进行了测试，这次模型能理解图片、中文以及给出正确的回复。更为关键的是模型完全保留了Qwen3-0.6B原有的全部能力，包括函数调用、推理等。在此基础上，仅仅增加了0.09B参数量的情况下为模型带来了图像理解能力！</p>
+<div align="center">
+  <figure>
+  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/good_case-6a3efcfd49.png" alt="good_case" width="800" />
+  <figcaption>同样的图片与问题，更大的数据量和更充足的数据使得模型能够正确给出回复</figcaption>
+  </figure>
+</div>
+<h3>模型推理与效果分析</h3>
+<p>等笔者下完数据集后未来补一下测试环节 ; ）</p>
+<p>可以关注<a href="https://docs.swanlab.cn/examples/qwen3_smolvlm_muxi.html" target="_blank" rel="noreferrer">swanlab教程集合</a>获取最新更新教程！</p>
+</div>
+<div class="section" id="llm-happy-extras-src4-s9"><h2>代码及数据集链接汇总</h2>
+<p>微调用The Cauldron数据集下载链接：</p>
+<ul>
+<li>HuggingFace Hub: <a href="https://huggingface.co/datasets/HuggingFaceM4/the_cauldron" target="_blank" rel="noreferrer">https://huggingface.co/datasets/HuggingFaceM4/the_cauldron</a></li>
+<li>ModelScope: <a href="https://modelscope.cn/datasets/AI-ModelScope/the_cauldron" target="_blank" rel="noreferrer">https://modelscope.cn/datasets/AI-ModelScope/the_cauldron</a></li>
+</ul>
+<p>Qwen3-0.6B模型下载：</p>
+<ul>
+<li>HuggingFace Hub: <a href="https://huggingface.co/Qwen/Qwen3-0.6B" target="_blank" rel="noreferrer">https://huggingface.co/Qwen/Qwen3-0.6B</a></li>
+<li>ModelScope: <a href="https://modelscope.cn/Qwen/Qwen3-0.6B" target="_blank" rel="noreferrer">https://modelscope.cn/Qwen/Qwen3-0.6B</a></li>
+</ul>
+<p>本实验完整代码GitHub链接：</p>
+<ul>
+<li>完整项目GitHub地址：<a href="https://github.com/ShaohonChen/Qwen3-SmVL" target="_blank" rel="noreferrer">https://github.com/ShaohonChen/Qwen3-SmVL</a></li>
+</ul>
+<p>本实验SwanLab日志：</p>
+<ul>
+<li>SwanLab训练过程查看：<a href="https://swanlab.cn/@ShaohonChen/Qwen3-SmVL/overview" target="_blank" rel="noreferrer">https://swanlab.cn/@ShaohonChen/Qwen3-SmVL/overview</a></li>
+</ul>
+</div>
+<div class="section" id="llm-happy-extras-src4-s10"><h2>参考资料</h2>
+<ul>
+<li>Huggingface SmolVLM2技术报告：<a href="https://arxiv.org/pdf/2504.05299" target="_blank" rel="noreferrer">https://arxiv.org/pdf/2504.05299</a></li>
+</ul>
+</div></div>
+<div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/CDDRS/readme.md</div><p>一个从零开始实现的建筑文档智能审查系统，旨在帮助开发者理解知识引导检索在专业领域文档审查中的核心原理和实现细节。</p>
+<div class="section" id="llm-happy-extras-src5-s1"><h2>项目动机</h2>
+<p>建筑施工交底文档的合规性审查是保障施工项目安全性、经济性的关键环节。在施工项目全周期中，各项操作必须符合相关规范条文要求，才能确保建设项目的安全性与可持续性。然而，相关查询参考往往分散在各个项目文件中，传统基于人工的审查方法难以处理庞大复杂的建筑条文，其审查过程需要基于审查人员的经验与专业知识，具有主观性强，耗时长且易出错等弊端。</p>
+<p>随着大语言模型技术的发展，LLM为自动化建筑文档审查带来了新的希望。然而，大语言模型通常使用通用语料进行训练，缺乏建筑相关背景知识，在处理建造背景下的复杂推理问题中会产生严重的幻觉现象。通过使用基于向量相似匹配的RAG方法，可以为LLMs提供初步的相似参考知识，从而减轻基于人工或规则的审查方法难以处理庞大建筑文本所带来的错误率高的问题。</p>
+<p>然而，传统RAG方法在建筑专业文档审查中存在关键局限：由于固定的分块设计，使得文本块之间面临知识信息缺失问题；在检索过程中，使用整句问询嵌入的方法进行相似性匹配，缺少对问询细粒度特征的识别与考量，检索效率低下。在建筑施工交底文档中，这类文档详细阐述了施工工艺特点和方法、质量规格、操作程序以及安全协议，包含大量知识细节且专业性极强。因此需要一个能够精准理解和检索建筑领域专业知识的智能系统。</p>
+<p>因此，本项目提出了一个生成式知识引导的建筑文档审查系统，旨在提升审查的可靠性和准确性。系统具有两大核心创新：首先提出动态语义知识分块策略，构建具有更优语义连贯性和完整性的知识库；其次基于增强的知识表示，提出生成式知识引导检索框架，在语义嵌入检索过程中增强对细粒度信息的关注，从而提高知识参考检索的准确性和建筑文档审查任务中修正的可靠性。</p>
+<p>需要注意的是，由于篇幅限制，我们无法展示完整的整个实现过程，但是，我们将在文档中讲解每个必要的实现步骤以及背后的思考，您可以通过这些内容快速理解如何实现一个建筑文档智能审查系统。</p>
+</div>
+<div class="section" id="llm-happy-extras-src5-s2"><h2>前置实现</h2>
+<p>接下来，我们将带领大家，从0开始，实现一个建筑文档智能审查系统。首先，我们将完成一些基本的准备过程。</p>
+<h3>1. 实现 LLM 模块</h3>
+<p>首先我们需要实现 LLM 模块，这是系统中最基本的模块，我们将利用大模型完成文档的清洗，信息提取等工作，可以说本系统的一部分精髓即为使用大模型预先处理文档信息，方便后续进行检索，这里我们使用 DeepSeek 的 api 来实现。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>from abc import ABC, abstractmethod
+from typing import Any, Optional
+
+class BaseLLM(ABC):
+    &quot;&quot;&quot;Interface for large language models.&quot;&quot;&quot;
+
+    def __init__(
+        self,
+        model_name: str,
+        model_params: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        self.model_name = model_name
+        self.model_params = model_params or {}
+
+    @abstractmethod
+    def predict(self, input: str) -&gt; str:
+        &quot;&quot;&quot;Sends a text input to the LLM and retrieves a response.&quot;&quot;&quot;</code></pre></div>
+<p>如上是一个调用大模型的抽象接口，这可以帮助我们统一调用大模型的格式，我们继承这个基类，实现调用大模型的接口。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>from openai import OpenAI
+from typing import Any, Optional
+from .base import BaseLLM
+
+class DeepSeekLLM(BaseLLM):
+    &quot;&quot;&quot;Implementation of the BaseLLM interface using DeepSeek API.&quot;&quot;&quot;
+
+    def __init__(
+        self,
+        model_name: str,
+        api_key: str,
+        base_url: str = &quot;https://api.deepseek.com/v1&quot;,
+        model_params: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        super().__init__(model_name, model_params, **kwargs)
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
+
+    def predict(self, input: str) -&gt; str:
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: input}],
+        )
+        return response.choices[0].message.content</code></pre></div>
+<p>完成搭建后，我们可以通过尝试调用 predict 方法来测试是否成功。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>llm = DeepSeekLLM(
+    model_name=&quot;deepseek-chat&quot;, 
+    api_key=&quot;your-api-key-here&quot;,
+    base_url=&quot;https://api.deepseek.com/v1&quot;
+)
+print(llm.predict(&quot;你好，你能帮助我进行建筑文档审查吗？&quot;))</code></pre></div>
+<p>当观察到 LLM 正确回复后，我们这一模块的构建就完成了。</p>
+<h3>2. 实现 Embedding 模块</h3>
+<p>除了调用大模型，我们还需要实现 Embedding 模块，Embedding 模块用于将文本转换为向量，我们将使用向量来表示文档中的信息，这样的好处是，我们可以通过向量的相似度来衡量文档与查询之间的相似度，从而召回对回复用户问题最有帮助的文档。</p>
+<p>构建 Embedding 模块的方法与构建 LLM 模块类似。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>from abc import ABC, abstractmethod
+from typing import List, Any, Optional
+
+class BaseEmb(ABC):
+    def __init__(
+        self,
+        model_name: str,
+        model_params: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        self.model_name = model_name
+        self.model_params = model_params or {}
+
+    @abstractmethod
+    def get_emb(self, input: str) -&gt; List[float]:
+        &quot;&quot;&quot;Sends a text input to the embedding model and retrieves the embedding.&quot;&quot;&quot;
+        pass
+
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from .base import BaseEmb
+
+class BGEEmbedding(BaseEmb):
+    def __init__(self, model_name: str = &quot;BAAI/bge-m3&quot;, **kwargs):
+        super().__init__(model_name=model_name, **kwargs)
+        self.embed_model = HuggingFaceEmbedding(
+            model_name=model_name,
+            trust_remote_code=True,
+            cache_folder=&quot;./model_cache&quot;
+        )
+
+    def get_emb(self, text: str) -&gt; List[float]:
+        embedding = self.embed_model.get_text_embedding(text)
+        return embedding</code></pre></div>
+<p>完成搭建后，我们可以通过尝试调用 get_emb 方法来测试是否成功。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>emb = BGEEmbedding(model_name=&quot;BAAI/bge-m3&quot;)
+print(emb.get_emb(&quot;建筑结构的安全性检查包括哪些方面？&quot;))</code></pre></div>
+<p>当观察到 Embedding 正确给出了编码后的向量，我们这一模块的构建就完成了。</p>
+<h3>3. 实现文档预处理模块</h3>
+<p>为了处理建筑文档，我们需要预先准备好文档读取模块。本系统假设所有建筑规范和标准已经转换为Markdown格式，便于后续的文本处理和分析。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import os
+from pathlib import Path
+from typing import Dict, List
+
+class DocumentProcessor:
+    def __init__(self):
+        pass
+    
+    def load_documents(self, directory_path: str) -&gt; List[str]:
+        documents = []
+        
+        for file_path in Path(directory_path).rglob(&#39;*.md&#39;):
+            try:
+                with open(file_path, &#39;r&#39;, encoding=&#39;utf-8&#39;) as f:
+                    content = f.read()
+                    documents.append(content)
+            except Exception as e:
+                print(f&quot;Error reading {file_path}: {e}&quot;)
+                    
+        return documents</code></pre></div>
+<p>完成文档预处理模块的设置后，我们就可以采用下面的方法来加载建筑规范文档了。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>processor = DocumentProcessor()
+documents = processor.load_documents(&quot;./construction_standards&quot;)
+print(f&quot;加载了 {len(documents)} 个建筑规范文档&quot;)</code></pre></div>
+</div>
+<div class="section" id="llm-happy-extras-src5-s3"><h2>核心实现</h2>
+<p>建筑文档审查系统的主要流程如下。首先，让我们来梳理一下建筑文档审查的工作流程，系统的一个核心思想在于，我们需要把用户提供的文档内容通过智能化的问询生成和知识引导检索来识别潜在的合规性问题。与传统RAG方法不同，我们的系统专门针对建筑领域的专业特点进行了优化，能够更准确地理解建筑规范要求，提供更可靠的审查建议。</p>
+<h3>动态语义知识分块</h3>
+<p>在传统RAG流程中，文本通过设置固定的token数量划分文本区块。然而，固定token数量会在句子中间截断，导致信息缺失。为此，本系统使用基于建筑文本语义动态划分的方式，通过双重语义聚类的方式，完成考虑建筑语义连贯性的知识chunk划分。</p>
+<p>首先，将整个文档内容处理成单独句子序列 <span class="math" role="math" aria-label="数学公式">S = {s<sub>0</sub>, s<sub>1</sub>, …, s<sub>a</sub>}</span>。通过计算相邻句子间的语义差异度来识别潜在的语义边界：</p>
+<div class="math-display" role="math" aria-label="数学公式">γ<sub>i</sub> = 1 - <span class="mfrac"><span class="mnum">s<sub>i-1</sub> · s<sub>i</sub></span><span class="mden">|s<sub>i-1</sub>| |s<sub>i</sub>|</span></span></div>
+<p>基于语义差异度分布自动确定动态阈值：</p>
+<div class="math-display" role="math" aria-label="数学公式">ψ = <span class="mtext">Quantile</span>(Γ, <span class="mfrac"><span class="mnum">a-p</span><span class="mden">a</span></span>)</div>
+<p>确保最终的分块既保持语义连贯性又满足长度约束：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mbb">E</span>[γ<sub><span class="mtext">intra</span></sub>] &lt; <span class="mbb">E</span>[γ<sub><span class="mtext">inter</span></sub>]</div>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import re
+import numpy as np
+from typing import List, Dict, Tuple
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+
+class DynamicSemanticChunker:
+    def __init__(self, 
+                 embedding_model: str = &quot;BAAI/bge-m3&quot;,
+                 max_chunk_length: int = 512,
+                 min_chunk_length: int = 50):
+        self.embedding_model = SentenceTransformer(embedding_model)
+        self.max_chunk_length = max_chunk_length
+        self.min_chunk_length = min_chunk_length
+    
+    def split_text(self, text: str) -&gt; Dict[str, str]:
+        sentences = self._split_into_sentences(text)
+        if len(sentences) == 0:
+            return {}
+        
+        sentence_embeddings = self.embedding_model.encode(sentences)
+        gamma_values = self._compute_semantic_discrepancy(sentence_embeddings)
+        
+        total_tokens = sum(len(s.split()) for s in sentences)
+        baseline_chunks = max(1, total_tokens // self.max_chunk_length)
+        alpha = max(0.1, (len(sentences) - baseline_chunks) / len(sentences))
+        threshold = np.quantile(gamma_values, alpha) if len(gamma_values) &gt; 0 else 0.5
+        
+        boundaries = self._identify_boundaries(gamma_values, threshold)
+        initial_chunks = self._create_initial_chunks(sentences, boundaries)
+        final_chunks = self._enforce_length_constraints(initial_chunks)
+        
+        chunks_dict = {}
+        for i, chunk in enumerate(final_chunks):
+            chunk_id = f&quot;chunk-{i+1:03d}&quot;
+            chunks_dict[chunk_id] = chunk
+        
+        return chunks_dict
+    
+    def _split_into_sentences(self, text: str) -&gt; List[str]:
+        sentence_pattern = r&#39;[。！？；\n]+&#39;
+        sentences = re.split(sentence_pattern, text)
+        
+        cleaned_sentences = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) &gt; 5:
+                cleaned_sentences.append(sentence)
+        
+        return cleaned_sentences
+    
+    def _compute_semantic_discrepancy(self, embeddings: np.ndarray) -&gt; List[float]:
+        gamma_values = []
+        
+        for i in range(1, len(embeddings)):
+            similarity = cosine_similarity(
+                embeddings[i-1].reshape(1, -1),
+                embeddings[i].reshape(1, -1)
+            )[0][0]
+            
+            gamma = 1 - similarity
+            gamma_values.append(gamma)
+        
+        return gamma_values
+    
+    def _identify_boundaries(self, gamma_values: List[float], threshold: float) -&gt; List[int]:
+        boundaries = [0]
+        
+        for i, gamma in enumerate(gamma_values):
+            if gamma &gt; threshold:
+                boundaries.append(i + 1)
+        
+        boundaries.append(len(gamma_values) + 1)
+        return sorted(set(boundaries))
+    
+    def _create_initial_chunks(self, sentences: List[str], boundaries: List[int]) -&gt; List[str]:
+        chunks = []
+        
+        for i in range(len(boundaries) - 1):
+            start = boundaries[i]
+            end = boundaries[i + 1]
+            
+            chunk_sentences = sentences[start:end]
+            chunk_text = &#39; &#39;.join(chunk_sentences)
+            chunks.append(chunk_text)
+        
+        return chunks
+    
+    def _enforce_length_constraints(self, chunks: List[str]) -&gt; List[str]:
+        final_chunks = []
+        
+        for chunk in chunks:
+            chunk_length = len(chunk.split())
+            
+            if chunk_length &lt;= self.max_chunk_length:
+                if chunk_length &gt;= self.min_chunk_length:
+                    final_chunks.append(chunk)
+            else:
+                sub_chunks = self._split_long_chunk(chunk)
+                final_chunks.extend(sub_chunks)
+        
+        return final_chunks
+    
+    def _split_long_chunk(self, chunk: str) -&gt; List[str]:
+        sentences = chunk.split(&#39;。&#39;)
+        sub_chunks = []
+        current_chunk = &quot;&quot;
+        
+        for sentence in sentences:
+            if sentence.strip():
+                test_chunk = current_chunk + sentence + &quot;。&quot;
+                if len(test_chunk.split()) &lt;= self.max_chunk_length:
+                    current_chunk = test_chunk
+                else:
+                    if current_chunk:
+                        sub_chunks.append(current_chunk.strip())
+                    current_chunk = sentence + &quot;。&quot;
+        
+        if current_chunk:
+            sub_chunks.append(current_chunk.strip())
+        
+        return sub_chunks</code></pre></div>
+<h3>建筑文档审查系统</h3>
+<p>整体的审查过程如下图所示。系统获取需要审查的区域后，依据提示生成审查问题推荐，此部分也可供工程师进行相关问题输入或推荐问题选择，生成待审查问题。随后，系统通过生成式知识引导检索框架，依据审查问题在所建文本知识库中检索出相应的知识参考。最终，依据检索的部分与审查原文，进行问题分析与审查修正，完成最终的审查流程。</p>
+<p><figure class="happy-figure"><img src="@asset/happy-llm/extra-chapter/cddrs/images/pic1-aff28780eb.png" alt="picture" loading="lazy"><figcaption>picture</figcaption></figure></p>
+<h4>审查问题生成</h4>
+<p>在文档审查流程中，系统引入了双阶段Prompt工程驱动的智能化问询生成机制，旨在对建筑施工交底文档进行预见性分析与风险挖掘，实现对文档潜在问题的高效、精准定位。</p>
+<p>阶段1为待查文档主旨目标解构，模型被指示从文本中提炼核心事件、关键技术、工艺流程等要素，结构化地总结文档的核心内容，由此界定本次审查的靶向目标，为后续的精细化问询奠定基础。阶段2为多维度风险探测与定制化问询生成，基于第一阶段提炼的核心要素，通过few-shot等方式引导 LLM 从合规性、安全性、可操作性等多维度对文档进行风险探测。Prompt 指示模型围绕潜在的限制条件、操作流程、以及可能存在的合规性隐患等方面，进行细粒度、多角度的审查提问。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import re
+
+CORE_COMPONENTS_PROMPT = &quot;&quot;&quot;
+Task: Your task involves the extraction of crucial information components from a designated text segment. The purpose of this extraction is to assist in uncovering hidden descriptions indicative of regulatory non-compliance. Key information components encompass, but are not limited to, core descriptive events, essential construction techniques, technologies, and associated limitations and restrictions.
+
+Input: {document_chunk}
+Answer:
+&quot;&quot;&quot;
+
+REVIEW_QUERIES_PROMPT = &quot;&quot;&quot;
+Task: Your task is to generate relevant search queries based on the text under review and provided core descriptive references. These queries should target potential areas of non-compliance within the text, facilitating the subsequent retrieval of original regulatory documents for detailed examination.
+
+Input: {document_chunk}
+Core components: {core_components}
+Queries:
+&quot;&quot;&quot;
+
+def generate_review_queries(llm, document_chunk: str) -&gt; List[str]:
+    core_prompt = CORE_COMPONENTS_PROMPT.format(document_chunk=document_chunk)
+    core_response = llm.predict(core_prompt)
+    
+    # 生成审查查询
+    queries_prompt = REVIEW_QUERIES_PROMPT.format(
+        document_chunk=document_chunk,
+        core_components=core_response
+    )
+    queries_response = llm.predict(queries_prompt)
+    
+    # 从响应中提取查询列表
+    queries = re.findall(r&quot;&#39;([^&#39;]*)&#39;&quot;, queries_response)
+    
+    return queries[:5]</code></pre></div>
+<h4>知识引导生成式检索</h4>
+<p>系统的核心创新在于知识引导的检索框架，整个过程分为三个关键步骤。步骤1为句子级编码，主要负责输入查询句子的初始表示学习，计算查询与知识库chunks间的句子级相似度分数。步骤2为知识引导检索，进一步从查询中提取关键信息，利用这些信息结合文档长度自适应加权等机制，对每个知识库chunk进行更详细的评分。步骤3为重排序与增强，使用大语言模型对步骤2检索的结果进行进一步重排序，并利用精炼的知识来增强原始查询。 <figure class="happy-figure"><img src="@asset/happy-llm/extra-chapter/cddrs/images/pic2-cec6c5e820.png" alt="picture" loading="lazy"><figcaption>picture</figcaption></figure></p>
+<p>首先建立专门针对建筑领域文本分析的深度提取模块，集成领域预训练BERT进行上下文编码，结合双向LSTM进行建筑法规依赖建模。建立三级重要性分类层次：max（最高）、mid（中等）、lit（字面）优先级。本项目直接通过大语言模型进行关键信息提取，如果需要更精准的效果，可以自行训练BERT模型进行专门的关键信息提取。 <figure class="happy-figure"><img src="@asset/happy-llm/extra-chapter/cddrs/images/pic3-1341a4123d.png" alt="picture" loading="lazy"><figcaption>picture</figcaption></figure></p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import re
+from typing import Dict, Tuple, List
+
+KEY_INFO_EXTRACTION_PROMPT = &quot;&quot;&quot;
+Your task is to extract key information from the query with three different priority levels:
+
+Maximum priority (max): The most important core concepts or entities
+Medium priority (mid): Important modifiers or qualifying conditions  
+Literal priority (lit): Specific values, standards or specifications
+
+Query: {query}
+max:
+mid:
+lit:
+&quot;&quot;&quot;
+
+class KeyInfoExtractor:
+    def __init__(self, llm):
+        self.llm = llm
+
+    def extract_key_info(self, query: str) -&gt; Dict[str, Tuple[str, float]]:
+        prompt = KEY_INFO_EXTRACTION_PROMPT.format(query=query)
+        response = self.llm.predict(prompt)
+        
+        lines = response.strip().split(&#39;\n&#39;)
+        key_info = {}
+        weights = {&#39;max&#39;: 0.5, &#39;mid&#39;: 0.3, &#39;lit&#39;: 0.2}
+        
+        for line in lines:
+            if line.startswith(&#39;max:&#39;):
+                key_info[&#39;max&#39;] = (line[4:].strip(), weights[&#39;max&#39;])
+            elif line.startswith(&#39;mid:&#39;):
+                key_info[&#39;mid&#39;] = (line[4:].strip(), weights[&#39;mid&#39;])
+            elif line.startswith(&#39;lit:&#39;):
+                key_info[&#39;lit&#39;] = (line[4:].strip(), weights[&#39;lit&#39;])
+        
+        return key_info</code></pre></div>
+<h4>文档长度自适应因子</h4>
+<p>在知识引导检索过程中，文档长度自适应因子用于调整不同长度文档的权重分配，确保长短文档都能得到公平的评分机会。该因子的计算考虑了当前文档chunk的长度与平均文档长度的关系。</p>
+<div class="math-display" role="math" aria-label="数学公式">Λ<sub><span class="mtext">DL</span></sub> = <span class="mfrac"><span class="mnum"><span class="math-overline">|k|</span> + |k<sub>j</sub>|</span><span class="mden">2<span class="math-overline">|k|</span></span></span></div>
+<p>其中 <span class="math" role="math" aria-label="数学公式">|k<sub>j</sub>|</span> 表示当前文档chunk的长度，<span class="math" role="math" aria-label="数学公式"><span class="math-overline">|k|</span></span> 表示平均文档长度。通过这种归一化处理，可以避免因文档长度差异导致的评分偏差。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def compute_document_length_factor(chunk_length: int, avg_length: int = 100) -&gt; float:
+    lambda_dl = (avg_length + chunk_length) / (2 * avg_length)
+    return lambda_dl</code></pre></div>
+<h4>术语重要性计算</h4>
+<p>术语重要性指标衡量术语在文档中的显著程度，结合术语频率和文档长度自适应因子，能够更准确地评估术语在当前文档中的重要性。计算公式考虑了术语频率的非线性增长特性。</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext">Sign</span>(t<sub>e<sub>i</sub></sub><sup>τ</sup>, k<sub>j</sub>) = <span class="mfrac"><span class="mnum">2 · f(t<sub>e<sub>i</sub></sub><sup>τ</sup>, k<sub>j</sub>) · Λ<sub><span class="mtext">DL</span></sub></span><span class="mden">f(t<sub>e<sub>i</sub></sub><sup>τ</sup>, k<sub>j</sub>) + 1</span></span></div>
+<p>其中 <span class="math" role="math" aria-label="数学公式">f(t<sub>e<sub>i</sub></sub><sup>τ</sup>, k<sub>j</sub>)</span> 表示术语在文档chunk中的出现频率，<span class="math" role="math" aria-label="数学公式">Λ<sub><span class="mtext">DL</span></sub></span> 为文档长度自适应因子。这种计算方式能够防止高频术语过度影响评分。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def compute_term_significance(term_freq: int, doc_length_factor: float) -&gt; float:
+    significance = (2 * term_freq * doc_length_factor) / (term_freq + 1)
+    return significance</code></pre></div>
+<h4>术语稀有度计算</h4>
+<p>术语稀有度用于衡量术语在整个知识库中的稀缺程度，稀有度越高的术语在检索中的权重越大。计算采用了改进的IDF公式，增加了平滑处理以避免零除问题。</p>
+<p><span class="math" role="math" aria-label="数学公式"><span class="mtext">Rarity</span>(t<sub>e<sub>i</sub></sub><sup>τ</sup>) = log(<span class="mfrac"><span class="mnum">D - <span class="mtext">df</span>(t<sub>e<sub>i</sub></sub><sup>τ</sup>) + 0.5</span><span class="mden"><span class="mtext">df</span>(t<sub>e<sub>i</sub></sub><sup>τ</sup>) + 0.5</span></span> + 1)</span></p>
+<p>其中 <span class="math" role="math" aria-label="数学公式">D</span> 表示文档总数，<span class="math" role="math" aria-label="数学公式"><span class="mtext">df</span>(t<sub>e<sub>i</sub></sub><sup>τ</sup>)</span> 表示包含该术语的文档数量。加一操作确保了对数值始终为正数。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import numpy as np
+
+def compute_term_rarity(doc_freq: int, total_docs: int) -&gt; float:
+    rarity = np.log((total_docs - doc_freq + 0.5) / (doc_freq + 0.5) + 1)
+    return rarity</code></pre></div>
+<h4>连贯性指数评估</h4>
+<p>连贯性指数反映术语在文档中的分布连贯性，通过滑动窗口技术分析术语在文档中的局部分布情况。连贯性高的术语往往在文档的特定区域集中出现，表明其与文档主题的强相关性。</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext">CI</span>(t<sub>e<sub>i</sub></sub><sup>τ</sup>, k<sub>j</sub>) = max<sub>w ∈ W, , t ∈ w</sub> <span class="mfrac"><span class="mnum">∑ I(t = t<sub>e<sub>i</sub></sub><sup>τ</sup>) · |w|</span><span class="mden">|k<sub>j</sub>|</span></span></div>
+<p>其中 <span class="math" role="math" aria-label="数学公式">W</span> 表示文档中的滑动窗口集合，<span class="math" role="math" aria-label="数学公式">I(t = t<sub>e<sub>i</sub></sub><sup>τ</sup>)</span> 为指示函数，当窗口中包含该术语时为1，否则为0。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def compute_coherence_index(term: str, chunk: str, window_size: int = 50) -&gt; float:
+    chunk_tokens = chunk.lower().split()
+    chunk_length = len(chunk_tokens)
+    
+    if chunk_length == 0:
+        return 0.0
+    
+    max_coherence = 0.0
+    
+    for i in range(0, chunk_length - window_size + 1, 10):
+        window = chunk_tokens[i:i + window_size]
+        term_count = window.count(term.lower())
+        
+        if term_count &gt; 0:
+            coherence = (term_count * window_size) / chunk_length
+            max_coherence = max(max_coherence, coherence)
+    
+    return max_coherence</code></pre></div>
+<h4>评分融合与检索</h4>
+<p>将句子级相似度评分与知识级评分进行融合，形成最终的文档相关性评分。融合过程采用加权平均的方式，平衡参数λ控制两种评分方式的重要性。</p>
+<p><span class="math" role="math" aria-label="数学公式">Φ = λ Φ(<span class="mcal">K</span>) + (1 - λ) Φ(<span class="mcal">S</span>)</span></p>
+<p>其中 <span class="math" role="math" aria-label="数学公式">λ</span> 为平衡参数，<span class="math" role="math" aria-label="数学公式">Φ(<span class="mcal">K</span>)</span> 为知识级评分，<span class="math" role="math" aria-label="数学公式">Φ(<span class="mcal">S</span>)</span> 为句子级评分。通过调整λ值，可以控制系统更偏向语义相似还是知识匹配。当λ=0时，系统完全依赖句子级语义相似度；当λ=1时，系统完全依赖知识匹配评分；λ=0.5时，两种评分方式权重相等。在建筑文档审查场景中，通常设置λ=0.5以平衡专业知识匹配和语义理解。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from typing import List, Tuple, Dict, Any
+
+class GKGRRetriever:
+    def __init__(self, 
+                 knowledge_base: List[str],
+                 embedding_model,
+                 key_info_extractor: KeyInfoExtractor,
+                 llm,
+                 config: Dict[str, Any] = None):
+        self.knowledge_base = knowledge_base
+        self.embedding_model = embedding_model
+        self.key_info_extractor = key_info_extractor
+        self.llm = llm
+        
+        default_config = {
+            &quot;lambda_param&quot;: 0.5,
+            &quot;top_k&quot;: 5,
+            &quot;rerank_enabled&quot;: True,
+            &quot;query_expansion&quot;: True,
+            &quot;similarity_threshold&quot;: 0.1
+        }
+        self.config = {**default_config, **(config or {})}
+        
+        self.kb_embeddings = self._precompute_embeddings()
+    
+    def _precompute_embeddings(self) -&gt; np.ndarray:
+        embeddings = self.embedding_model.encode(self.knowledge_base, show_progress_bar=True)
+        return embeddings
+    
+    def retrieve_with_scores(self, query: str) -&gt; List[Tuple[str, float, Dict[str, float]]]:
+        query_embedding = self.embedding_model.encode([query])[0]
+        sentence_scores = cosine_similarity(
+            query_embedding.reshape(1, -1), 
+            self.kb_embeddings
+        )[0]
+        
+        key_info = self.key_info_extractor.extract_key_info(query)
+        knowledge_scores = self._compute_knowledge_scores(key_info)
+        
+        final_scores = []
+        for i in range(len(self.knowledge_base)):
+            norm_sent = sentence_scores[i]
+            norm_know = knowledge_scores[i] / max(knowledge_scores) if max(knowledge_scores) &gt; 0 else 0
+            
+            final_score = (self.config[&quot;lambda_param&quot;] * norm_know + 
+                          (1 - self.config[&quot;lambda_param&quot;]) * norm_sent)
+            final_scores.append(final_score)
+        
+        results_with_scores = []
+        for i, final_score in enumerate(final_scores):
+            if final_score &gt; self.config[&quot;similarity_threshold&quot;]:
+                score_details = {
+                    &quot;sentence_score&quot;: float(sentence_scores[i]),
+                    &quot;knowledge_score&quot;: float(knowledge_scores[i]),
+                    &quot;final_score&quot;: float(final_score)
+                }
+                results_with_scores.append((self.knowledge_base[i], final_score, score_details))
+        
+        results_with_scores.sort(key=lambda x: x[1], reverse=True)
+        return results_with_scores[:self.config[&quot;top_k&quot;]]
+    
+    def _compute_knowledge_scores(self, key_info: Dict[str, Tuple[str, float]]) -&gt; List[float]:
+        scores = []
+        avg_length = sum(len(chunk.split()) for chunk in self.knowledge_base) / len(self.knowledge_base)
+        
+        for chunk in self.knowledge_base:
+            chunk_score = 0.0
+            chunk_tokens = chunk.lower().split()
+            chunk_length = len(chunk_tokens)
+            
+            lambda_dl = compute_document_length_factor(chunk_length, avg_length)
+            
+            for priority, (info_text, weight) in key_info.items():
+                if not info_text.strip():
+                    continue
+                
+                terms = info_text.lower().split()
+                for term in terms:
+                    if term in chunk_tokens:
+                        tf = chunk_tokens.count(term)
+                        
+                        significance = compute_term_significance(tf, lambda_dl)
+                        
+                        segments_with_term = sum(1 for kb_chunk in self.knowledge_base 
+                                                if term in kb_chunk.lower())
+                        rarity = compute_term_rarity(segments_with_term, len(self.knowledge_base))
+                        
+                        coherence = compute_coherence_index(term, chunk)
+                        
+                        term_score = significance * rarity * (1 + coherence) * weight
+                        chunk_score += term_score
+            
+            scores.append(chunk_score)
+        
+        return scores
+    
+    def retrieve(self, query: str) -&gt; Tuple[List[str], str]:
+        results_with_scores = self.retrieve_with_scores(query)
+        
+        documents = [doc for doc, _, _ in results_with_scores]
+        
+        if self.config[&quot;rerank_enabled&quot;] and len(documents) &gt; 1:
+            documents = self._llm_rerank(query, documents)
+        
+        augmented_query = query
+        if self.config[&quot;query_expansion&quot;]:
+            augmented_query = self._augment_query(query, documents[:3])
+        
+        return documents, augmented_query</code></pre></div>
+<h4>重排序优化</h4>
+<p>系统使用大语言模型对检索结果进行进一步重排序，通过LLM的语义理解能力优化文档的相关性排序。重排序过程中，系统会构造包含查询和候选文档的提示，要求LLM根据相关性对文档进行重新排序。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def _llm_rerank(self, query: str, documents: List[str]) -&gt; List[str]:
+    if len(documents) &lt;= 1:
+        return documents
+    
+    rerank_prompt = f&quot;&quot;&quot;
+Task: A list of documents is shown below. Each document has a number next to it. A question is also provided. Your task is to return the numbers of ALL documents in order of relevance from MOST to LEAST relevant. MUST include EVERY document number exactly once.
+
+Example format:
+    Document 1: &lt;document 1&gt;
+    Document 2: &lt;document 2&gt;
+    Document 3: &lt;document 3&gt;
+    Question: &lt;question&gt;
+    Answer: 3,1,2
+
+Now here are the actual documents and question.
+
+&quot;&quot;&quot;
+    for i, doc in enumerate(documents):
+        rerank_prompt += f&quot;Document {i+1}: {doc[:150]}...\n&quot;
+    
+    rerank_prompt += f&quot;Question: {query}\nAnswer:&quot;
+    
+    try:
+        response = self.llm.predict(rerank_prompt)
+        order_nums = [int(x.strip()) - 1 for x in response.split(&#39;,&#39;) 
+                     if x.strip().isdigit() and 0 &lt;= int(x.strip()) - 1 &lt; len(documents)]
+        
+        reranked = [documents[i] for i in order_nums if i &lt; len(documents)]
+        
+        # 添加遗漏的文档
+        used_indices = set(order_nums)
+        for i, doc in enumerate(documents):
+            if i not in used_indices:
+                reranked.append(doc)
+        
+        return reranked[:len(documents)]
+    except:
+        return documents</code></pre></div>
+<h4>查询增强</h4>
+<p>同时系统还会利用检索到的知识来增强原始查询，生成更具体、更详细的查询用于进一步检索。查询增强通过分析检索结果的上下文信息，识别查询中可能遗漏的关键概念和术语。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def _augment_query(self, original_query: str, top_results: List[str]) -&gt; str:
+    if not top_results:
+        return original_query
+    
+    document_list = &quot;&quot;
+    for i, doc in enumerate(top_results):
+        document_list += f&quot;Document {i+1}: {doc[:100]}...\n&quot;
+    
+    augment_prompt = f&quot;&quot;&quot;
+Task: Your task is to generate a detailed answer to the question by synthesizing information from ALL provided documents. Prioritize relevance, cite document numbers, and structure your response as follows:
+
+Question: {original_query}
+{document_list}
+Answer:
+&quot;&quot;&quot;
+    
+    try:
+        augmented = self.llm.predict(augment_prompt)
+        return augmented.strip()
+    except:
+        return original_query</code></pre></div>
+<h4>偏差检测分析</h4>
+<p>在先期知识增强检索阶段获取领域知识后，系统随即进入误差辨析模块。该模块基于检索得到的知识参考，并结合预设的审阅问题，对原文进行细致的偏差检测与评估。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class ErrorAnalyzer:
+    def __init__(self, llm):
+        self.llm = llm
+    
+    def analyze_errors(self, document_chunk: str, query: str, retrieved_knowledge: List[str]) -&gt; Dict[str, Any]:
+        
+        analysis_prompt = f&quot;&quot;&quot;
+Task: Your task is to conduct an error analysis on a given review document, based on a provided review query and relevant reference specifications. This analysis MUST strictly adhere to the provided reference and focus specifically on reviewing and analyzing the original descriptive sections within the review document.
+
+Review document: {document_chunk}
+Query: {query}
+Reference: {chr(10).join([f&quot;{i+1}. {ref}&quot; for i, ref in enumerate(retrieved_knowledge)])}
+Analysis:
+&quot;&quot;&quot;
+        
+        analysis = self.llm.predict(analysis_prompt)
+        
+        return {
+            &quot;analysis&quot;: analysis,
+            &quot;reference_support&quot;: retrieved_knowledge
+        }</code></pre></div>
+<h4>修订建议生成</h4>
+<p>误差辨析模块完成后，系统将输出标记偏差区域以及相关知识佐证。随后，系统进入修订策略生成模块。该模块依据误差分析结果和知识参考，对标记区域进行针对性的修订建议生成，最终实现对原文的知识驱动型自动修正。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>class RevisionGenerator:
+    def __init__(self, llm):
+        self.llm = llm
+    
+    def generate_revisions(self, document_chunk: str, analysis: Dict[str, Any]) -&gt; Dict[str, str]:     
+        revision_prompt = f&quot;&quot;&quot;
+Task: Your task is to review and revise the provided document based on the given analysis and corresponding reference specifications. STRICT adherence to the provided reference specifications is required. If the review document aligns with the analysis and reference specifications WITHOUT discrepancies, revision is not necessary.
+
+Review document: {document_chunk}
+Analysis: {analysis[&#39;analysis&#39;]}
+Reference: {chr(10).join([f&quot;- {ref}&quot; for ref in analysis[&#39;reference_support&#39;]])}
+Revision:
+&quot;&quot;&quot;
+        
+        revision = self.llm.predict(revision_prompt)
+        
+        return {
+            &quot;original_text&quot;: document_chunk,
+            &quot;revision_suggestions&quot;: revision,
+            &quot;modified_regions&quot;: analysis.get(&quot;error_regions&quot;, []),
+            &quot;confidence&quot;: self._calculate_confidence(analysis)
+        }
+    
+    def _calculate_confidence(self, analysis: Dict[str, Any]) -&gt; float:
+        ref_count = len(analysis.get(&quot;reference_support&quot;, []))
+        error_count = len(analysis.get(&quot;error_regions&quot;, []))
+        
+        confidence = min(0.9, 0.5 + (ref_count * 0.1) + (error_count * 0.05))
+        return confidence</code></pre></div>
+<h4>完整审查流程</h4>
+<p>将上述所有模块整合，形成完整的文档审查流程。系统首先生成审查问题，然后进行知识引导检索，接着执行错误分析，最后生成修订建议。</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def complete_review_process(document_chunk: str, 
+                          gkgr_framework: GKGRRetriever, 
+                          error_analyzer: ErrorAnalyzer,
+                          revision_generator: RevisionGenerator) -&gt; Dict[str, Any]:    
+    review_queries = generate_review_queries(gkgr_framework.llm, document_chunk)
+    
+    results = {}
+    for query in review_queries[:3]:
+        retrieved_docs, augmented_query = gkgr_framework.retrieve(query)
+        
+        knowledge_refs = retrieved_docs
+        analysis = error_analyzer.analyze_errors(document_chunk, query, knowledge_refs)
+        
+        revision = revision_generator.generate_revisions(document_chunk, analysis)
+        
+        results[query] = {
+            &quot;retrieved_knowledge&quot;: retrieved_docs,
+            &quot;augmented_query&quot;: augmented_query,
+            &quot;analysis&quot;: analysis,
+            &quot;revision&quot;: revision
+        }
+    
+    return results</code></pre></div>
+<p>至此，我们就完成了建筑文档智能审查系统的核心实现。</p>
+</div>
+<div class="section" id="llm-happy-extras-src5-s4"><h2>实际应用示例</h2>
+<p>让我们通过一个完整的示例来展示系统的使用：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code># 初始化系统组件
+llm = DeepSeekLLM(
+    model_name=&#39;deepseek-chat&#39;,
+    api_key=&#39;your-api-key&#39;,
+    base_url=&#39;https://api.deepseek.com/v1&#39;
+)
+
+embedding = BGEEmbedding(model_name=&quot;BAAI/bge-m3&quot;)
+key_extractor = KeyInfoExtractor(llm)
+
+# 从markdown文档构建知识库
+processor = DocumentProcessor()
+documents = processor.load_documents(&quot;./construction_standards&quot;)
+
+# 对文档进行动态语义分块
+chunker = DynamicSemanticChunker()
+knowledge_base = []
+for doc in documents:
+    chunks = chunker.split_text(doc)
+    knowledge_base.extend(chunks.values())
+
+# 初始化检索器
+gkgr_retriever = GKGRRetriever(
+    knowledge_base=knowledge_base,
+    embedding_model=embedding,
+    key_info_extractor=key_extractor,
+    llm=llm
+)
+
+# 初始化分析器
+error_analyzer = ErrorAnalyzer(llm)
+revision_generator = RevisionGenerator(llm)
+
+# 待审查的文档内容
+sample_document = &quot;&quot;&quot;
+钢筋混凝土柱的施工应符合以下要求：
+1. 混凝土强度等级不低于C25
+2. 钢筋保护层厚度为25mm
+3. 混凝土浇筑应连续进行，间歇时间不超过1小时
+4. 养护期间应保持混凝土表面湿润
+&quot;&quot;&quot;
+
+# 执行审查
+result = complete_review_process(
+    sample_document, 
+    gkgr_retriever, 
+    error_analyzer, 
+    revision_generator
+)
+
+# 查看审查结果
+for query, analysis in result.items():
+    print(f&quot;审查问题: {query}&quot;)
+    print(f&quot;修订建议: {analysis[&#39;revision&#39;][&#39;revision_suggestions&#39;]}&quot;)
+    print(&quot;-&quot; * 50)</code></pre></div>
+</div>
+<div class="section" id="llm-happy-extras-src5-s5"><h2>扩展性说明</h2>
+<p>系统可以通过更换知识库轻松适应其他领域。对于特定企业或项目，可以通过微调关键信息提取模型来提升准确性。在性能优化方面，使用动态语义分块可以提升检索质量，预计算并缓存知识库嵌入以提升检索速度，对于大量文档可使用批量处理模式，根据具体应用场景调整λ参数和top-k值。</p>
+</div>
+<div class="section" id="llm-happy-extras-src5-s6"><h2>写在最后</h2>
+<p>恭喜你阅读完此文，你已经充分了解了如何实现一个建筑文档智能审查系统以及其背后的思考。这个系统展示了如何将动态语义分块、知识引导检索和大语言模型有机结合，为建筑行业的文档审查提供了一个实用的解决方案。</p>
+<p>虽然当前系统已经取得了不错的效果，但仍有改进空间。全局关联增强方面，当前基于文本块的检索可以进一步结合知识图谱等技术。多模态支持方面，未来可以扩展支持CAD图纸、施工图等视觉信息。实时更新方面，支持知识库的增量更新和动态维护。个性化定制方面，根据不同企业和项目特点进行系统定制。</p>
+<p>读者们可以运行项目中的示例代码，体验完整的建筑文档智能审查流程。我们相信这个系统不仅能够提升审查效率，更能为建筑行业的数字化转型贡献力量。</p>
+</div>
+<div class="section" id="llm-happy-extras-src5-s7"><h2>致谢</h2>
+<p>本项目的开发过程中，我们深入研究了建筑工程领域的专业知识和最新的自然语言处理技术。特别感谢建筑行业专家提供的宝贵建议，以及开源社区在技术实现方面的支持。项目代码实现参考了LlamaIndex、Transformers等优秀开源项目的设计理念。</p>
+<p>需要说明的是，本项目专门针对建筑施工领域的文档审查场景进行了深度优化。如果您需要处理其他领域的文档，建议根据具体需求对系统进行相应调整。</p>
+</div>
+<div class="section" id="llm-happy-extras-src5-s8"><h2>源码获取</h2>
+<p>本项目的源码以及实例数据存放在 <a href="https://github.com/Hongru0306/CDDRS" target="_blank" rel="noreferrer">GitHub 仓库</a>。</p>
+</div>
+<div class="section" id="llm-happy-extras-src5-s9"><h2>引用</h2>
+<p>如果您在研究中使用了本项目的成果，请按如下方式引用：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bibtex</span></div><pre><code>@article{XIAO2025103618,
+    title = {Generative knowledge-guided review system for construction disclosure documents},
+    journal = {Advanced Engineering Informatics},
+    volume = {68},
+    pages = {103618},
+    year = {2025},
+    issn = {1474-0346},
+    doi = {https://doi.org/10.1016/j.aei.2025.103618},
+    url = {https://www.sciencedirect.com/science/article/pii/S1474034625005117},
+    author = {Hongru Xiao and Jiankun Zhuang and Bin Yang and Jiale Han and Yantao Yu and Songning Lai},
+    keywords = {Construction documents review, Large language model (LLM), Knowledge-guided retrieval, Natural Language Processing (NLP)}
+}</code></pre></div>
+</div></div><div class="footer">Happy-LLM 融合内容 · 建议结合左侧路径和术语卡交叉阅读</div></div></section>

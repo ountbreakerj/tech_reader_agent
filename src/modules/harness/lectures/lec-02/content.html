@@ -1,0 +1,62 @@
+<section id="sec-h-lec-02" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 02 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-02">第 02 讲 · Harness 到底是什么</h1>
+    <p>"harness"在圈子里被用得越来越多，但大多数人说 harness 的时候，指的其实是一个 prompt 文件。一个 prompt 文件不是 harness。这一讲给它一个精确的、可操作的定义。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>Harness 五子系统模型</h2>
+    <p>Harness 由五个子系统组成：指令、工具、环境、状态、反馈。每个子系统都有明确的职责。</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">子系统</th><th scope="col">职责</th><th scope="col">典型工件</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">指令</th><td>告诉 agent 这是什么项目、不可违反的约束、验证命令</td><td>AGENTS.md / CLAUDE.md</td></tr>
+        <tr><th scope="row">工具</th><td>让 agent 能读写文件、执行命令、访问外部系统</td><td>shell、文件 API、测试运行器</td></tr>
+        <tr><th scope="row">环境</th><td>可重现的运行时：依赖、版本、服务</td><td>pyproject.toml、.python-version、Docker</td></tr>
+        <tr><th scope="row">状态</th><td>跨会话的持久化进度：做了什么、为什么、下一步是什么</td><td>PROGRESS.md、DECISIONS.md、git commits</td></tr>
+        <tr><th scope="row">反馈</th><td>可执行的验证：让 agent 能自证"做完了"</td><td>pytest、mypy、lint 命令</td></tr>
+      </tbody>
+    </table></div>
+    <p>五个子系统缺一个，harness 就不完整，agent 用起来总会别扭。其中<strong>反馈子系统通常投入最少、回报最高</strong>——先把验证命令写清楚。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>工具侧写：各产品的 harness 完整度</h2>
+    <p><strong>Claude Code</strong> 会读仓库里的 CLAUDE.md，能用 shell 跑命令，在本地环境执行，有会话历史，能跑测试看结果。但如果不告诉它怎么跑测试，它就没法验证自己做得对不对——反馈子系统需要你来填。</p>
+    <p><strong>Codex</strong>（OpenAI）用 git worktree 隔离每个任务的运行环境，配合本地可观测性栈。它在有 AGENTS.md 和清晰验证命令的仓库里，表现远超在"裸"仓库里。</p>
+    <p><strong>AutoGPT</strong> 是反面教材：缺乏结构化状态管理导致长任务上下文不断累积，缺乏精确反馈机制导致 agent 陷入循环。很多人说它"不行"，但其实是它的 harness 不行。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>核心原则</h2>
+    <ul>
+      <li><strong>仓库是唯一事实来源。</strong> Agent 看不到的东西，对它来说等于不存在。OpenAI 把仓库当作"记录系统"，所有必要的上下文都必须在仓库里。</li>
+      <li><strong>给地图，不给说明书。</strong> AGENTS.md 应该是目录页，不是百科全书。100 行左右就够了，放不下就拆分到 <code>docs/</code> 目录，让 agent 按需去读。</li>
+      <li><strong>约束而非微操。</strong> 好的 harness 用可执行的规则约束 agent，而不是在指令里逐条叮嘱。OpenAI 说"执行不变量，不要微管实现"；Anthropic 发现 agent 会自信地夸赞自己的工作，解决方案是把"干活的人"和"检查的人"分开。</li>
+      <li><strong>逐个移除看效果。</strong> 保持模型不变，逐个移除五个子系统，看哪个移除后性能下降最多，它的边际贡献就最大。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>一个团队的四个阶段</h2>
+    <p>用 GPT-4o 开发 TypeScript + React 前端（约 20,000 行代码），四个阶段对应依次补齐 harness 各组件：</p>
+    <ol>
+      <li>只有 README 基本描述 → 成功率 <strong>20%</strong>（选错包管理器、命名约定错误、跑不了测试）</li>
+      <li>加了 AGENTS.md（技术栈版本、命名约定、架构决策）→ 成功率 <strong>60%</strong></li>
+      <li>AGENTS.md 里列出验证命令 <code>yarn test &amp;&amp; yarn lint &amp;&amp; yarn build</code> → 成功率 <strong>80%</strong></li>
+      <li>引入进度文件模板，agent 每次运行记录完成和未完成的工作 → 成功率 <strong>80–100%</strong></li>
+    </ol>
+    <p>四次迭代，模型一个字没改，成功率从 20% 到接近 100%。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-01">← 第 01 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-03">第 03 讲 →</a>
+  </nav>
+</section>

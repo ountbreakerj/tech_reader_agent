@@ -1,0 +1,33 @@
+---
+name: tech-reader-agent
+description: Maintain the modular Tech Reader project from natural-language requirements, using its deterministic build, asset, validation, and product/UX/UI design-review workflow. Apply only when working in {{PROJECT_ROOT}}.
+metadata:
+  short-description: Maintain Tech Reader with design review
+---
+
+# Tech Reader Agent
+
+Use this skill when the user asks to add, edit, reorganize, style, illustrate, or repair the Tech Reader project at:
+
+`{{PROJECT_ROOT}}`
+
+## Start here
+
+1. Read the project's `AGENTS.md` and `README.md`.
+2. Read `agent/skills/tech-reader-maintainer/SKILL.md` for implementation routing.
+3. For content, interaction, image, or styling changes, also read `agent/skills/tech-reader-design-review/SKILL.md`.
+4. Use `catalog.json` if present; otherwise run `node tools/catalog.mjs` before broad exploration.
+
+## Operating contract
+
+- Edit the smallest relevant files under `src/`, `design/`, `agent/`, `tools/`, or project configuration.
+- Never hand-edit `dist/tech-reader.html`; it is generated output.
+- Treat `src/vendor/` as immutable third-party code unless the user explicitly scopes it.
+- Use `@asset/<id>` and `node tools/assets.mjs add <file>` for images; do not paste large data URIs.
+- Keep DOM IDs, module routes, TOC anchors, and internal links consistent.
+- After mutations run `node build.mjs`, `node verify.mjs`, and `node tools/assets.mjs audit` when assets or references changed.
+- For interaction or visual changes, generate targeted screenshots and run browser/design review. Resolve all `blocking` findings and normally all `major` findings before delivery.
+- For cross-computer releases, run `npm run package` (or `tools/package.ps1`) and report the generated ZIP path and SHA-256.
+- Report changed files, validation results, build hash, and the design-review verdict. Escalate genuine product or aesthetic trade-offs to the user instead of silently overriding them.
+
+The project-local skills and rules are the source of truth for detailed procedures. If this project path is unavailable, do not substitute another repository; report that the registered project is not open.

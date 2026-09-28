@@ -1,0 +1,605 @@
+<section class="llm-mod llm-m-db-integration" id="llm-db-integration"><div class="module-wrapper">
+<!-- 侧边栏导航 -->
+
+
+
+
+
+<!-- 主内容区 -->
+
+
+
+<!-- Hero Banner -->
+<div class="hero-banner">
+  <h1>🔗 多库整合与数据同步</h1>
+  <p>掌握关系库+向量库的数据同步方案，为RAG系统打好基础</p>
+</div>
+
+<!-- ==================== SECTION 1 ==================== -->
+<div class="section" id="llm-db-integration-s1">
+  <h2>数据同步概述</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>数据同步就像是银行的账务系统——你在ATM机取钱（写入MySQL），几分钟后手机银行就能看到余额变化（同步到Milvus）。这个过程需要保证数据的一致性和及时性。
+  </div>
+
+  <h3>为什么需要多库同步</h3>
+
+  <p>在实际项目中，不同的数据存储在不同的数据库中：</p>
+  <ul>
+    <li><strong>MySQL</strong>：存储用户信息、订单数据等结构化数据</li>
+    <li><strong>Milvus</strong>：存储文本嵌入向量，用于语义搜索</li>
+    <li><strong>Redis</strong>：存储会话信息、缓存数据</li>
+  </ul>
+
+  <p>当MySQL中的数据发生变化时，需要同步更新到Milvus，以保证检索结果的一致性。</p>
+
+  <h3>同步场景分类</h3>
+
+  <table>
+    <tr><th>类型</th><th>说明</th><th>适用场景</th></tr>
+    <tr><td><strong>实时同步</strong></td><td>数据变化后立即同步</td><td>对一致性要求高，如金融交易</td></tr>
+    <tr><td><strong>准实时同步</strong></td><td>秒级到分钟级延迟</td><td>大多数Web应用（推荐）</td></tr>
+    <tr><td><strong>批量同步</strong></td><td>定时任务批量同步</td><td>数据分析、报表</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 2 ==================== -->
+<div class="section" id="llm-db-integration-s2">
+  <h2>同步方案对比</h2>
+
+  <div class="sync-comparison">
+    <div class="sync-method">
+      <h4>📝 双写</h4>
+      <p style="color: var(--lc-text-muted); font-size: 0.9rem;">应用同时写入两个数据库</p>
+      <p style="font-size: 0.85rem;"><strong>延迟：</strong>极低（毫秒级）</p>
+      <p style="font-size: 0.85rem;"><strong>复杂度：</strong>低</p>
+    </div>
+    <div class="sync-method">
+      <h4>📡 CDC</h4>
+      <p style="color: var(--lc-text-muted); font-size: 0.9rem;">监听数据库日志，异步同步</p>
+      <p style="font-size: 0.85rem;"><strong>延迟：</strong>低（秒级）</p>
+      <p style="font-size: 0.85rem;"><strong>复杂度：</strong>中</p>
+    </div>
+    <div class="sync-method">
+      <h4>📨 消息队列</h4>
+      <p style="color: var(--lc-text-muted); font-size: 0.9rem;">通过Kafka/RabbitMQ异步同步</p>
+      <p style="font-size: 0.85rem;"><strong>延迟：</strong>低（毫秒-秒级）</p>
+      <p style="font-size: 0.85rem;"><strong>复杂度：</strong>中-高</p>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>方案</th><th>一致性</th><th>延迟</th><th>复杂度</th><th>可靠性</th><th>适用场景</th></tr>
+    <tr><td><strong>同步双写</strong></td><td>强</td><td>极低</td><td>低</td><td>中</td><td>简单的应用，数据量小</td></tr>
+    <tr><td><strong>异步双写</strong></td><td>最终</td><td>低</td><td>中</td><td>中</td><td>大多数Web应用</td></tr>
+    <tr><td><strong>CDC</strong></td><td>最终</td><td>秒级</td><td>中</td><td>高</td><td>生产环境，需要解耦</td></tr>
+    <tr><td><strong>消息队列</strong></td><td>最终</td><td>毫秒-秒</td><td>高</td><td>高</td><td>高并发，需要削峰</td></tr>
+    <tr><td><strong>定时任务</strong></td><td>最终</td><td>分钟-小时</td><td>低</td><td>中</td><td>数据分析，非实时</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 3 ==================== -->
+<div class="section" id="llm-db-integration-s3">
+  <h2>双写方案实现</h2>
+
+  <h3>同步双写（最简单）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> mysql.connector
+<span class="kw">from</span> pymilvus <span class="kw">import</span> MilvusClient
+<span class="kw">from</span> sentence_transformers <span class="kw">import</span> SentenceTransformer
+
+<span class="kw">class</span> <span class="cls">DualWriter</span>:
+    <span class="str">"""同步双写：同时写入MySQL和Milvus"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        <span class="cmt"># 初始化MySQL连接</span>
+        self.mysql_conn = mysql.connector.connect(
+            host=<span class="str">"localhost"</span>,
+            user=<span class="str">"root"</span>,
+            password=<span class="str">"password"</span>,
+            database=<span class="str">"mydb"</span>
+        )
+
+        <span class="cmt"># 初始化Milvus连接</span>
+        self.milvus_client = MilvusClient(<span class="str">"./milvus.db"</span>)
+
+        <span class="cmt"># 初始化Embedding模型</span>
+        self.embed_model = SentenceTransformer(<span class="str">'all-MiniLM-L6-v2'</span>)
+
+    <span class="kw">def</span> <span class="fn">insert_document</span>(self, title: <span class="cls">str</span>, content: <span class="cls">str</span>):
+        <span class="str">"""同步双写文档"""</span>
+        <span class="kw">try</span>:
+            <span class="cmt"># 1. 写入MySQL</span>
+            cursor = self.mysql_conn.cursor()
+            cursor.execute(
+                <span class="str">"INSERT INTO documents (title, content) VALUES (%s, %s)"</span>,
+                (title, content)
+            )
+            doc_id = cursor.lastrowid
+            self.mysql_conn.commit()
+
+            <span class="cmt"># 2. 生成嵌入向量</span>
+            embedding = self.embed_model.encode(content).tolist()
+
+            <span class="cmt"># 3. 写入Milvus</span>
+            self.milvus_client.insert(
+                collection_name=<span class="str">"documents"</span>,
+                data=[{
+                    <span class="str">"id"</span>: doc_id,
+                    <span class="str">"embedding"</span>: embedding,
+                    <span class="str">"title"</span>: title
+                }]
+            )
+
+            <span class="fn">print</span>(<span class="str">f"✅ 双写成功: doc_id=<span class="var">{doc_id}</span>"</span>)
+            <span class="kw">return</span> doc_id
+
+        <span class="kw">except</span> Exception <span class="kw">as</span> e:
+            <span class="cmt"># 回滚MySQL</span>
+            self.mysql_conn.rollback()
+            <span class="fn">print</span>(<span class="str">f"❌ 双写失败: <span class="var">{e}</span>"</span>)
+            <span class="kw">raise</span></code></pre>
+  </div>
+
+  <h3>异步双写（推荐）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> asyncio
+<span class="kw">from</span> typing <span class="kw">import</span> List
+
+<span class="kw">class</span> <span class="cls">AsyncDualWriter</span>:
+    <span class="str">"""异步双写：MySQL写入成功后异步更新Milvus"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        self.mysql_writer = MySQLWriter()
+        self.milvus_writer = MilvusWriter()
+        self.embed_model = SentenceTransformer(<span class="str">'all-MiniLM-L6-v2'</span>)
+        self.queue = asyncio.Queue()
+
+    <span class="kw">async def</span> <span class="fn">insert_document</span>(self, title: <span class="cls">str</span>, content: <span class="cls">str</span>):
+        <span class="str">"""异步双写"""</span>
+        <span class="cmt"># 1. 同步写入MySQL（必须成功）</span>
+        doc_id = <span class="kw">await</span> self.mysql_writer.insert(title, content)
+
+        <span class="cmt"># 2. 将Milvus更新放入队列（异步处理）</span>
+        <span class="kw">await</span> self.queue.put({
+            <span class="str">"id"</span>: doc_id,
+            <span class="str">"title"</span>: title,
+            <span class="str">"content"</span>: content
+        })
+
+        <span class="fn">print</span>(<span class="str">f"✅ MySQL写入成功, Milvus更新已入队"</span>)
+        <span class="kw">return</span> doc_id
+
+    <span class="kw">async def</span> <span class="fn">process_queue</span>(self):
+        <span class="str">"""处理Milvus更新队列"""</span>
+        <span class="kw">while True</span>:
+            item = <span class="kw">await</span> self.queue.get()
+
+            <span class="kw">try</span>:
+                <span class="cmt"># 生成嵌入向量</span>
+                embedding = self.embed_model.encode(item[<span class="str">"content"</span>]).tolist()
+
+                <span class="cmt"># 写入Milvus</span>
+                <span class="kw">await</span> self.milvus_writer.insert(
+                    doc_id=item[<span class="str">"id"</span>],
+                    embedding=embedding,
+                    title=item[<span class="str">"title"</span>]
+                )
+
+                <span class="fn">print</span>(<span class="str">f"✅ Milvus更新成功: doc_id=<span class="var">{item['id']}</span>"</span>)
+
+            <span class="kw">except</span> Exception <span class="kw">as</span> e:
+                <span class="fn">print</span>(<span class="str">f"❌ Milvus更新失败: <span class="var">{e}</span>"</span>)
+                <span class="cmt"># 重试逻辑</span>
+                <span class="kw">await</span> self.retry(item)
+
+            <span class="kw">finally</span>:
+                self.queue.task_done()
+
+    <span class="kw">async def</span> <span class="fn">retry</span>(self, item, max_retries: <span class="cls">int</span> = <span class="num">3</span>):
+        <span class="str">"""重试Milvus写入（指数退避）"""</span>
+        <span class="cmt"># TODO: 生产环境应实现指数退避重试，并记录失败日志</span>
+        <span class="kw">for</span> attempt <span class="kw">in</span> <span class="fn">range</span>(max_retries):
+            <span class="kw">try</span>:
+                embedding = self.embed_model.encode(item[<span class="str">"content"</span>]).tolist()
+                <span class="kw">await</span> self.milvus_writer.insert(
+                    doc_id=item[<span class="str">"id"</span>],
+                    embedding=embedding,
+                    title=item[<span class="str">"title"</span>]
+                )
+                <span class="kw">return</span>
+            <span class="kw">except</span> Exception <span class="kw">as</span> e:
+                <span class="fn">print</span>(<span class="str">f"重试第 <span class="var">{attempt + 1}</span> 次失败: <span class="var">{e}</span>"</span>)
+                <span class="kw">await</span> asyncio.sleep(<span class="num">2</span> ** attempt)
+        <span class="fn">print</span>(<span class="str">f"❌ 超过最大重试次数，丢弃: doc_id=<span class="var">{item['id']}</span>"</span>)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 异步双写优势：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li>MySQL写入不被Milvus延迟影响</li>
+      <li>通过队列削峰，应对突发流量</li>
+      <li>失败重试机制保证最终一致性</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== SECTION 4 ==================== -->
+<div class="section" id="llm-db-integration-s4">
+  <h2>CDC方案详解</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>CDC（Change Data Capture）就像是数据库的"新闻发言人"——每当数据库发生变化，它就会自动通知外界："嘿，我刚插入了一条新数据！"
+  </div>
+
+  <h3>CDC原理</h3>
+
+  <p>CDC通过监听数据库的事务日志（如MySQL的binlog）来捕获数据变化：</p>
+
+  <div class="diagram">
+    <pre class="mermaid">
+sequenceDiagram
+    participant App as 应用程序
+    participant MySQL as MySQL
+    participant CDC as CDC工具
+    participant Kafka as Kafka
+    participant Milvus as Milvus
+
+    App->>MySQL: 插入/更新数据
+    MySQL->>MySQL: 记录binlog
+    CDC->>MySQL: 读取binlog
+    CDC->>Kafka: 发送变更事件
+    Kafka->>Milvus: 消费事件，更新向量
+    </pre>
+    <div class="caption">CDC数据同步流程</div>
+  </div>
+
+  <h3>常见CDC工具</h3>
+
+  <table>
+    <tr><th>工具</th><th>原理</th><th>支持的数据库</th><th>特点</th></tr>
+    <tr><td><strong>Debezium</strong></td><td>基于binlog</td><td>MySQL, PostgreSQL, MongoDB等</td><td>最流行，Kafka Connect集成</td></tr>
+    <tr><td><strong>Canal</strong></td><td>基于binlog</td><td>MySQL</td><td>阿里开源，Java实现</td></tr>
+    <tr><td><strong>Maxwell</strong></td><td>基于binlog</td><td>MySQL</td><td>轻量级，Ruby实现</td></tr>
+    <tr><td><strong>DMS</strong></td><td>轮询+WAL</td><td>多种</td><td>阿里云服务</td></tr>
+  </table>
+
+  <h3>Debezium配置示例</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">JSON</span>
+      
+    </div>
+    <pre><code>{
+  <span class="str">"name"</span>: <span class="str">"mysql-connector"</span>,
+  <span class="str">"config"</span>: {
+    <span class="str">"connector.class"</span>: <span class="str">"io.debezium.connector.mysql.MySqlConnector"</span>,
+    <span class="str">"database.hostname"</span>: <span class="str">"mysql"</span>,
+    <span class="str">"database.port"</span>: <span class="str">"3306"</span>,
+    <span class="str">"database.user"</span>: <span class="str">"debezium"</span>,
+    <span class="str">"database.password"</span>: <span class="str">"dbz"</span>,
+    <span class="str">"database.server.id"</span>: <span class="str">"1"</span>,
+    <span class="str">"database.server.name"</span>: <span class="str">"myserver"</span>,
+    <span class="str">"database.include.list"</span>: <span class="str">"mydb"</span>,
+    <span class="str">"table.include.list"</span>: <span class="str">"mydb.documents"</span>,
+    <span class="str">"database.history.kafka.bootstrap.servers"</span>: <span class="str">"kafka:9092"</span>,
+    <span class="str">"database.history.kafka.topic"</span>: <span class="str">"schema-changes.mydb"</span>
+  }
+}</code></pre>
+  </div>
+
+  <div class="callout callout-info">
+    <strong>📖 Milvus 2.5+ 原生全文检索（BM25）</strong>
+    <p style="margin-top: 0.3rem;">Milvus 2.5 开始内置 BM25 全文检索功能，支持稀疏向量（Sparse Vector）和倒排索引。这意味着在某些架构中，<strong>不再需要单独维护一个 MySQL 来做关键词检索</strong>——Milvus 可以同时处理语义搜索和关键词搜索，从而减少 CDC 同步链路的复杂度和维护成本。对于只关心"全文 + 向量"混合检索的场景，这是一条值得关注的简化路径。</p>
+  </div>
+</div>
+
+<!-- ==================== SECTION 5 ==================== -->
+<div class="section" id="llm-db-integration-s5">
+  <h2>MySQL→Milvus实战</h2>
+
+  <h3>完整的同步Pipeline</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> time
+<span class="kw">import</span> mysql.connector
+<span class="kw">from</span> pymilvus <span class="kw">import</span> MilvusClient, DataType, CollectionSchema, FieldSchema
+<span class="kw">from</span> sentence_transformers <span class="kw">import</span> SentenceTransformer
+
+<span class="kw">class</span> <span class="cls">MySQLToMilvusSync</span>:
+    <span class="str">"""MySQL到Milvus的实时同步"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self):
+        <span class="cmt"># MySQL连接</span>
+        self.mysql_conn = mysql.connector.connect(
+            host=<span class="str">"localhost"</span>,
+            user=<span class="str">"root"</span>,
+            password=<span class="str">"password"</span>,
+            database=<span class="str">"mydb"</span>
+        )
+
+        <span class="cmt"># Milvus连接</span>
+        self.milvus_client = MilvusClient(<span class="str">"./milvus_sync.db"</span>)
+
+        <span class="cmt"># Embedding模型</span>
+        self.embed_model = SentenceTransformer(<span class="str">'all-MiniLM-L6-v2'</span>)
+
+        <span class="cmt"># 同步状态（记录最后同步的ID）</span>
+        self.last_synced_id = <span class="num">0</span>
+
+    <span class="kw">def</span> <span class="fn">create_milvus_collection</span>(self):
+        <span class="str">"""创建Milvus Collection"""</span>
+        <span class="kw">if</span> self.milvus_client.has_collection(<span class="str">"documents"</span>):
+            self.milvus_client.drop_collection(<span class="str">"documents"</span>)
+
+        fields = [
+            FieldSchema(<span class="str">"id"</span>, DataType.INT64, is_primary=<span class="kw">True</span>),
+            FieldSchema(<span class="str">"embedding"</span>, DataType.FLOAT_VECTOR, dim=<span class="num">384</span>),
+            FieldSchema(<span class="str">"title"</span>, DataType.VARCHAR, max_length=<span class="num">256</span>),
+            FieldSchema(<span class="str">"synced_at"</span>, DataType.INT64)
+        ]
+        schema = CollectionSchema(fields)
+
+        self.milvus_client.create_collection(
+            collection_name=<span class="str">"documents"</span>,
+            schema=schema
+        )
+
+        <span class="cmt"># 创建索引</span>
+        index_params = self.milvus_client.prepare_index_params()
+        index_params.add_index(
+            field_name=<span class="str">"embedding"</span>,
+            index_type=<span class="str">"IVF_FLAT"</span>,
+            metric_type=<span class="str">"COSINE"</span>,
+            params={<span class="str">"nlist"</span>: <span class="num">128</span>}
+        )
+        self.milvus_client.create_index(
+            collection_name=<span class="str">"documents"</span>,
+            index_params=index_params
+        )
+
+    <span class="kw">def</span> <span class="fn">sync_incremental</span>(self):
+        <span class="str">"""增量同步：只同步新增和更新的数据"""</span>
+        cursor = self.mysql_conn.cursor(dictionary=<span class="kw">True</span>)
+
+        <span class="cmt"># 查询自上次同步以来新增或更新的数据</span>
+        cursor.execute(<span class="str">"""
+            SELECT id, title, content
+            FROM documents
+            WHERE id > %s
+            ORDER BY id ASC
+            LIMIT 1000
+        """</span>, (self.last_synced_id,))
+
+        rows = cursor.fetchall()
+
+        <span class="kw">if not</span> rows:
+            <span class="fn">print</span>(<span class="str">"没有新数据需要同步"</span>)
+            <span class="kw">return</span> <span class="num">0</span>
+
+        <span class="fn">print</span>(<span class="str">f"发现 <span class="var">{len(rows)}</span> 条新数据"</span>)
+
+        <span class="cmt"># 批量生成嵌入向量</span>
+        texts = [row[<span class="str">"content"</span>] <span class="kw">for</span> row <span class="kw">in</span> rows]
+        embeddings = self.embed_model.encode(texts).tolist()
+
+        <span class="cmt"># 批量写入Milvus</span>
+        data = [
+            {
+                <span class="str">"id"</span>: row[<span class="str">"id"</span>],
+                <span class="str">"embedding"</span>: emb,
+                <span class="str">"title"</span>: row[<span class="str">"title"</span>],
+                <span class="str">"synced_at"</span>: <span class="fn">int</span>(time.time())
+            }
+            <span class="kw">for</span> row, emb <span class="kw">in</span> zip(rows, embeddings)
+        ]
+
+        self.milvus_client.insert(
+            collection_name=<span class="str">"documents"</span>,
+            data=data
+        )
+
+        <span class="cmt"># 更新同步水位</span>
+        self.last_synced_id = rows[-<span class="num">1</span>][<span class="str">"id"</span>]
+
+        <span class="fn">print</span>(<span class="str">f"✅ 同步完成, 最新ID: <span class="var">{self.last_synced_id}</span>"</span>)
+        <span class="kw">return</span> <span class="fn">len</span>(rows)
+
+    <span class="kw">def</span> <span class="fn">get_last_synced_id</span>(self) -> <span class="cls">int</span>:
+        <span class="str">"""获取上次同步的最大ID（可从数据库或文件中读取持久化的水位）"""</span>
+        <span class="cmt"># TODO: 生产环境应将水位持久化到数据库或文件，避免重启后全量重跑</span>
+        <span class="kw">return</span> <span class="num">0</span>
+
+    <span class="kw">def</span> <span class="fn">run_sync_loop</span>(self, interval: <span class="cls">int</span> = <span class="num">5</span>):
+        <span class="str">"""运行同步循环"""</span>
+        self.create_milvus_collection()
+        self.last_synced_id = self.get_last_synced_id()
+
+        <span class="fn">print</span>(<span class="str">f"🚀 开始同步, 每 <span class="var">{interval}</span> 秒检查一次"</span>)
+
+        <span class="kw">while True</span>:
+            <span class="kw">try</span>:
+                count = self.sync_incremental()
+                <span class="kw">if</span> count > <span class="num">0</span>:
+                    <span class="fn">print</span>(<span class="str">f"同步了 <span class="var">{count}</span> 条数据"</span>)
+            <span class="kw">except</span> Exception <span class="kw">as</span> e:
+                <span class="fn">print</span>(<span class="str">f"❌ 同步错误: <span class="var">{e}</span>"</span>)
+
+            time.sleep(interval)</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 6 ==================== -->
+<div class="section" id="llm-db-integration-s6">
+  <h2>监控与运维</h2>
+
+  <h3>同步延迟监控</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> prometheus_client <span class="kw">import</span> Counter, Gauge, start_http_server
+
+<span class="cmt"># 定义Prometheus指标</span>
+sync_counter = Counter(
+    <span class="str">'milvus_sync_total'</span>,
+    <span class="str">'Total number of synced documents'</span>,
+    [<span class="str">'status'</span>]
+)
+
+sync_latency = Gauge(
+    <span class="str">'milvus_sync_latency_seconds'</span>,
+    <span class="str">'Sync latency in seconds'</span>
+)
+
+sync_lag = Gauge(
+    <span class="str">'milvus_sync_lag_documents'</span>,
+    <span class="str">'Number of documents waiting to be synced'</span>
+)
+
+<span class="cmt"># 在同步代码中记录指标</span>
+<span class="kw">def</span> <span class="fn">sync_with_metrics</span>(syncer):
+    start_time = time.time()
+
+    <span class="kw">try</span>:
+        count = syncer.sync_incremental()
+        sync_counter.labels(status=<span class="str">'success'</span>).inc(count)
+        sync_latency.set(time.time() - start_time)
+        sync_lag.set(<span class="num">0</span> <span class="kw">if</span> count == <span class="num">0</span> <span class="kw">else</span> count)
+
+    <span class="kw">except</span> Exception <span class="kw">as</span> e:
+        sync_counter.labels(status=<span class="str">'error'</span>).inc()
+        <span class="fn">print</span>(<span class="str">f"Sync error: <span class="var">{e}</span>"</span>)</code></pre>
+  </div>
+
+  <h3>数据一致性检查</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">def</span> <span class="fn">check_consistency</span>(mysql_conn, milvus_client):
+    <span class="str">"""检查MySQL和Milvus的数据一致性"""</span>
+
+    <span class="cmt"># 获取MySQL中的ID列表</span>
+    cursor = mysql_conn.cursor()
+    cursor.execute(<span class="str">"SELECT id FROM documents ORDER BY id"</span>)
+    mysql_ids = <span class="fn">set</span>(row[<span class="num">0</span>] <span class="kw">for</span> row <span class="kw">in</span> cursor.fetchall())
+
+    <span class="cmt"># 获取Milvus中的ID列表</span>
+    milvus_result = milvus_client.query(
+        collection_name=<span class="str">"documents"</span>,
+        filter=<span class="str">"id >= 0"</span>,
+        output_fields=[<span class="str">"id"</span>]
+    )
+    milvus_ids = <span class="fn">set</span>(item[<span class="str">"id"</span>] <span class="kw">for</span> item <span class="kw">in</span> milvus_result)
+
+    <span class="cmt"># 对比差异</span>
+    missing_in_milvus = mysql_ids - milvus_ids
+    extra_in_milvus = milvus_ids - mysql_ids
+
+    <span class="fn">print</span>(<span class="str">f"MySQL记录数: <span class="var">{len(mysql_ids)}</span>"</span>)
+    <span class="fn">print</span>(<span class="str">f"Milvus记录数: <span class="var">{len(milvus_ids)}</span>"</span>)
+    <span class="fn">print</span>(<span class="str">f"Milvus缺少: <span class="var">{len(missing_in_milvus)}</span> 条"</span>)
+    <span class="fn">print</span>(<span class="str">f"Milvus多余: <span class="var">{len(extra_in_milvus)}</span> 条"</span>)
+
+    <span class="kw">if</span> missing_in_milvus:
+        <span class="fn">print</span>(<span class="str">f"缺少的ID: <span class="var">{list(missing_in_milvus)[:10]}</span>"</span>)
+
+    <span class="kw">return</span> <span class="fn">len</span>(missing_in_milvus) == <span class="num">0</span> <span class="kw">and</span> <span class="fn">len</span>(extra_in_milvus) == <span class="num">0</span></code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 多库同步的数据一致性挑战</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li><strong>分布式事务缺失：</strong>MySQL 和 Milvus 之间无法使用 ACID 事务，双写或 CDC 都可能出现一侧成功、另一侧失败的情况</li>
+      <li><strong>顺序性保证：</strong>CDC 消费者需要保证事件的顺序处理，否则可能出现"先删除后插入"被乱序为"先插入后删除"的问题</li>
+      <li><strong>延迟窗口：</strong>最终一致性模型下，数据写入 MySQL 到 Milvus 可查询之间存在秒级到分钟级的延迟窗口，用户可能看到不一致的检索结果</li>
+      <li><strong>重试幂等性：</strong>重试机制必须保证幂等——同一条数据重复写入 Milvus 不应产生重复向量</li>
+      <li><strong>删除同步：</strong>删除操作最容易被忽略，务必在同步链路中处理 DELETE 事件，否则 Milvus 中会残留"僵尸"向量</li>
+    </ul>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 监控建议：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li>使用Prometheus + Grafana监控同步延迟和QPS</li>
+      <li>设置告警：同步延迟超过60秒告警</li>
+      <li>定期运行一致性检查，记录差异</li>
+      <li>保留同步日志，便于问题排查</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== SECTION 7 ==================== -->
+<div class="section" id="llm-db-integration-s7">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：实现双写方案 <span class="badge">基础</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>实现一个简单的MySQL+Milvus双写方案。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 创建MySQL文档表（id、title、content、created_at）</p>
+      <p>② 创建Milvus Collection（id、embedding、title）</p>
+      <p>③ 实现DualWriter类，支持同步双写</p>
+      <p>④ 插入10条测试数据</p>
+      <p>⑤ 验证两个数据库的数据一致性</p>
+      <p>⑥ 实现基本的错误处理和日志</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习2：增量同步Pipeline <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>实现一个完整的增量同步Pipeline。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 实现基于ID的增量同步</p>
+      <p>② 支持批量同步（每次最多1000条）</p>
+      <p>③ 记录同步水位（最后同步的ID）</p>
+      <p>④ 实现定时同步循环（每5秒检查一次）</p>
+      <p>⑤ 添加基本的监控指标（Prometheus）</p>
+      <p>⑥ 实现数据一致性检查函数</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习3：生产环境方案设计 <span class="badge">综合</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>设计一个生产环境的MySQL+Milvus同步方案。</p>
+      <p><strong>需求：</strong></p>
+      <p>① 每天新增10万条文档</p>
+      <p>② 要求秒级延迟</p>
+      <p>③ 需要支持故障恢复</p>
+      <p>④ 需要监控和告警</p>
+      <p><strong>输出：</strong></p>
+      <p>① 画出系统架构图</p>
+      <p>② 选择同步方案（双写/CDC/消息队列），说明理由</p>
+      <p>③ 设计错误处理和重试机制</p>
+      <p>④ 列出需要监控的指标和告警阈值</p>
+      <p>⑤ 编写核心代码实现</p>
+    </div>
+  </div>
+</div>
+
+<!-- 底部导航 -->
+</div></section>

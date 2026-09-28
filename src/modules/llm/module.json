@@ -1,0 +1,744 @@
+{
+  "key": "llm",
+  "route": "#/llm",
+  "scopeId": "mod-llm",
+  "title": "LLM 训练与应用",
+  "subtitle": "系统学习指南 · 65 个模块 · 八大领域 · Happy-LLM 融合版",
+  "menu": {
+    "id": "llm-home",
+    "intro": "从处理数据、理解模型到训练和应用。按原有专题展开，代码以 Python 为主，把原理和实际做法放在一起读。"
+  },
+  "styles": [
+    "sections/mysql/style.css",
+    "sections/postgresql/style.css",
+    "sections/milvus/style.css",
+    "sections/db-selection/style.css",
+    "sections/db-integration/style.css",
+    "sections/langchain-basics/style.css",
+    "sections/lcel/style.css",
+    "sections/langgraph-core/style.css",
+    "sections/agent-tools/style.css",
+    "sections/hitl-memory/style.css",
+    "sections/streaming-deploy/style.css",
+    "sections/data-cleaning/style.css",
+    "sections/dataset/style.css",
+    "sections/architecture/style.css",
+    "sections/classic-arch/style.css",
+    "sections/modern-arch/style.css",
+    "sections/model-selection/style.css",
+    "sections/training/style.css",
+    "sections/hyperparameter/style.css",
+    "sections/monitoring/style.css",
+    "sections/distributed/style.css",
+    "sections/fine-tuning/style.css",
+    "sections/alignment/style.css",
+    "sections/evaluation/style.css",
+    "sections/eval-advanced/style.css",
+    "sections/deployment/style.css",
+    "sections/rag-fundamentals/style.css",
+    "sections/retrieval/style.css",
+    "sections/hybrid/style.css",
+    "sections/reranking/style.css",
+    "sections/rag-pipeline/style.css",
+    "sections/domain-rag/style.css",
+    "sections/advanced-rag/style.css",
+    "sections/multimodal-rag/style.css",
+    "sections/rag-eval/style.css",
+    "sections/rag-production/style.css",
+    "sections/sentiment/style.css",
+    "sections/text-gen/style.css",
+    "sections/enterprise-qa/style.css",
+    "sections/nlp-intro/style.css",
+    "sections/word-embedding/style.css",
+    "sections/rnn-evolution/style.css",
+    "sections/attention-mechanism/style.css",
+    "sections/transformer-deep/style.css",
+    "sections/bert-family/style.css",
+    "sections/nlp-paradigms/style.css",
+    "sections/prompt-engineering/style.css",
+    "sections/chain-of-thought/style.css",
+    "sections/prompt-vs-finetune/style.css",
+    "sections/function-calling/style.css",
+    "sections/agent-concepts/style.css",
+    "sections/agent-frameworks/style.css",
+    "sections/happy-source/style.css",
+    "shared.css",
+    "technical-sections.css",
+    "sections/minimind/style.css"
+  ],
+  "content": [
+    {
+      "id": "llm-home",
+      "file": "sections/home/content.html"
+    },
+    {
+      "id": "llm-mysql",
+      "file": "sections/mysql/content.html"
+    },
+    {
+      "id": "llm-postgresql",
+      "file": "sections/postgresql/content.html"
+    },
+    {
+      "id": "llm-milvus",
+      "file": "sections/milvus/content.html"
+    },
+    {
+      "id": "llm-db-selection",
+      "file": "sections/db-selection/content.html"
+    },
+    {
+      "id": "llm-db-integration",
+      "file": "sections/db-integration/content.html"
+    },
+    {
+      "id": "llm-langchain-basics",
+      "file": "sections/langchain-basics/content.html"
+    },
+    {
+      "id": "llm-lcel",
+      "file": "sections/lcel/content.html"
+    },
+    {
+      "id": "llm-langgraph-core",
+      "file": "sections/langgraph-core/content.html"
+    },
+    {
+      "id": "llm-agent-tools",
+      "file": "sections/agent-tools/content.html"
+    },
+    {
+      "id": "llm-hitl-memory",
+      "file": "sections/hitl-memory/content.html"
+    },
+    {
+      "id": "llm-streaming-deploy",
+      "file": "sections/streaming-deploy/content.html"
+    },
+    {
+      "id": "llm-data-cleaning",
+      "file": "sections/data-cleaning/content.html"
+    },
+    {
+      "id": "llm-dataset",
+      "file": "sections/dataset/content.html"
+    },
+    {
+      "id": "llm-architecture",
+      "file": "sections/architecture/content.html"
+    },
+    {
+      "id": "llm-transformer-panorama",
+      "file": "sections/transformer-panorama/content.html"
+    },
+    {
+      "id": "llm-classic-arch",
+      "file": "sections/classic-arch/content.html"
+    },
+    {
+      "id": "llm-modern-arch",
+      "file": "sections/modern-arch/content.html"
+    },
+    {
+      "id": "llm-model-selection",
+      "file": "sections/model-selection/content.html"
+    },
+    {
+      "id": "llm-training",
+      "file": "sections/training/content.html"
+    },
+    {
+      "id": "llm-hyperparameter",
+      "file": "sections/hyperparameter/content.html"
+    },
+    {
+      "id": "llm-monitoring",
+      "file": "sections/monitoring/content.html"
+    },
+    {
+      "id": "llm-distributed",
+      "file": "sections/distributed/content.html"
+    },
+    {
+      "id": "llm-fine-tuning",
+      "file": "sections/fine-tuning/content.html"
+    },
+    {
+      "id": "llm-alignment",
+      "file": "sections/alignment/content.html"
+    },
+    {
+      "id": "llm-evaluation",
+      "file": "sections/evaluation/content.html"
+    },
+    {
+      "id": "llm-eval-advanced",
+      "file": "sections/eval-advanced/content.html"
+    },
+    {
+      "id": "llm-deployment",
+      "file": "sections/deployment/content.html"
+    },
+    {
+      "id": "llm-rag-fundamentals",
+      "file": "sections/rag-fundamentals/content.html"
+    },
+    {
+      "id": "llm-retrieval",
+      "file": "sections/retrieval/content.html"
+    },
+    {
+      "id": "llm-hybrid",
+      "file": "sections/hybrid/content.html"
+    },
+    {
+      "id": "llm-reranking",
+      "file": "sections/reranking/content.html"
+    },
+    {
+      "id": "llm-rag-pipeline",
+      "file": "sections/rag-pipeline/content.html"
+    },
+    {
+      "id": "llm-domain-rag",
+      "file": "sections/domain-rag/content.html"
+    },
+    {
+      "id": "llm-advanced-rag",
+      "file": "sections/advanced-rag/content.html"
+    },
+    {
+      "id": "llm-multimodal-rag",
+      "file": "sections/multimodal-rag/content.html"
+    },
+    {
+      "id": "llm-rag-eval",
+      "file": "sections/rag-eval/content.html"
+    },
+    {
+      "id": "llm-rag-production",
+      "file": "sections/rag-production/content.html"
+    },
+    {
+      "id": "llm-sentiment",
+      "file": "sections/sentiment/content.html"
+    },
+    {
+      "id": "llm-text-gen",
+      "file": "sections/text-gen/content.html"
+    },
+    {
+      "id": "llm-enterprise-qa",
+      "file": "sections/enterprise-qa/content.html"
+    },
+    {
+      "id": "llm-nlp-intro",
+      "file": "sections/nlp-intro/content.html"
+    },
+    {
+      "id": "llm-word-embedding",
+      "file": "sections/word-embedding/content.html"
+    },
+    {
+      "id": "llm-rnn-evolution",
+      "file": "sections/rnn-evolution/content.html"
+    },
+    {
+      "id": "llm-attention-mechanism",
+      "file": "sections/attention-mechanism/content.html"
+    },
+    {
+      "id": "llm-transformer-deep",
+      "file": "sections/transformer-deep/content.html"
+    },
+    {
+      "id": "llm-bert-family",
+      "file": "sections/bert-family/content.html"
+    },
+    {
+      "id": "llm-nlp-paradigms",
+      "file": "sections/nlp-paradigms/content.html"
+    },
+    {
+      "id": "llm-prompt-engineering",
+      "file": "sections/prompt-engineering/content.html"
+    },
+    {
+      "id": "llm-chain-of-thought",
+      "file": "sections/chain-of-thought/content.html"
+    },
+    {
+      "id": "llm-prompt-vs-finetune",
+      "file": "sections/prompt-vs-finetune/content.html"
+    },
+    {
+      "id": "llm-function-calling",
+      "file": "sections/function-calling/content.html"
+    },
+    {
+      "id": "llm-agent-concepts",
+      "file": "sections/agent-concepts/content.html"
+    },
+    {
+      "id": "llm-agent-frameworks",
+      "file": "sections/agent-frameworks/content.html"
+    },
+    {
+      "id": "llm-ts-context",
+      "file": "sections/ts-context/content.html"
+    },
+    {
+      "id": "llm-ts-memory",
+      "file": "sections/ts-memory/content.html"
+    },
+    {
+      "id": "llm-ts-tools",
+      "file": "sections/ts-tools/content.html"
+    },
+    {
+      "id": "llm-ts-train-eval",
+      "file": "sections/ts-train-eval/content.html"
+    },
+    {
+      "id": "llm-happy-transformer",
+      "file": "sections/happy-transformer/content.html"
+    },
+    {
+      "id": "llm-build-from-scratch",
+      "file": "sections/build-from-scratch/content.html"
+    },
+    {
+      "id": "llm-happy-training",
+      "file": "sections/happy-training/content.html"
+    },
+    {
+      "id": "llm-happy-rag-agent",
+      "file": "sections/happy-rag-agent/content.html"
+    },
+    {
+      "id": "llm-agentic-rl",
+      "file": "sections/agentic-rl/content.html"
+    },
+    {
+      "id": "llm-happy-extras",
+      "file": "sections/happy-extras/content.html"
+    },
+    {
+      "id": "llm-happy-images",
+      "file": "sections/happy-images/content.html"
+    },
+    {
+      "id": "llm-minimind",
+      "file": "sections/minimind/content.html"
+    }
+  ],
+  "toc": [
+    {
+      "id": "llm-home",
+      "t": "模块目录"
+    },
+    {
+      "g": 1,
+      "t": "🗄️ 数据库教程",
+      "id": "llm-menu-databases",
+      "desc": "从 MySQL、PostgreSQL 和向量库开始，再看选型和多库配合。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "llm-mysql",
+          "t": "🐬 MySQL基础"
+        },
+        {
+          "id": "llm-postgresql",
+          "t": "🐘 PostgreSQL进阶"
+        },
+        {
+          "id": "llm-milvus",
+          "t": "🔍 Milvus向量库"
+        },
+        {
+          "id": "llm-db-selection",
+          "t": "📊 数据库选型"
+        },
+        {
+          "id": "llm-db-integration",
+          "t": "🔗 多库整合"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "⛓️ LangChain & LangGraph",
+      "id": "llm-menu-langchain",
+      "desc": "用 Python 串起模型、提示词、工具和状态，逐步做出完整工作流。",
+      "fold": 1,
+      "c": [
+        {
+          "g": 1,
+          "t": "调用模型与串联步骤",
+          "fold": 1,
+          "c": [
+            {
+              "id": "llm-langchain-basics",
+              "t": "📖 LangChain基础",
+              "c": [
+                {
+                  "id": "llm-langchain-basics-s7",
+                  "t": "🧭 Agent工作流模式"
+                }
+              ]
+            },
+            {
+              "id": "llm-lcel",
+              "t": "🔗 LCEL详解"
+            }
+          ]
+        },
+        {
+          "g": 1,
+          "t": "工作流、工具与上线",
+          "fold": 1,
+          "c": [
+            {
+              "id": "llm-langgraph-core",
+              "t": "🗺️ LangGraph核心"
+            },
+            {
+              "id": "llm-agent-tools",
+              "t": "🤖 Agent与工具"
+            },
+            {
+              "id": "llm-hitl-memory",
+              "t": "👤 人机交互与持久化"
+            },
+            {
+              "id": "llm-streaming-deploy",
+              "t": "📡 流式与部署"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "🧠 LLM训练教程",
+      "id": "llm-menu-training",
+      "desc": "准备数据、选择模型、运行训练，再做微调、对齐和评估。",
+      "fold": 1,
+      "c": [
+        {
+          "g": 1,
+          "t": "数据与模型准备",
+          "fold": 1,
+          "c": [
+            {
+              "id": "llm-data-cleaning",
+              "t": "🧹 数据清洗"
+            },
+            {
+              "id": "llm-dataset",
+              "t": "📦 数据集构建"
+            },
+            {
+              "id": "llm-architecture",
+              "t": "🏗️ 模型架构"
+            },
+            {
+              "id": "llm-transformer-panorama",
+              "t": "🔬 Transformer 全景详解"
+            },
+            {
+              "id": "llm-classic-arch",
+              "t": "🏛️ 经典架构详解"
+            },
+            {
+              "id": "llm-modern-arch",
+              "t": "⚡ 现代架构详解"
+            },
+            {
+              "id": "llm-model-selection",
+              "t": "🎯 模型选型"
+            }
+          ]
+        },
+        {
+          "g": 1,
+          "t": "训练、微调与对齐",
+          "fold": 1,
+          "c": [
+            {
+              "id": "llm-training",
+              "t": "⚙️ 训练基础"
+            },
+            {
+              "id": "llm-hyperparameter",
+              "t": "🔧 超参数调优"
+            },
+            {
+              "id": "llm-monitoring",
+              "t": "📈 训练监控"
+            },
+            {
+              "id": "llm-distributed",
+              "t": "🌐 分布式训练"
+            },
+            {
+              "id": "llm-fine-tuning",
+              "t": "🎨 微调实战"
+            },
+            {
+              "id": "llm-alignment",
+              "t": "🤝 对齐训练"
+            }
+          ]
+        },
+        {
+          "g": 1,
+          "t": "评估与部署",
+          "fold": 1,
+          "c": [
+            {
+              "id": "llm-evaluation",
+              "t": "📊 模型评估"
+            },
+            {
+              "id": "llm-eval-advanced",
+              "t": "📐 评估进阶"
+            },
+            {
+              "id": "llm-deployment",
+              "t": "🚀 部署推理"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "🔍 RAG系统教程",
+      "id": "llm-menu-rag",
+      "desc": "把资料变成可检索的知识，再看检索、重排序、评估和生产部署。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "llm-rag-fundamentals",
+          "t": "📖 RAG基础"
+        },
+        {
+          "id": "llm-retrieval",
+          "t": "🔍 检索算法"
+        },
+        {
+          "id": "llm-hybrid",
+          "t": "🔗 混合检索"
+        },
+        {
+          "id": "llm-reranking",
+          "t": "📋 重排序"
+        },
+        {
+          "id": "llm-rag-pipeline",
+          "t": "⚙️ RAG Pipeline"
+        },
+        {
+          "id": "llm-domain-rag",
+          "t": "🏥 领域RAG"
+        },
+        {
+          "id": "llm-advanced-rag",
+          "t": "🧬 高级RAG范式"
+        },
+        {
+          "id": "llm-multimodal-rag",
+          "t": "🖼️ 多模态RAG"
+        },
+        {
+          "id": "llm-rag-eval",
+          "t": "📊 RAG评估"
+        },
+        {
+          "id": "llm-rag-production",
+          "t": "🏭 RAG生产化"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "🚀 实战项目",
+      "id": "llm-menu-projects",
+      "desc": "从情感分析、文本生成到企业问答，跟着具体任务完成应用。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "llm-sentiment",
+          "t": "💭 情感分析"
+        },
+        {
+          "id": "llm-text-gen",
+          "t": "✨ 文本生成"
+        },
+        {
+          "id": "llm-enterprise-qa",
+          "t": "🏢 企业问答系统"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "🔤 NLP基础教程",
+      "id": "llm-menu-nlp",
+      "desc": "从文本预处理和词向量，读到注意力、Transformer 和预训练模型。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "llm-nlp-intro",
+          "t": "📝 NLP概述与文本预处理"
+        },
+        {
+          "id": "llm-word-embedding",
+          "t": "📊 文本表示与词向量"
+        },
+        {
+          "id": "llm-rnn-evolution",
+          "t": "🔄 序列模型演进"
+        },
+        {
+          "id": "llm-attention-mechanism",
+          "t": "👁️ 注意力机制详解"
+        },
+        {
+          "id": "llm-transformer-deep",
+          "t": "🏗️ Transformer深度解析"
+        },
+        {
+          "id": "llm-bert-family",
+          "t": "🤖 预训练模型与HuggingFace"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "💬 Prompt Engineering",
+      "id": "llm-menu-prompt",
+      "desc": "提示词怎么写，推理步骤怎么组织，什么时候该考虑微调。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "llm-nlp-paradigms",
+          "t": "📈 NLP四大范式演进"
+        },
+        {
+          "id": "llm-prompt-engineering",
+          "t": "✍️ Prompt Engineering指南"
+        },
+        {
+          "id": "llm-chain-of-thought",
+          "t": "🧩 CoT与高级提示技术"
+        },
+        {
+          "id": "llm-prompt-vs-finetune",
+          "t": "⚖️ 提示调优vs微调"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "🔧 Function Calling & Agent",
+      "id": "llm-menu-agents",
+      "desc": "模型怎样调用函数，Agent 怎样组织决策、工具和执行步骤。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "llm-function-calling",
+          "t": "🔧 Function Calling实战"
+        },
+        {
+          "id": "llm-agent-concepts",
+          "t": "🤖 AI Agent概念与架构"
+        },
+        {
+          "id": "llm-agent-frameworks",
+          "t": "⚡ Agent框架实战"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "🧩 Agent 技术栈详解",
+      "id": "llm-menu-stack",
+      "desc": "把上下文、记忆、工具运行时以及训练评估放在同一条工程链路里。",
+      "c": [
+        {
+          "id": "llm-ts-context",
+          "t": "🧵 上下文工程技术栈"
+        },
+        {
+          "id": "llm-ts-memory",
+          "t": "🧠 记忆与检索技术栈"
+        },
+        {
+          "id": "llm-ts-tools",
+          "t": "🛠️ 工具与运行时技术栈"
+        },
+        {
+          "id": "llm-ts-train-eval",
+          "t": "📐 训练与评估技术栈"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "📚 Happy-LLM 原文融合",
+      "id": "llm-menu-happy",
+      "desc": "结合原文、Python 代码和图示，练习模型搭建、训练与应用。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "llm-happy-transformer",
+          "t": "Happy-LLM：Transformer 架构原文融合"
+        },
+        {
+          "id": "llm-build-from-scratch",
+          "t": "Happy-LLM：从零搭建 LLaMA2"
+        },
+        {
+          "id": "llm-happy-training",
+          "t": "Happy-LLM：训练、对齐与微调实践"
+        },
+        {
+          "id": "llm-happy-rag-agent",
+          "t": "Happy-LLM：评测、RAG 与 Agent 应用"
+        },
+        {
+          "id": "llm-agentic-rl",
+          "t": "Happy-LLM：Agentic RL 实践"
+        },
+        {
+          "id": "llm-happy-extras",
+          "t": "Happy-LLM：扩展专题与工程案例"
+        },
+        {
+          "id": "llm-happy-images",
+          "t": "🖼️ 图片资源库（109张）"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "🧪 MiniMind 工程案例",
+      "id": "llm-menu-minimind",
+      "desc": "沿着一个小模型工程，从训练看到推理和 Agent 部署。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "llm-minimind",
+          "t": "MiniMind：从零训练到 Agent 部署"
+        }
+      ]
+    },
+    {
+      "id": "llm-learning-paths",
+      "t": "学习路径推荐"
+    }
+  ]
+}

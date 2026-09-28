@@ -1,0 +1,140 @@
+<section class="llm-mod llm-m-attention-mechanism" id="llm-attention-mechanism"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>👁️ 模块0：注意力机制详解</h1>
+  <p>Transformer的基石，让模型学会「看哪里」</p>
+</div><div class="section" id="llm-attention-mechanism-s1">
+    <h2>注意力机制起源</h2>
+    
+    <p>注意力机制最早由Bahdanau等人在2014年提出，用于解决Seq2Seq模型的信息瓶颈问题。</p>
+
+    <h3>Seq2Seq的瓶颈</h3>
+    <p>传统Seq2Seq将整个输入序列压缩为一个固定长度的向量（上下文向量），然后用这个向量生成输出。</p>
+    <p><strong>问题：</strong>当输入序列很长时，固定向量无法承载所有信息，导致信息丢失。</p>
+
+    <h3>注意力的突破</h3>
+    <p>注意力机制让解码器在每一步都可以<strong>直接查看编码器的所有输出</strong>，并根据相关性加权求和：</p>
+    <p><code>context = Σ(α_i · h_i)</code>，其中 α_i 是注意力权重</p>
+    <div class="callout callout-key">
+    <p>🔑 类比：传统Seq2Seq像把一本书压缩成一句话摘要；注意力机制像考试时可以随时翻书查阅。</p>
+  </div>
+  </div><div class="section" id="llm-attention-mechanism-s2">
+    <h2>注意力机制分类</h2>
+    
+    <h3>注意力机制分类</h3>
+    <table>
+    <tr><th>类型</th><th>原理</th><th>特点</th><th>应用场景</th></tr>
+    <tr><td>Soft Attention</td><td>对所有位置计算加权求和（连续、可微）</td><td>可端到端训练</td><td>机器翻译、文本摘要</td></tr>
+<tr><td>Hard Attention</td><td>采样选择少数位置（离散、不可微）</td><td>需要强化学习训练</td><td>图像描述生成</td></tr>
+<tr><td>Self-Attention</td><td>序列内部的注意力（Q=K=V来自同一序列）</td><td>捕捉序列内部关系</td><td>BERT、GPT的核心</td></tr>
+<tr><td>Cross-Attention</td><td>Q来自一个序列，K/V来自另一个序列</td><td>连接两个序列的信息</td><td>Decoder中的编码器-解码器注意力</td></tr>
+
+  </table>
+  </div><div class="section" id="llm-attention-mechanism-s3">
+    <h2>Q/K/V机制详解</h2>
+    
+    <p>Q/K/V（查询/键/值）是注意力机制的核心概念。</p>
+
+    <h3>类比：图书馆检索</h3>
+    <table>
+    <tr><th>概念</th><th>类比</th><th>作用</th></tr>
+    <tr><td>Query (查询)</td><td>你的搜索关键词</td><td>表示"我在找什么"</td></tr>
+<tr><td>Key (键)</td><td>书的索引/标签</td><td>表示"我有什么"</td></tr>
+<tr><td>Value (值)</td><td>书的实际内容</td><td>表示"我能提供什么"</td></tr>
+
+  </table>
+    <h3>缩放点积注意力公式</h3>
+    <p><code>Attention(Q, K, V) = softmax(Q · K^T / √d_k) · V</code></p>
+    <ul>
+        <li><code>Q · K^T</code>：计算查询和每个键的相似度（点积）</li>
+        <li><code>/ √d_k</code>：缩放因子，防止点积过大导致softmax梯度消失</li>
+        <li><code>softmax</code>：将相似度转为概率分布（注意力权重）</li>
+        <li><code>· V</code>：用注意力权重对值加权求和</li>
+    </ul>
+    <div class="callout callout-tip">
+    <p>💡 为什么除以 √d_k？当d_k很大时，点积的值会很大，softmax会趋向于one-hot分布，梯度几乎为零。缩放后梯度更平滑。</p>
+  </div>
+  </div><div class="section" id="llm-attention-mechanism-s4">
+    <h2>Self-Attention计算过程</h2>
+    
+    <p>Self-Attention的完整计算过程：</p>
+
+    <h3>步骤详解</h3>
+    <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>输入嵌入</strong><br>输入X [seq_len, d_model]，如句子 "我 爱 NLP" 有3个token</div>
+  </div><div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>线性变换</strong><br>通过W_Q, W_K, W_V三个矩阵将X分别映射为Q, K, V</div>
+  </div><div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>计算注意力分数</strong><br>scores = Q · K^T，得到 [seq_len, seq_len] 的注意力矩阵</div>
+  </div><div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>缩放</strong><br>scores = scores / √d_k</div>
+  </div><div class="step">
+    <div class="step-num">5</div>
+    <div class="step-content"><strong>归一化</strong><br>对每一行做softmax，得到注意力权重 [0.7, 0.2, 0.1]</div>
+  </div><div class="step">
+    <div class="step-num">6</div>
+    <div class="step-content"><strong>加权求和</strong><br>output = weights · V，每个token的输出是所有token的加权组合</div>
+  </div>
+    <div class="callout callout-key">
+    <p>🔑 <strong>核心洞察：</strong>Self-Attention让每个token都能"看到"序列中的所有其他token，并根据相关性决定关注程度。这就是为什么Transformer能捕捉长距离依赖。</p>
+  </div>
+  </div><div class="section" id="llm-attention-mechanism-s5">
+    <h2>注意力可视化与实现</h2>
+    
+    <p>注意力权重矩阵可以可视化为热力图，直观展示模型关注了哪些词。</p>
+
+    <h3>注意力可视化示例</h3>
+    <p>对于句子 "The cat sat on the mat"：</p>
+    <table>
+    <tr><th></th><th>The</th><th>cat</th><th>sat</th><th>on</th><th>the</th><th>mat</th></tr>
+    <tr><td>The</td><td>0.1</td><td>0.3</td><td>0.1</td><td>0.1</td><td>0.2</td><td>0.2</td></tr>
+<tr><td>cat</td><td>0.1</td><td>0.4</td><td>0.2</td><td>0.1</td><td>0.1</td><td>0.1</td></tr>
+<tr><td>sat</td><td>0.1</td><td>0.2</td><td>0.3</td><td>0.1</td><td>0.1</td><td>0.2</td></tr>
+<tr><td>on</td><td>0.1</td><td>0.1</td><td>0.1</td><td>0.3</td><td>0.2</td><td>0.2</td></tr>
+<tr><td>the</td><td>0.1</td><td>0.1</td><td>0.1</td><td>0.2</td><td>0.2</td><td>0.3</td></tr>
+<tr><td>mat</td><td>0.1</td><td>0.1</td><td>0.2</td><td>0.2</td><td>0.2</td><td>0.2</td></tr>
+
+  </table>
+    <p>可以看到 "cat" 对自身有最高的注意力权重（0.4），说明模型理解了 "cat" 是这句话的核心词。</p>
+
+    <h3>Scaled Dot-Product Attention 实现</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch
+import torch.nn as nn
+import math
+
+def scaled_dot_product_attention(Q, K, V, mask=None):
+    """
+    缩放点积注意力
+    Q, K, V: [batch, heads, seq_len, d_k]
+    """
+    d_k = Q.size(-1)
+    # 计算注意力分数
+    scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
+    # 可选：应用掩码
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, float("-inf"))
+    # softmax归一化
+    attn_weights = torch.softmax(scores, dim=-1)
+    # 加权求和
+    output = torch.matmul(attn_weights, V)
+    return output, attn_weights
+
+# 示例
+B, H, L, D = 2, 8, 10, 64  # batch, heads, seq_len, d_k
+Q = torch.randn(B, H, L, D)
+K = torch.randn(B, H, L, D)
+V = torch.randn(B, H, L, D)
+
+out, weights = scaled_dot_product_attention(Q, K, V)
+print(f"输出: {out.shape}")         # [2, 8, 10, 64]
+print(f"注意力权重: {weights.shape}") # [2, 8, 10, 10]</code></pre>
+  </div>
+  </div>
+</div></section>

@@ -1,0 +1,384 @@
+{
+  "harness-runtime": {
+    "t": "Harness",
+    "cat": "Agent 运行时",
+    "tgt": "h-lec-02",
+    "sum": "<p>Harness 是围绕模型运行的一套程序：准备上下文、执行工具、处理权限、保存结果，并决定如何继续下一步。</p>"
+  },
+  "codex-step-context": {
+    "t": "StepContext",
+    "cat": "Codex Harness",
+    "tgt": "cx-context",
+    "sum": "<p>一次模型请求采用的设置与能力快照。模型看到的工具计划与执行这一步时使用的计划保持一致，后续请求再捕获新的状态。</p>"
+  },
+  "codex-rollout": {
+    "t": "Rollout",
+    "cat": "Codex Harness",
+    "tgt": "cx-history",
+    "sum": "<p>保存到磁盘的会话过程记录，使用 JSONL，即一行一个 JSON 对象。它帮助恢复与排查会话，但不等于文件系统快照，也不是重新执行所有命令。</p>"
+  },
+  "self-attention": {
+    "t": "Self-Attention",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s3",
+    "sum": "<p>自注意力让每个 token 动态地决定自己与其他所有 token 的相关性，然后把这些相关性作为权重对「值」向量加权求和。<strong>关键</strong>：Q/K/V 来自同一输入但经三组不同的线性变换，不是三者相等。</p><ul><li><strong>打分</strong>：Q × K^T，除以 √d_k 防止 softmax 饱和</li><li><strong>权重</strong>：softmax 归一化，每个位置的权重之和为 1</li><li><strong>输出</strong>：权重乘以 V，聚合所有位置的信息</li></ul>",
+    "dia": "graph LR\n    Q[Q 查询<br/>想找什么] --> S[打分 Q x K^T]\n    K[K 键<br/>能提供什么] --> S\n    S --> Scale[除以 sqrt d_k]\n    Scale --> SM[Softmax]\n    SM --> W[注意力权重]\n    W --> Out[加权求和 V]\n    V[V 值<br/>实际内容] --> Out"
+  },
+  "scaled-dot-product": {
+    "t": "缩放点积注意力",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s3",
+    "sum": "<p>注意力分数除以 √d_k 的原因：两个均值 0、方差 1 的随机向量，点积的方差是 d_k。高维空间不缩放时点积值很大，将 softmax 推向饱和区（梯度接近 0）。除以 √d_k 将方差归一到 1，保持梯度健康。</p><p><strong>正确实现的关键</strong>：多头模式下必须先 reshape 分头再做投影，不能用 head_dim × head_dim 的 Linear 处理 d_model 维度的输入。</p>"
+  },
+  "causal-mask": {
+    "t": "Causal Mask",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s3",
+    "sum": "<p>Decoder-only 模型（GPT 系、Llama 系）在训练和推理时只能看到当前位置及之前的 token，不能看到未来。Causal Mask 把注意力矩阵的上三角部分置为 -∞，经 softmax 后这些位置的权重变为 0，从而实现「只看历史」。</p><p><strong>实践意义</strong>：这是为什么 LLM 是从左到右生成的——每步只能访问已生成的前缀。</p>"
+  },
+  "multi-head-attention": {
+    "t": "多头注意力",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s4",
+    "sum": "<p>把 d_model 切成 h 份，每个头独立学习不同的关注模式：有的头聚焦语法关系，有的头聚焦语义依赖。拼接后过输出投影 W_o 混合各头信息。</p><p><strong>GQA 演进</strong>：多查询注意力（MQA）和分组查询注意力（GQA）减少 K/V 头数，节省 KV Cache：<code>2 × B × L × layer × n_kv × d_head × 2 字节</code>。Llama-3.1-8B 用 GQA 8 个 KV 头，32 个 Q 头。</p>",
+    "dia": "graph LR\n    subgraph \"MHA 所有头都有 KV\"\n        H1[头1 KV]\n        H2[头2 KV]\n        H3[...]\n    end\n    subgraph \"GQA 少量共享 KV\"\n        G1[KV组1<br/>对应多个Q头]\n        G2[KV组2]\n    end"
+  },
+  "gqa": {
+    "t": "GQA 分组查询注意力",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s4",
+    "sum": "<p>GQA 将 Q 头分成 G 组，每组共享 1 对 K/V 头。相比 MHA（每个 Q 头有独立 K/V），KV Cache 减少 h/G 倍。Llama-3.1-8B 有 32 个 Q 头和 8 个 KV 头（G=8），节省 4 倍 KV Cache。</p><p><strong>KV Cache 计算公式</strong>：<code>2 × B × L × layer × n_kv × d_head × dtype_bytes</code></p>"
+  },
+  "positional-encoding": {
+    "t": "位置编码",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s5",
+    "sum": "<p>自注意力本身不感知位置——打乱输入顺序，注意力分数不变。必须额外注入位置信息。主要方案：<strong>正弦编码</strong>（原始 Transformer，固定函数）→ <strong>可学习绝对编码</strong>（GPT-2）→ <strong>RoPE</strong>（旋转位置编码，主流 LLM）→ <strong>ALiBi</strong>（线性偏置，外推好但推理略慢）。</p>"
+  },
+  "rope": {
+    "t": "RoPE 旋转位置编码",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s5",
+    "sum": "<p>RoPE（旋转位置编码，苏剑林，arXiv 2104.09864，2021 年 4 月）用旋转矩阵把位置信息编码进 Q 和 K，使点积结果只依赖相对距离 m-n，而非绝对位置。</p><p>直觉：对向量按维度两两分组，对第 i 组施加旋转角 θᵢ = m / 10000^(2i/d)。旋转矩阵只改变方向不改变模长，数值稳定。现被 Llama、Qwen、Mistral 系列广泛采用。</p>"
+  },
+  "ffn-swiglu": {
+    "t": "FFN 与 SwiGLU",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s6",
+    "sum": "<p>FFN（前馈网络）是 Transformer Block 的另一半，参数量约占 2/3，是模型存储事实知识的主要场所。标准结构：d_model → 4d → d_model。</p><p><strong>SwiGLU</strong>（Llama 系列）：两路相乘 <code>silu(W₁x) ⊙ W₃x</code>，中间维度 2/3 × 4d ≈ 2.67d，训练效果比 GELU 好。</p><p><strong>MoE</strong>：用多个专家 FFN 替换单一 FFN（不是整个 block），top-K 路由激活部分专家，用更多参数换更小的激活计算量。</p>"
+  },
+  "pre-ln-post-ln": {
+    "t": "Pre-LN vs Post-LN",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s7",
+    "sum": "<p><strong>Post-LN（原始 Transformer）</strong>：<code>x = LayerNorm(x + SubLayer(x))</code>，LayerNorm 在残差相加之后。训练深层模型时梯度消失问题较严重，需要精心设计 warmup。</p><p><strong>Pre-LN（现代 LLM）</strong>：<code>x = x + SubLayer(LayerNorm(x))</code>，LayerNorm 在子层输入时施加。梯度直通残差路径，训练稳定，不需要 warmup。</p><p><strong>常见错误</strong>：把 Post-LN 写成 <code>x + LayerNorm(SubLayer(x))</code> 是错的，既非 Post-LN 也非 Pre-LN。</p>"
+  },
+  "kv-cache": {
+    "t": "KV Cache",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s8",
+    "sum": "<p>KV Cache 把已经计算过的 K/V 向量存下来，避免自回归生成时每步重新计算整个历史序列。</p><p><strong>为什么改前缀导致缓存失效</strong>：KV Cache 是位置绑定的——第 i 个 token 的 K/V 在「已见前 i 个 token」的条件下计算。改变前缀意味着后续所有位置的因果上下文改变，K/V 不再正确，必须重算。</p><p><strong>架构约束</strong>：稳定内容（系统提示、工具定义）放前面；易变内容（用户消息、工具结果）放后面；不要在系统提示里放时间戳。</p>",
+    "dia": "graph TB\n    Prompt[前缀 稳定内容] --> Cache[KV Cache 缓存]\n\n    Change[改变前缀!] --> Invalidate[后续全部失效<br/>必须重算]"
+  },
+  "flash-attention": {
+    "t": "Flash Attention",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s9",
+    "sum": "<p>Flash Attention 不改变数学结果，而是重排计算顺序：将 Q/K/V 分成 tile，在 SRAM 内用 online softmax 完成所有计算，避免把 N×N 注意力矩阵写到 HBM。</p><ul><li><strong>HBM 访问量</strong>：从 O(N²) 降到 O(N)</li><li><strong>速度提升</strong>：2-4×（取决于序列长度）</li><li><strong>显存占用</strong>：从 O(N²) 降到 O(N)</li></ul><p>PyTorch 通过 <code>F.scaled_dot_product_attention()</code> 自动使用。旧接口 <code>torch.backends.cuda.sdp_kernel()</code> 已弃用，改用 <code>torch.nn.attention.sdpa_kernel</code>。</p>"
+  },
+  "prefill-decode": {
+    "t": "Prefill 与 Decode 两阶段",
+    "cat": "Transformer",
+    "tgt": "llm-transformer-panorama-s8",
+    "sum": "<p><strong>Prefill</strong>：一次性并行处理输入 prompt，计算每个 token 的 K/V 存入 KV Cache。计算密集，瓶颈是 FLOP 和内存带宽。</p><p><strong>Decode</strong>：每步生成一个新 token，只需计算该 token 的 K/V 并追加，然后读取全部历史 K/V 做注意力。计算量很小，瓶颈是 KV Cache 的读带宽（memory-bound）。</p><p><strong>关键数字</strong>：Llama-3.1-70B，批大小 1，序列 32k，bf16：KV Cache ≈ 10.7 GB。</p>"
+  },
+  "chat-template": {
+    "t": "Chat Template",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s1",
+    "sum": "<p>API 的 message 数组在进入模型前，必须由 tokenizer 的 chat template 拼成扁平 token 序列。不同模型的模板完全不同：ChatML 用 <code>&lt;|im_start|&gt;</code>，Llama 3 用 <code>&lt;|start_header_id|&gt;</code>，Zephyr/Phi 用 <code>&lt;|system|&gt;</code>。</p><p><strong>踩坑警告</strong>：微调时用的模板和推理时不一致，特殊 token 会错位，输出会混乱。始终用 <code>tokenizer.apply_chat_template(messages)</code>，不要手拼。</p>"
+  },
+  "prefix-cache": {
+    "t": "Prefix Cache",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s2",
+    "sum": "<p>Prefix Cache 在跨请求层面复用相同前缀的 KV Cache。多个请求共享同一系统提示时，服务端只需计算一次，后续请求直接命中，节省 50–90% 的 TTFT。</p><p><strong>关键约束</strong>：前缀一旦改变，后续所有 token 的 KV 都失效。不要在系统提示里放时间戳或随机值。稳定内容放前面，易变内容放后面。</p>"
+  },
+  "tool-call-loop": {
+    "t": "工具调用两跳循环",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s3",
+    "sum": "<p>工具调用是两跳：①模型发出 <code>tool_use</code>（含工具名和参数）→ ②应用层执行 → ③结果以 <code>tool_result</code> 回填，必须带 <code>tool_use_id</code> 对应。</p><p>一次请求可并行发出多个 tool_use，回填时每条 tool_result 用 ID 配对。tool_result 必须紧跟对应的 tool_use 之后，否则模型无法关联。</p>"
+  },
+  "system-prompt-design": {
+    "t": "System Prompt 工程",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s4",
+    "sum": "<p>系统提示的核心是流程驱动，而非规则堆砌。结构化为四区：角色区、流程区、约束区、Few-shot 区（可选）。</p><p>工具 description 是给模型看的 API 文档：写清楚何时调用（触发条件）、参数命名自解释、用 enum 收窄取值、说明返回值结构。</p>"
+  },
+  "prompt-injection": {
+    "t": "提示注入",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s5",
+    "sum": "<p>提示注入把指令藏进数据，让模型误执行攻击者意图。分直接注入（用户输入）和间接注入（工具返回值、检索到的网页里藏指令）。</p><p>防御分层：输入侧标注来源 + 信任级别；执行侧对危险操作加人类确认闸门 + 权限最小化；输出侧审计验证。<strong>纯提示词防御不可靠</strong>，需要结构性隔离。</p>"
+  },
+  "agent-skills": {
+    "t": "Agent Skills",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s6",
+    "sum": "<p>把领域能力做成可组合的文档单元，按需加载进上下文，而不是把所有场景全部平铺进系统提示。优点：保持前缀稳定（命中 Prefix Cache）、减少注意力稀释。</p><p>Skill 是知识（如何使用工具的说明），工具是可执行函数。二者配合：Skill 告诉模型何时调用哪个工具、参数怎么填。</p>"
+  },
+  "progressive-disclosure": {
+    "t": "渐进式披露",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s6",
+    "sum": "<p>先给模型 Skills 目录（1-2KB），模型判断需要哪个场景后再展开对应 Skill 全文。</p><p>对比平铺：把 20 个 Skill 全部写进系统提示可能 20KB，且模型对中间内容注意力下降（lost-in-the-middle）。渐进式披露只需要 1-2KB 的稳定前缀，加上本次用到的 Skill 全文。</p>"
+  },
+  "status-block": {
+    "t": "Agent 状态栏",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s7",
+    "sum": "<p>在 Agent 轨迹中注入结构化元信息块（剩余预算、当前子目标、待办清单）帮助长任务追踪进度。</p><p>两种实现：每轮重写（总是最新，但每次打断 Prefix Cache，相当于每轮重算整个前缀）vs 追加式（保持前缀稳定、命中缓存，但上下文逐渐变长）。短任务用重写，长任务或高频场景用追加。</p>"
+  },
+  "context-compaction": {
+    "t": "上下文压缩",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s8",
+    "sum": "<p>分层压缩：近期对话保留原文 → 早期对话压缩为结论摘要 → 更早内容只保留可按需检索的索引。</p><p>压缩与 KV Cache 的关系：压缩是一次性投资（执行一次摘要时 KV Cache 失效），但之后每轮输入更短，长期更经济。适合每 20-30 轮执行一次。</p>"
+  },
+  "context-isolation": {
+    "t": "上下文隔离（子 Agent）",
+    "cat": "上下文工程",
+    "tgt": "llm-ts-context-s8",
+    "sum": "<p>子任务分发给子 Agent，子 Agent 只有自己那个子任务的上下文。结果通过结构化对象回传，不把整段主对话历史带过去。</p><p>这是上下文管理最彻底的解法：主 Agent 的上下文不随子任务执行膨胀；子 Agent 不受主对话噪声干扰；子任务失败不污染主任务上下文。代价是需要设计好任务分解和结果协议。</p>"
+  },
+  "memory-hierarchy": {
+    "t": "记忆层次结构",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s1",
+    "sum": "<p>Agent 的记忆分四层：<strong>工作记忆</strong>（当前上下文，容量有限）、<strong>情景记忆</strong>（发生过什么，向量检索）、<strong>语义记忆</strong>（稳定事实，结构化查询）、<strong>程序性记忆</strong>（怎么做，代码和流程）。不同层次有不同的存储介质和检索方式，实践中常常混合使用。</p>"
+  },
+  "memory-consolidation": {
+    "t": "记忆写入与整理",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s3",
+    "sum": "<p>记忆质量取决于「写什么」。去重用嵌入相似度（>0.92 视为重复）；冲突时优先保留新记忆；时效衰减——90 天未访问的降权或提示确认。记忆太多会导致检索噪声，无限累积比有策略地遗忘更差。</p>"
+  },
+  "chunking": {
+    "t": "文档分块策略",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s4",
+    "sum": "<p>分块影响 RAG 全链路质量。Markdown 文档推荐递归分割（chunk_size=512，overlap=64）；代码文件用语言感知分割器按函数/类边界切割。<strong>父子块</strong>：用小块（128-256 tokens）检索，但把父块（512-1024 tokens）注入上下文，兼顾检索精度和语义完整性。</p>"
+  },
+  "dense-embedding": {
+    "t": "稠密嵌入",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s5",
+    "sum": "<p>Bi-encoder 把查询和文档映射到同一向量空间，用余弦相似度度量。理解语义同义词，对专有名词精确匹配弱。领域适配：垂直领域（法律/医疗/代码）通常需要对比学习微调，几千条标注对即可有明显提升。</p>"
+  },
+  "bm25": {
+    "t": "BM25 稀疏检索",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s5",
+    "sum": "<p>BM25 公式：IDF × TF饱和 × 文档长度归一化。k=1.2-1.5（TF饱和），b=0.75（长度归一化）是经验默认值。在专有名词、错误码、型号、代码片段上往往优于稠密向量——这些词在语义空间里近似常见词，但精确匹配才有意义。</p>"
+  },
+  "hybrid-rrf": {
+    "t": "混合检索与 RRF 融合",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s6",
+    "sum": "<p>同时跑稠密和稀疏检索，用 RRF 融合：<code>score = Σ 1/(k + rank)</code>，k=60 为典型取值。RRF 只用排名不用分数，彻底规避两路分数尺度不同的问题，无需归一化也无需调参，是多路召回的默认首选。</p>",
+    "dia": "graph LR\n    D[稠密召回 rank1-100] --> RRF[RRF k=60\n    score=1 div 60+rank]\n    S[稀疏召回 rank1-100] --> RRF\n    RRF --> Top[Top-K 融合结果]"
+  },
+  "reranking": {
+    "t": "重排序",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s7",
+    "sum": "<p>召回-精排两阶段：先 bi-encoder 快速召回 Top-50/100，再 cross-encoder 精排取 Top-5。Cross-encoder 精度最高但不可预计算；ColBERT MaxSim（late interaction）精度接近但文档向量可预计算，速度快 10-100 倍，适合大规模场景。</p>"
+  },
+  "hnsw": {
+    "t": "HNSW 向量索引",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s7",
+    "sum": "<p>层次可导航小世界图，最主流的 ANN 索引。参数：M（邻居数，典型 16-64，越大精度越高内存越多）、efConstruction（构建宽度，典型 100-200）、efSearch（查询宽度，典型 50-100，越大召回率越高延迟越高）。召回率与延迟可通过 efSearch 动态调节无需重建索引。</p>"
+  },
+  "graph-rag": {
+    "t": "GraphRAG",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s8",
+    "sum": "<p>用知识图谱增强 RAG，特别适合需要多跳推理的场景（A 与 B 的关系是什么？B 又与 C 有什么联系？）。代价：构建知识图谱本身成本高，维护更新复杂。对多数业务 RAG 场景，混合检索 + 重排序已经足够，GraphRAG 适合知识密集型领域且关系推理是核心需求时才值得引入。</p>"
+  },
+  "agentic-rag": {
+    "t": "Agentic RAG",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s8",
+    "sum": "<p>把检索做成工具而不是固定前置流水线，模型可以决定何时检索、检索什么、结果不满意时改写查询再检索。相比固定 Pipeline，Agentic RAG 在多跳问题和需要验证的场景表现更好；代价是延迟更高（多轮工具调用），推理成本更大。</p>"
+  },
+  "contextual-retrieval": {
+    "t": "上下文感知检索",
+    "cat": "记忆与检索",
+    "tgt": "llm-ts-memory-s8",
+    "sum": "<p>三种方案：查询改写（用模型把当前查询+历史浓缩成独立检索词）、HyDE（先生成假设答案再用答案嵌入检索）、Contextual Retrieval（建索引时给每个 chunk 加上全局定位说明再嵌入）。HyDE 和 Contextual Retrieval 可叠加使用，召回率提升显著。</p>"
+  },
+  "tool-schema": {
+    "t": "工具 Schema 设计",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s1",
+    "sum": "<p>工具的 description 是给模型看的 API 文档，说清楚<strong>何时调用</strong>（触发条件）比描述功能更重要。参数命名自解释，用 enum 收窄取值，说明返回值结构。</p><p><strong>保真性</strong>：让模型复述长内容会掉字改字，应用引用/句柄传递：工具返回 resource_id，下一步工具用 id 操作，而不是把整段内容塞进参数。</p>"
+  },
+  "mcp": {
+    "t": "MCP 模型上下文协议",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s2",
+    "sum": "<p>MCP 把工具接入的 N×M 适配变成 N+M：每个工具只需实现 MCP Server，每个 AI 只需实现 MCP Client。三类能力：Tools（可调用函数）、Resources（可读数据源）、Prompts（服务端提示词模板）。</p><p>Transport：本地用 stdio，远程用 HTTP+SSE。<strong>安全</strong>：MCP Server 的权限边界必须在接入前明确，否则间接注入可通过 MCP 做任意操作。</p>"
+  },
+  "str-replace-edit": {
+    "t": "str_replace 文件编辑",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s3",
+    "sum": "<p>str_replace 给出 old_string + new_string，要求 old_string 在文件中唯一存在后才替换。比全量重写省 token，比 unified diff 出错率低得多。</p><p>匹配不唯一时应返回「找到 N 处匹配，请扩大上下文使其唯一」，让模型重试。这是目前 Coding Agent 文件编辑的最佳实践。</p>"
+  },
+  "sandbox": {
+    "t": "沙箱隔离执行",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s4",
+    "sum": "<p>Agent 执行代码必须默认在隔离环境中运行。容器（Docker）适合大多数场景；VM/gVisor 用于高安全需求。</p><p>必须同时限制：文件系统（白名单路径）、网络（默认断网）、资源（CPU/内存上限）、超时（防无限循环）。缺任何一项都是安全漏洞。</p>"
+  },
+  "permission-gate": {
+    "t": "权限确认闸门",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s5",
+    "sum": "<p>按不可逆程度分级：只读操作自动放行；修改现有文件展示 diff 等待确认；删除和生产配置强确认展示影响范围。过度确认导致疲劳——用户习惯性点确认就等于没有确认。批量授权在会话级而非全局级，且要明确范围。</p>"
+  },
+  "computer-use": {
+    "t": "Computer Use",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s6",
+    "sum": "<p>通过截图感知 + 鼠标键盘操作控制 GUI，无需 API。动作空间：坐标点击（通用但漂移敏感）、无障碍树选择（稳定但依赖 a11y 支持）、混合模式（推荐）。</p><p>截图是主要 token 消耗，1280×720 约 1000-1500 tokens，按需截图而非每步截图。视觉定位失败时放大目标区域重试，而不是盲目重复。</p>"
+  },
+  "gui-grounding": {
+    "t": "视觉定位 Grounding",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s6",
+    "sum": "<p>从截图中准确找到目标元素的位置是 Computer Use 最难的部分，在密集 UI、小按钮、动态内容上出错率高。</p><p>改进方向：无障碍树（a11y）辅助定位、放大目标区域、Set-of-Mark（给元素标号后让模型选数字）。错误恢复：定位失败时截图 + 放大，而不是盲目重复。</p>"
+  },
+  "voice-pipeline": {
+    "t": "语音对话链路",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s7",
+    "sum": "<p>级联流水线（ASR → LLM → TTS）总延迟 500-1500ms。各段：ASR 100-500ms，TTFT 200-800ms，TTS 50-200ms。</p><p>全双工模式允许打断，需要流式 ASR + 流式 LLM + 实时 TTS + VAD 端点检测。VAD（Voice Activity Detection）负责识别说话结束时机和打断意图，是全双工体验的关键。</p>"
+  },
+  "full-duplex": {
+    "t": "全双工语音交互",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s7",
+    "sum": "<p>全双工允许用户在 AI 说话时随时打断，不需要等对方说完。实现需要：流式 ASR（边说边识别）+ VAD（检测说话开始/结束）+ 中断信号（通知 LLM/TTS 停止生成）+ 状态恢复（被打断后如何继续）。</p><p>难点：区分真打断（用户有新意图）和背景噪音（误触发），通常用 VAD + 短暂等待（200ms）+ 意图判断组合处理。</p>"
+  },
+  "vla": {
+    "t": "VLA 视觉-语言-动作模型",
+    "cat": "工具与运行时",
+    "tgt": "llm-ts-tools-s7",
+    "sum": "<p>VLA 接受视觉 + 语言输入，输出机器人控制指令。控制频率 5-50Hz（远低于传统 1kHz），因此通常分层：VLA 做高层规划（每隔 0.2-1 秒），低层控制器做轨迹插值和力控。</p><p>最大挑战是 sim-to-real gap：仿真训练的策略在真实环境中失效。缓解：领域随机化（训练时随机化物理参数）和真实数据校准仿真。</p>"
+  },
+  "trajectory-eval": {
+    "t": "轨迹评估",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s1",
+    "sum": "<p>Agent 评估的对象是整条执行轨迹，不只是最终答案。评估任务的四要素：可重置的初始状态、用户目标、工具集合、验证条件（程序化验证器或 LLM judge）。</p><p>正确答案不等于可靠 Agent——碰巧成功的错误过程下次还会失败。</p>"
+  },
+  "pass-at-k": {
+    "t": "Pass@k 能力上限指标",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s1",
+    "sum": "<p>Pass@k = k 次独立运行中至少一次成功的概率 = 1-(1-p)^k。衡量模型的能力上限，适合研究性评估。</p><p>不适合衡量业务可靠性——单次 90% 的 Pass@3 是 99.9%，看起来很高，但不等于用户每次都能成功。</p>"
+  },
+  "pass-hat-k": {
+    "t": "Pass^k 业务可靠性指标",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s1",
+    "sum": "<p>Pass^k = k 次全部成功的概率 = p^k。衡量业务可靠性，是生产系统最该看的指标。</p><p>数字说话：单次成功率 90% 的 Pass^5 = 59%，意味着 5 次任务里有 2 次失败。对于高价值任务，Pass^k 暴露了真实的可靠性问题。</p>"
+  },
+  "llm-judge": {
+    "t": "LLM-as-a-Judge",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s2",
+    "sum": "<p>用 LLM 评估 LLM 输出。设计要点：成对比较比打分更可靠；注意位置偏差（随机化顺序）和长度偏差（rubric 明确评质量不评长度）；用 Cohen's Kappa 与人工标注对齐（κ > 0.6 才可信）。</p><p>judge 本身也要被评估——定期拿样本做人工核查，确保 judge 没有系统性偏差。</p>"
+  },
+  "failure-attribution": {
+    "t": "失败归因",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s2",
+    "sum": "<p>从整条轨迹定位第一个出错的步骤。只看最终失败无法指导改进。方法：对每一步独立评分，找第一个异常步骤。</p><p>前提：有完整的轨迹记录（工具调用入参、返回值、模型思考链）。这是为什么可观测性是评估基础设施的核心。</p>"
+  },
+  "data-contamination": {
+    "t": "数据泄漏与基准维护",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s2",
+    "sum": "<p>公开基准饱和（模型通过训练数据直接记住答案）是评估领域的主要挑战。缓解：保留私有 held-out 测试集；定期更换题目；用动态评估（题目按需生成）；区分基准性能（研究指标）和真实任务性能（业务指标）。</p>"
+  },
+  "observability": {
+    "t": "可观测性",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s7",
+    "sum": "<p>Agent 可观测性是结构化的 span 树：每个工具调用是一个 span（入参、出参、耗时、token 消耗），多个 span 组成 trace，trace 附加任务结果和失败原因。</p><p>成本核算要在 span 级别才能找到瓶颈。统计显著性：小样本差异是噪声，用 bootstrap 置信区间，100 个任务通常不足以检验 5% 的差异。</p>"
+  },
+  "sft-vs-rl": {
+    "t": "SFT vs 强化学习",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s3",
+    "sum": "<p>SFT 是模仿——复制示范轨迹，学表面格式，不能泛化到训练集外。RL 是探索——在自己的输出上获得反馈，可以发现新策略，但需要可靠的奖励来源。</p><p>四阶段：预训练（世界知识）→ Mid-training（目标领域）→ SFT（格式对齐）→ RL（偏好优化）。当底层知识不足时，先做 Mid-training 再做 SFT/RL。</p>"
+  },
+  "dpo": {
+    "t": "DPO 直接偏好优化",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s4",
+    "sum": "<p>DPO 把偏好学习重构为分类问题，直接从 (chosen, rejected) 对中提取训练信号，不需要单独的 reward model。训练稳定，是目前最常用的偏好优化基线。</p><p>适合有人工标注的偏好数据；不如 GRPO 适合可验证奖励（代码测试、数学答案）。</p>"
+  },
+  "grpo": {
+    "t": "GRPO 组内相对偏好优化",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s4",
+    "sum": "<p>GRPO 对同一 prompt 采样 G 个响应，计算每个响应相对组内均值的优势来训练模型。省掉了 PPO 的 value model，训练代价更低，天然适合可验证奖励（代码是否通过测试、答案是否正确）。</p><p>DeepSeek-R1 的训练用了 GRPO 的变体，是推理模型后训练的标志性案例。</p>"
+  },
+  "rlvr": {
+    "t": "RLVR 可验证奖励强化学习",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s4",
+    "sum": "<p>对有程序化验证器的任务（代码执行、数学推导、工具调用是否成功），用验证结果作为奖励信号，避免了 reward model 的幻觉和偏差。</p><p>奖励黑客：模型可能学会通过技术手段让验证器返回成功，而不是真正解决问题（如修改测试文件）。需要路径约束：验证器检查过程，不只是最终状态。</p>"
+  },
+  "lora-math": {
+    "t": "LoRA 参数量计算",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s5",
+    "sum": "<p>LoRA 每层的可训练参数：r × (d_in + d_out)。Llama-3.1-8B，r=8，q/k/v/o 四投影（注意 GQA 的 k/v 是 4096→1024）：总计约 6.8M 参数，占全模型 0.085%。</p><p>经验值：r=8 适合格式对齐，r=32-64 适合新知识学习。alpha=2r 保持缩放比不变（alpha=16 对 r=8）。QLoRA（4-bit NF4）可把 8B 模型总显存压到 6-8GB。</p>"
+  },
+  "multi-agent-failures": {
+    "t": "多 Agent 失败模式",
+    "cat": "训练与评估",
+    "tgt": "llm-ts-train-eval-s6",
+    "sum": "<p>六种常见失败：并发写冲突（共享可变状态无锁）、错误级联（下游没有验证输入）、同质趋同（假多样性）、互相扯皮（没有决策权边界）、循环失控（缺步数预算）、理解债（可观测性不足）。</p><p>多 Agent 真正有价值的条件：子任务可并行 + 上下文可完全隔离 + 规模超出单上下文。</p>"
+  },
+  "workflow-dag": {
+    "t": "Workflow (DAG)",
+    "cat": "Agent 编排模式",
+    "tgt": "llm-langchain-basics-s7",
+    "sum": "<p>用预定义节点和有向无环边组织 LLM、工具与校验步骤，按图执行，流程可控、可审计、易于重试。</p><p>适合审批、抽取、质检等固定流程；遇到未预设分支时，需要补充节点或把控制权交给人工。</p>"
+  },
+  "react": {
+    "t": "ReAct",
+    "cat": "Agent 编排模式",
+    "tgt": "llm-langchain-basics-s7",
+    "sum": "<p>ReAct（Reasoning + Acting）让模型循环执行「思考 → 行动 → 观察」：根据当前状态选择工具，读取结果后再决定继续、修正或结束。</p><p>灵活性换来不确定的步数与成本，生产环境应设置最大步数、超时、循环检测和工具结果校验。</p>"
+  },
+  "plan-and-execute": {
+    "t": "Plan-and-Execute",
+    "cat": "Agent 编排模式",
+    "tgt": "llm-langchain-basics-s7",
+    "sum": "<p>先由规划器把目标拆成任务清单，再由执行器逐项完成；失败时可以只重排剩余步骤。</p><p>计划让进度和依赖更容易观测，但环境变化或初始拆分错误会让计划过时，需要保留重新规划的出口。</p>"
+  },
+  "multi-agent": {
+    "t": "Multi-Agent",
+    "cat": "Agent 编排模式",
+    "tgt": "llm-langchain-basics-s7",
+    "sum": "<p>把研究、执行、审查等职责交给多个角色，通过 supervisor、顺序流水线或并行 fan-out 协作完成任务。</p><p>收益来自专业分工、并行和上下文隔离；代价是通信、共享状态、冲突写入和最终汇总都需要明确协议。</p>"
+  }
+}

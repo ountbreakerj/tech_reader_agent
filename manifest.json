@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "note": "源码清单。模块顺序、CSS 级联顺序和正文顺序均依赖此文件及各 module.json。",
+  "output": "dist/tech-reader.html",
+  "assets": "src/assets/manifest.json",
+  "baselineSha256": "e4a32352d47e39dcabfbef7d21f2f8ffa8532f5cab4b56ed66e7e1ea8c22d3ae",
+  "generatedMarker": "/* @generated:module-registry */",
+  "shell": {
+    "head": "src/shell/head.html",
+    "headClose": "src/shell/head-close.html",
+    "home": "src/shell/home.html",
+    "bodyTail": "src/shell/body-tail.html",
+    "documentTail": "src/shell/document-tail.html",
+    "style": "src/shell/shell.css"
+  },
+  "modules": [
+    "src/modules/book/module.json",
+    "src/modules/dsh/module.json",
+    "src/modules/harness/module.json",
+    "src/modules/codex-harness/module.json",
+    "src/modules/langgraph/module.json",
+    "src/modules/llm/module.json"
+  ],
+  "styleSeparators": [
+    "\n",
+    "\n",
+    "\n",
+    "\n",
+    "\n"
+  ],
+  "scripts": {
+    "legacyRegistry": "src/data/registry.legacy.js",
+    "techPoints": "src/data/tech-points.json",
+    "vendor": "src/vendor/mermaid.min.js",
+    "mermaidInit": "src/vendor/mermaid-init.js",
+    "app": "src/shell/app.js",
+    "legacyApp": "src/shell/app.legacy.js",
+    "separators": [
+      "\n",
+      "\n",
+      "\n"
+    ]
+  }
+}

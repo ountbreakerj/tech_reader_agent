@@ -1,0 +1,698 @@
+<section class="llm-mod llm-m-multimodal-rag" id="llm-multimodal-rag"><div class="module-wrapper">
+<h1>多模态 RAG</h1>
+<p class="subtitle">让 RAG 系统理解图片、表格、图表与公式 — 从文档解析到跨模态检索的完整方案</p>
+
+<!-- ==================== 第1节 ==================== -->
+<h2>1. 为什么需要多模态 RAG</h2>
+
+<p>传统 RAG（Retrieval-Augmented Generation）系统专注于纯文本的检索与生成，但真实世界的文档远非纯文字构成。企业年报中嵌入了大量图表、法律文书中包含签章扫描件、医疗报告中有影像图片、学术论文中充满公式和示意图 — 这些非文本信息往往承载着关键语义。</p>
+
+<h3>纯文本 RAG 的局限</h3>
+<ul>
+  <li><strong>信息丢失</strong>：仅提取文字会导致图表中的趋势、表格中的数值关系、公式中的逻辑完全丢失</li>
+  <li><strong>上下文断裂</strong>：一张图表配文通常只有简短标题，脱离图像后标题无法独立表达含义</li>
+  <li><strong>用户期望落差</strong>：用户问"这个季度的营收趋势如何？"时，期望系统能读懂折线图</li>
+</ul>
+
+<h3>现实文档中的多模态数据</h3>
+
+<div class="callout callout-blue">
+  <strong>企业文档中 80% 的关键信息以非纯文本形式存在</strong>
+  McKinsey 的报告指出，企业知识管理中，结构化表格、可视化图表和扫描图片占据信息总量的绝大多数。纯文本 RAG 只触及了冰山一角。
+</div>
+
+<table>
+  <thead>
+    <tr><th>文档类型</th><th>关键多模态元素</th><th>典型场景</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>金融报告</td><td>折线图、柱状图、财务表格、KPI 仪表盘</td><td>年报分析、投研报告</td></tr>
+    <tr><td>医疗文档</td><td>CT/MRI 影像、检验报告表格、处方图片</td><td>辅助诊断、病历检索</td></tr>
+    <tr><td>法律文书</td><td>签章扫描件、证据图片、表格化条款</td><td>合规审查、案件检索</td></tr>
+    <tr><td>学术论文</td><td>公式、实验图表、流程图、算法伪代码</td><td>文献综述、技术调研</td></tr>
+    <tr><td>产品手册</td><td>产品图片、规格参数表、安装示意图</td><td>客服问答、技术支持</td></tr>
+  </tbody>
+</table>
+
+<p>多模态 RAG 的核心目标是：将文本、图像、表格、公式等不同模态的信息统一纳入检索与生成流程，让系统具备真正的"文档理解"能力。</p>
+
+<!-- ==================== 第2节 ==================== -->
+<h2>2. 文档解析技术栈</h2>
+
+<p>多模态 RAG 的第一步是将复杂文档"拆解"为可处理的元素。不同格式的文档需要不同的解析工具。</p>
+
+<h3>2.1 PDF 解析</h3>
+
+<p>PDF 是企业文档最普遍的格式，但解析难度很高 — PDF 本质上是一种排版描述语言，而非结构化数据格式。</p>
+
+<table>
+  <thead>
+    <tr><th>工具</th><th>类型</th><th>特点</th><th>适用场景</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>PyMuPDF (fitz)</strong></td>
+      <td>开源</td>
+      <td>速度极快，C 底层实现，支持提取文本/图片/矢量图形</td>
+      <td>大批量 PDF 处理、图像提取</td>
+    </tr>
+    <tr>
+      <td><strong>PDFPlumber</strong></td>
+      <td>开源</td>
+      <td>精确的表格检测与提取，基于 PDF 坐标系统</td>
+      <td>包含大量表格的文档</td>
+    </tr>
+    <tr>
+      <td><strong>unstructured.io</strong></td>
+      <td>开源 + 云服务</td>
+      <td>自动检测文档元素类型（标题/段落/表格/图片），支持多种格式</td>
+      <td>通用文档解析 pipeline</td>
+    </tr>
+    <tr>
+      <td><strong>Docling</strong>（IBM 开源）</td>
+      <td>开源</td>
+      <td>深度学习驱动的文档解析，理解页面布局，支持 DOCX/PPT/PDF</td>
+      <td>复杂版式文档、需要布局理解</td>
+    </tr>
+    <tr>
+      <td><strong>LlamaParse</strong></td>
+      <td>商业 API</td>
+      <td>LLM 增强解析，将复杂页面转为 Markdown</td>
+      <td>快速原型开发</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>2.2 表格提取</h3>
+
+<p>表格是最常见也最难正确提取的元素。错误的表格解析会导致数据完全失真。</p>
+
+<pre><code># PDFPlumber 表格提取示例
+import pdfplumber
+
+with pdfplumber.open("report.pdf") as pdf:
+    for page in pdf.pages:
+        tables = page.extract_tables()
+        for table in tables:
+            # table 是二维列表，每个元素是一个单元格
+            for row in table:
+                print(row)
+            # 输出: ['产品', 'Q1营收', 'Q2营收', 'Q3营收']
+            #       ['产品A', '1200万', '1350万', '1580万']
+
+# 结构化 JSON 表示
+def table_to_json(table):
+    if not table or len(table) < 2:
+        return {}
+    headers = table[0]
+    rows = table[1:]
+    return [dict(zip(headers, row)) for row in rows]
+
+# Camelot 提取（更适合有明确边框线的表格）
+import camelot
+tables = camelot.read_pages("report.pdf", pages="1-5", flavor="lattice")
+# lattice 模式: 有边框线的表格
+# stream 模式: 无边框线、靠空白对齐的表格</code></pre>
+
+<h3>2.3 OCR（光学字符识别）</h3>
+
+<p>对于扫描件、图片中的文字、PDF 中嵌入的图像文字，需要 OCR 技术来提取。</p>
+
+<table>
+  <thead>
+    <tr><th>工具</th><th>类型</th><th>中文支持</th><th>特点</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Tesseract</strong></td><td>开源</td><td>支持（需下载训练数据）</td><td>经典方案，社区生态丰富，精度一般</td></tr>
+    <tr><td><strong>PaddleOCR</strong></td><td>开源</td><td>优秀</td><td>百度出品，中文识别精度高，支持版面分析</td></tr>
+    <tr><td><strong>Azure Document Intelligence</strong></td><td>云服务</td><td>优秀</td><td>微软方案，支持表格/表单/手写体，API 调用</td></tr>
+    <tr><td><strong>GCP Document AI</strong></td><td>云服务</td><td>良好</td><td>Google 方案，擅长多语言混合文档</td></tr>
+  </tbody>
+</table>
+
+<pre><code># PaddleOCR 使用示例
+from paddleocr import PaddleOCR
+
+ocr = PaddleOCR(use_angle_cls=True, lang="ch")
+result = ocr.ocr("scanned_page.jpg", cls=True)
+
+for line in result[0]:
+    box, (text, confidence) = line
+    print(f"文字: {text}, 置信度: {confidence:.2f}")
+    # 输出: 文字: 2025年第三季度财务报告, 置信度: 0.98</code></pre>
+
+<div class="callout callout-yellow">
+  <strong>实践建议</strong>
+  优先使用原生数字 PDF 解析（PyMuPDF/PDFPlumber），仅对扫描件和图片使用 OCR。混合使用两种方式通常比单一方案效果更好。PaddleOCR 在中文场景下明显优于 Tesseract。
+</div>
+
+<!-- ==================== 第3节 ==================== -->
+<h2>3. ColPali：文档图像检索</h2>
+
+<p>ColPali 是一种革命性的文档检索方法，它完全跳过了传统的 OCR + 文本索引流程，直接将文档页面作为图像进行检索。</p>
+
+<h3>3.1 核心原理</h3>
+
+<p>ColPali 将 ColBERT 的 late interaction 思想应用到文档图像检索领域：</p>
+
+<ol>
+  <li><strong>文档页面图像化</strong>：将每一页文档渲染为图像，无需任何 OCR 或文本提取预处理</li>
+  <li><strong>视觉编码</strong>：使用 PaliGemma 视觉语言模型将页面图像编码为一组 token 级别的向量</li>
+  <li><strong>查询编码</strong>：文本查询同样被编码为 token 级别的向量</li>
+  <li><strong>MaxSim 评分</strong>：对查询的每个 token，找到文档中相似度最高的 token，求和得到最终相关性分数</li>
+</ol>
+
+<pre><code># ColPali 检索示例
+from colpali_engine.models import ColPali, ColPaliProcessor
+from PIL import Image
+import torch
+
+# 加载模型
+model = ColPali.from_pretrained("vidore/colpali-v1.3")
+processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.3")
+
+# 将文档页面渲染为图像
+page_image = Image.open("page_001.png")
+
+# 编码文档页面 -> 得到 token 级 embeddings
+doc_inputs = processor.process_images([page_image])
+doc_embeddings = model(**doc_inputs)  # shape: (1, num_tokens, dim)
+
+# 编码查询
+query = "2025年第三季度的营收增长趋势"
+query_inputs = processor.process_queries([query])
+query_embeddings = model(**query_inputs)  # shape: (1, num_tokens, dim)
+
+# MaxSim 评分
+# 对 query 的每个 token，取与 doc 所有 token 的最大相似度，然后求和
+scores = torch.einsum("bnd,bmd->bnm", query_embeddings, doc_embeddings)
+max_sim = scores.max(dim=2).values  # query 每个 token 的最大匹配
+relevance_score = max_sim.sum(dim=1)  # 求和得到最终分数
+print(f"相关性得分: {relevance_score.item():.4f}")</code></pre>
+
+<h3>3.2 ColPali 的优势</h3>
+
+<table>
+  <thead>
+    <tr><th>优势</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>保留布局信息</strong></td><td>直接处理图像，页面的空间布局、字体大小、颜色等视觉信号都被编码</td></tr>
+    <tr><td><strong>无需预处理</strong></td><td>省去 OCR、版面分析、文本清洗等复杂 pipeline，大幅降低工程复杂度</td></tr>
+    <tr><td><strong>天然多语言</strong></td><td>视觉模型不依赖特定语言的 tokenizer，对中文、日文、阿拉伯文等都有效</td></tr>
+    <tr><td><strong>表格/图表友好</strong></td><td>表格结构和图表趋势在视觉层面更容易被理解</td></tr>
+    <tr><td><strong>端到端</strong></td><td>从文档图像到检索结果，单一模型完成，无需组装多个组件</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout-green">
+  <strong>ColPali 适用场景</strong>
+  文档版式复杂（如杂志、海报、信息图）、表格密集、多语言混合、或者需要快速搭建原型而不愿投入 OCR pipeline 建设的场景。对于纯文本文档，传统方法仍然高效。
+</div>
+
+<!-- ==================== 第4节 ==================== -->
+<h2>4. 视觉语言模型（VLM）文档理解</h2>
+
+<p>视觉语言模型（Vision-Language Model）能够同时理解图像和文本，是多模态 RAG 生成阶段的核心组件。</p>
+
+<h3>4.1 主流 VLM 对比</h3>
+
+<table>
+  <thead>
+    <tr><th>模型</th><th>提供商</th><th>类型</th><th>关键能力</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>GPT-5.5（原生多模态）</strong></td><td>OpenAI</td><td>闭源 API</td><td>图表理解、OCR、空间推理、多图对比</td></tr>
+    <tr><td><strong>Claude Sonnet 5</strong></td><td>Anthropic</td><td>闭源 API</td><td>长文档理解、精确信息提取、图表分析</td></tr>
+    <tr><td><strong>Qwen3-VL</strong></td><td>阿里云</td><td>开源</td><td>中文优化、文档 OCR、表格识别、视频理解</td></tr>
+    <tr><td><strong>Llama 3.2 Vision</strong></td><td>Meta</td><td>开源</td><td>11B/90B 参数、图像描述、VQA、文档理解</td></tr>
+    <tr><td><strong>InternVL 3.5</strong></td><td>上海 AI Lab</td><td>开源</td><td>中文文档理解、OCR、数学公式识别</td></tr>
+  </tbody>
+</table>
+
+<h3>4.2 用 VLM 做文档问答</h3>
+
+<pre><code>import base64
+from openai import OpenAI
+
+client = OpenAI()
+
+def encode_image(image_path):
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+def vlm_document_qa(image_path, question):
+    """使用 VLM 对文档图像进行问答"""
+    b64_image = encode_image(image_path)
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": "你是一个文档分析专家。请根据提供的文档图像回答问题，"
+                           "如果涉及数据请给出精确数字。"
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": question},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{b64_image}",
+                            "detail": "high"
+                        }
+                    }
+                ]
+            }
+        ],
+        max_tokens=1000
+    )
+    return response.choices[0].message.content
+
+# 使用示例
+answer = vlm_document_qa(
+    "revenue_chart.png",
+    "请描述2025年各季度的营收变化趋势，Q3相比Q2增长了多少？"
+)
+print(answer)
+# 输出: 从图表中可以看到，2025年营收呈持续上升趋势。
+#       Q1营收约1.2亿元，Q2约1.35亿元，Q3达到1.58亿元。
+#       Q3相比Q2增长约17%，增速明显加快...</code></pre>
+
+<h3>4.3 开源 VLM 本地部署（Qwen2.5-VL）</h3>
+
+<pre><code>from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from qwen_vl_utils import process_vision_info
+
+model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2.5-VL-7B-Instruct",
+    torch_dtype="auto",
+    device_map="auto"
+)
+processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "image", "image": "file://financial_table.png"},
+            {"type": "text", "text": "提取表格中所有产品线的营收数据，以JSON格式输出"}
+        ]
+    }
+]
+
+text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+image_inputs, video_inputs = process_vision_info(messages)
+inputs = processor(text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+output = model.generate(**inputs, max_new_tokens=512)
+print(processor.decode(output[0], skip_special_tokens=True))</code></pre>
+
+<!-- ==================== 第5节 ==================== -->
+<h2>5. 多模态 Embedding</h2>
+
+<p>多模态 RAG 的检索能力取决于 embedding 模型 — 它需要将不同模态（文本、图像、表格）映射到同一个向量空间，使跨模态检索成为可能。</p>
+
+<h3>5.1 CLIP：文本-图像对齐</h3>
+
+<p>CLIP（Contrastive Language-Image Pre-training）是 OpenAI 提出的经典模型，通过对比学习将文本和图像对齐到统一的 embedding 空间。</p>
+
+<pre><code>import torch
+from transformers import CLIPProcessor, CLIPModel
+from PIL import Image
+
+model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+
+# 图像 embedding
+image = Image.open("chart.png")
+image_inputs = processor(images=image, return_tensors="pt")
+image_embedding = model.get_image_features(**image_inputs)  # (1, 768)
+
+# 文本 embedding
+text_inputs = processor(text=["营收增长趋势图"], return_tensors="pt")
+text_embedding = model.get_text_features(**text_inputs)      # (1, 768)
+
+# 计算相似度（余弦相似度）
+similarity = torch.cosine_similarity(image_embedding, text_embedding)
+print(f"图文相似度: {similarity.item():.4f}")  # 如: 0.3127</code></pre>
+
+<h3>5.2 BGE-VL：多模态 Embedding</h3>
+
+<p>BGE-VL 是智源研究院（BAAI）推出的多模态 embedding 模型，在 CLIP 基础上进行了中文优化和文档场景增强。</p>
+
+<pre><code>from FlagEmbedding import BGEM3FlagModel, visual_embedder
+
+# 使用 BGE-VL 进行多模态 embedding
+embedder = visual_embedder.VisualizedFlagModel(
+    "BAAI/bge-vl-base",
+    query_instruction_for_retrieval="为这个表示生成检索嵌入："
+)
+
+# 统一 embedding — 文本、图像、表格都进入同一向量空间
+text_emb = embedder.encode(["2025年Q3营收达到1.58亿元"])     # 文本
+image_emb = embedder.encode([["revenue_chart.png"]])           # 图像
+table_emb = embedder.encode([["financial_table_snapshot.png"]]) # 表格截图
+
+# 三者在同一空间中，可以直接计算相似度
+from numpy import dot
+from numpy.linalg import norm
+
+sim_text_image = dot(text_emb[0], image_emb[0]) / (norm(text_emb[0]) * norm(image_emb[0]))
+print(f"文本-图表相似度: {sim_text_image:.4f}")</code></pre>
+
+<h3>5.3 统一 Embedding 空间</h3>
+
+<div class="callout callout-purple">
+  <strong>核心思想</strong>
+  将文本片段、表格截图、图表图片、公式渲染图全部通过同一个 embedding 模型编码，存入同一个向量数据库。查询时，无论是文本查询还是图像查询，都能命中所有相关模态的内容。
+</div>
+
+<table>
+  <thead>
+    <tr><th>Embedding 模型</th><th>模态支持</th><th>向量维度</th><th>中文效果</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>CLIP ViT-L/14</td><td>文本 + 图像</td><td>768</td><td>一般</td></tr>
+    <tr><td>SigLIP</td><td>文本 + 图像</td><td>768 / 1152</td><td>较好</td></tr>
+    <tr><td>BGE-VL</td><td>文本 + 图像 + 表格</td><td>768</td><td>优秀</td></tr>
+    <tr><td>Cohere Embed v3</td><td>文本 + 图像</td><td>1024</td><td>良好</td></tr>
+    <tr><td>NV-CLIP</td><td>文本 + 图像</td><td>768</td><td>一般</td></tr>
+  </tbody>
+</table>
+
+<!-- ==================== 第6节 ==================== -->
+<h2>6. 多模态 RAG Pipeline 设计</h2>
+
+<p>一个完整的多模态 RAG 系统包含三个核心阶段：索引（Indexing）、检索（Retrieval）、生成（Generation）。</p>
+
+<h3>6.1 索引阶段</h3>
+
+<pre><code>索引阶段流程：
+
+  原始文档
+    │
+    ▼
+┌─────────────────┐
+│   文档解析层     │   PyMuPDF / unstructured / Docling
+│  提取所有元素    │
+└────────┬────────┘
+         │
+    ┌────┴────┬──────────┐
+    ▼         ▼          ▼
+  文本块     表格        图像
+    │         │          │
+    ▼         ▼          ▼
+┌────────┐ ┌────────┐ ┌────────┐
+│文本    │ │表格截图│ │图片    │
+│Embedding│ │Embedding│ │Embedding│
+└────┬───┘ └────┬───┘ └────┬───┘
+     │          │          │
+     └──────────┼──────────┘
+                ▼
+      ┌──────────────────┐
+      │  统一向量数据库    │   Milvus / Qdrant / Weaviate
+      │  + 元数据存储      │
+      └──────────────────┘</code></pre>
+
+<h3>6.2 检索阶段</h3>
+
+<p>检索阶段是多模态 RAG 的关键创新点 — 需要同时检索多种模态的内容，并进行跨模态排序。</p>
+
+<pre><code>多模态检索流程：
+
+  用户查询: "2025年Q3的营收增长趋势如何？"
+    │
+    ▼
+┌──────────────────────┐
+│   查询理解 & 路由     │   判断需要哪些模态
+└──────────┬───────────┘
+           │
+    ┌──────┼──────┐
+    ▼      ▼      ▼
+  文本    图表    表格
+  检索    检索    检索
+    │      │      │
+    └──────┼──────┘
+           ▼
+┌──────────────────────┐
+│   跨模态 Reranking    │   使用 VLM 或交叉编码器
+│   候选: 3文本+2图表+1表格 │
+└──────────┬───────────┘
+           ▼
+    Top-K 多模态上下文</code></pre>
+
+<h3>6.3 生成阶段</h3>
+
+<p>生成阶段将检索到的多模态上下文组装成 prompt，交给 VLM 或 LLM 生成回答。</p>
+
+<pre><code>多模态 RAG 生成示例
+from langchain_core.messages import HumanMessage
+
+def multimodal_generate(query, retrieved_contexts):
+    """
+    retrieved_contexts: list of dict
+      - type: "text" / "image" / "table"
+      - content: 文本内容 或 图像路径
+      - metadata: 来源信息
+    """
+    content_parts = []
+
+    # 组装多模态上下文
+    for ctx in retrieved_contexts:
+        if ctx["type"] == "text":
+            content_parts.append({
+                "type": "text",
+                "text": f"[文本来源: {ctx['metadata']['source']}]\n{ctx['content']}"
+            })
+        elif ctx["type"] in ("image", "table"):
+            content_parts.append({
+                "type": "text",
+                "text": f"[{ctx['type']}来源: {ctx['metadata']['source']}]"
+            })
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{ctx['content']}"}
+            })
+
+    # 添加用户查询
+    content_parts.append({
+        "type": "text",
+        "text": f"\n问题: {query}\n请根据以上多模态上下文回答问题。"
+    })
+
+    message = HumanMessage(content=content_parts)
+    response = vlm.invoke([system_prompt, message])
+    return response.content</code></pre>
+
+<h3>6.4 完整架构</h3>
+
+<table class="arch-table">
+  <thead>
+    <tr><th>阶段</th><th>组件</th><th>技术选型</th><th>输入</th><th>输出</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>解析</td><td>文档解析器</td><td>unstructured / Docling</td><td>PDF/DOCX</td><td>文本+表格+图像列表</td></tr>
+    <tr><td>分块</td><td>多模态 Chunker</td><td>语义分块 + 图表独立</td><td>解析结果</td><td>chunks</td></tr>
+    <tr><td>Embedding</td><td>多模态 Encoder</td><td>BGE-VL / CLIP</td><td>chunks</td><td>向量</td></tr>
+    <tr><td>存储</td><td>向量数据库</td><td>Milvus / Qdrant</td><td>向量+元数据</td><td>索引</td></tr>
+    <tr><td>检索</td><td>混合检索</td><td>向量+BM25+ColPali</td><td>查询</td><td>候选集</td></tr>
+    <tr><td>Rerank</td><td>跨模态排序</td><td>BGE-Reranker / VLM</td><td>候选集</td><td>排序结果</td></tr>
+    <tr><td>生成</td><td>VLM/LLM</td><td>GPT-5.5 / Qwen3-VL</td><td>上下文+查询</td><td>回答</td></tr>
+  </tbody>
+</table>
+
+<!-- ==================== 第7节 ==================== -->
+<h2>7. 实战案例：金融报告 RAG</h2>
+
+<p>以解析上市公司年报 PDF（含大量财务图表和数据表格）为例，构建完整的多模态 RAG 系统。</p>
+
+<h3>7.1 文档解析</h3>
+
+<pre><code>import fitz  # PyMuPDF
+import pdfplumber
+from pathlib import Path
+import json
+
+def parse_annual_report(pdf_path):
+    """解析年报 PDF，分离文本、表格、图像"""
+    result = {"texts": [], "tables": [], "images": []}
+
+    # 提取图像
+    doc = fitz.open(pdf_path)
+    for page_idx, page in enumerate(doc):
+        # 提取页面文本
+        text = page.get_text("text")
+        if text.strip():
+            result["texts"].append({
+                "page": page_idx + 1,
+                "content": text.strip(),
+                "type": "text"
+            })
+
+        # 提取嵌入图像
+        for img_idx, img in enumerate(page.get_images(full=True)):
+            xref = img[0]
+            base_image = doc.extract_image(xref)
+            img_bytes = base_image["image"]
+            img_path = f"extracted_images/p{page_idx+1}_img{img_idx+1}.png"
+            Path(img_path).parent.mkdir(exist_ok=True)
+            with open(img_path, "wb") as f:
+                f.write(img_bytes)
+            result["images"].append({
+                "page": page_idx + 1,
+                "path": img_path,
+                "type": "image"
+            })
+
+    # 提取表格（使用 PDFPlumber）
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_idx, page in enumerate(pdf.pages):
+            tables = page.extract_tables()
+            for tbl_idx, table in enumerate(tables):
+                result["tables"].append({
+                    "page": page_idx + 1,
+                    "data": table,
+                    "json": table_to_json(table),
+                    "type": "table"
+                })
+
+    return result
+
+# 使用示例
+parsed = parse_annual_report("company_annual_report_2025.pdf")
+print(f"文本段落: {len(parsed['texts'])}, 表格: {len(parsed['tables'])}, 图像: {len(parsed['images'])}")
+# 输出: 文本段落: 45, 表格: 12, 图像: 28</code></pre>
+
+<h3>7.2 VLM 理解图表</h3>
+
+<pre><code>async def analyze_charts_with_vlm(images, questions):
+    """使用 VLM 批量分析图表"""
+    results = []
+    for img_info in images:
+        # VLM 分析每张图表
+        description = vlm_document_qa(
+            img_info["path"],
+            "请详细描述这张图表的内容，包括：\n"
+            "1. 图表类型（折线图/柱状图/饼图等）\n"
+            "2. 展示的数据指标\n"
+            "3. 关键数据点和趋势\n"
+            "4. 异常值或显著变化"
+        )
+        results.append({
+            "page": img_info["page"],
+            "image_path": img_info["path"],
+            "description": description,
+            "type": "chart_analysis"
+        })
+    return results
+
+# VLM 分析结果示例：
+# "该图为2025年各季度营收折线图。Q1营收1.2亿元，Q2为1.35亿元，"
+# "Q3达到1.58亿元，环比增长17%。图表显示全年呈持续上升趋势，"
+# "其中Q3增速明显高于Q1-Q2，主要受新产品线贡献驱动。"</code></pre>
+
+<h3>7.3 构建多模态索引</h3>
+
+<pre><code>from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pymilvus import Collection, FieldSchema, CollectionSchema, DataType, connections
+
+# 连接向量数据库
+connections.connect("default", host="localhost", port="19530")
+
+# 定义 schema
+fields = [
+    FieldSchema("id", DataType.INT64, is_primary=True, auto_id=True),
+    FieldSchema("embedding", DataType.FLOAT_VECTOR, dim=768),
+    FieldSchema("content", DataType.VARCHAR, max_length=65535),
+    FieldSchema("modality", DataType.VARCHAR, max_length=20),  # text/image/table
+    FieldSchema("source_page", DataType.INT64),
+    FieldSchema("metadata", DataType.JSON),
+]
+schema = CollectionSchema(fields, description="多模态RAG索引")
+collection = Collection("multimodal_annual_report", schema)
+
+# 文本分块 + Embedding
+splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+for text_block in parsed["texts"]:
+    chunks = splitter.split_text(text_block["content"])
+    for chunk in chunks:
+        embedding = text_embedder.encode(chunk)  # BGE-M3
+        collection.insert([
+            [embedding.tolist()],
+            [chunk],
+            ["text"],
+            [text_block["page"]],
+            [json.dumps({"source": "年报正文"})]
+        ])
+
+# 图表描述 + Embedding
+for chart in chart_analyses:
+    embedding = text_embedder.encode(chart["description"])
+    collection.insert([
+        [embedding.tolist()],
+        [chart["description"]],
+        ["image"],
+        [chart["page"]],
+        [json.dumps({"source": chart["image_path"], "type": "chart"})]
+    ])
+
+collection.flush()
+print(f"索引完成，共 {collection.num_entities} 条记录")</code></pre>
+
+<h3>7.4 查询示例</h3>
+
+<pre><code>query = "2025年Q3营收趋势是什么？相比Q2有什么变化？"
+
+# 1. 向量检索
+query_embedding = text_embedder.encode(query)
+results = collection.search(
+    data=[query_embedding.tolist()],
+    anns_field="embedding",
+    param={"metric_type": "COSINE", "params": {"nprobe": 16}},
+    limit=10,
+    output_fields=["content", "modality", "source_page", "metadata"]
+)
+
+# 2. 结果包含文本段落、图表描述、表格数据
+for hit in results[0]:
+    print(f"[{hit.entity.get('modality')}] 页{hit.entity.get('source_page')} "
+          f"(相似度: {hit.score:.4f})")
+    print(f"  {hit.entity.get('content')[:100]}...")
+    print()
+
+# 输出示例:
+# [image] 页15 (相似度: 0.8921)
+#   该图为2025年各季度营收折线图。Q1营收1.2亿元，Q2为1.35亿元...
+# [text] 页16 (相似度: 0.8734)
+#   第三季度，公司实现营业收入1.58亿元，同比增长23.4%...
+# [table] 页42 (相似度: 0.8512)
+#   {"产品线": "核心业务", "Q1": "8500万", "Q2": "9200万", "Q3": "1.08亿"}</code></pre>
+
+<!-- ==================== 第8节 ==================== -->
+<h2>8. 动手练习</h2>
+
+<div class="exercise-box">
+  <h4>练习 1：基础 — PDF 多模态解析</h4>
+  <p>选择一份包含图表和表格的 PDF 文档（如上市公司年报），使用 PyMuPDF 提取图像、PDFPlumber 提取表格、PaddleOCR 处理扫描页，将所有元素分类存储。统计文档中文本、表格、图像各有多少。</p>
+  <p><strong>验收标准：</strong>能够正确提取并分类至少3种模态的元素，输出结构化 JSON。</p>
+</div>
+
+<div class="exercise-box">
+  <h4>练习 2：进阶 — CLIP 图文检索</h4>
+  <p>使用 CLIP 模型对练习1中提取的图像生成 embedding，构建一个简单的图文检索系统。输入文本查询（如"营收增长趋势"），返回最相关的3张图表。</p>
+  <p><strong>验收标准：</strong>输入不同查询，系统能返回语义相关的图表，而非随机结果。</p>
+</div>
+
+<div class="exercise-box">
+  <h4>练习 3：综合 — 完整多模态 RAG Pipeline</h4>
+  <p>构建完整的多模态 RAG 系统：使用 BGE-VL 对文本和图像统一 embedding，存入 Milvus/Qdrant，实现跨模态检索，最终用 VLM（GPT-5.5 或 Qwen3-VL）生成包含图文引用的回答。</p>
+  <p><strong>验收标准：</strong>输入问题后，系统返回的回答同时引用了文本段落和图表数据，答案准确且有据可查。</p>
+</div>
+
+<div class="callout callout-blue">
+  <strong>扩展方向</strong>
+  尝试 ColPali 方案作为对照实验 — 同样的文档，跳过 OCR 直接以图像检索，对比两种方案的检索质量和速度差异。这将帮助你理解不同技术路线的取舍。
+</div>
+</div></section>

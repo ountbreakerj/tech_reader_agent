@@ -1,0 +1,72 @@
+<section id="sec-h-lec-13" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 13 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-13">第 13 讲 · Loop 工程：让 Agent 自主循环</h1>
+    <p>到目前为止，我们讨论的所有 harness 技术都假设人在循环里：你触发任务，agent 执行，你审查结果，再触发下一个。Loop 工程讨论的是另一个方向——当 agent 本身成为循环的控制者时，会发生什么，以及怎么让它跑得好。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>/goal：最简单的 Loop</h2>
+    <p>Loop 的本质是三个要素：目标（target）、验证（verification）、停止条件（stop condition）。最简单的实现是 Claude Code 的 <code>/goal</code> 命令：你描述目标，它一直工作直到达成目标或遇到无法解决的障碍。</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">特征</th><th scope="col">/goal</th><th scope="col">/loop</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">驱动</th><td>目标达成</td><td>持续执行</td></tr>
+        <tr><th scope="row">停止</th><td>目标达成或无法继续</td><td>外部信号或手动停止</td></tr>
+        <tr><th scope="row">适合场景</th><td>有明确终态的任务</td><td>持续监控、轮询、定期任务</td></tr>
+        <tr><th scope="row">上下文管理</th><td>自动压缩</td><td>需要状态文件辅助</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="harness-section">
+    <h2>四个演化阶段</h2>
+    <p>Loop 工程的演化有四个阶段，从手动到完全自主：</p>
+    <ol>
+      <li><strong>手动循环</strong>：你每次手动触发 agent，审查后再触发下一次。人是循环的控制器。</li>
+      <li><strong>长提示词循环</strong>：一次提交大量工作，让 agent 自行拆分执行。上下文窗口是瓶颈。</li>
+      <li><strong>Agent 自决定循环</strong>：Agent 自己判断什么时候该继续、什么时候该停止、遇到障碍时该怎么处理。这是当前大多数高级用法所在的阶段。</li>
+      <li><strong>独立停止判断</strong>：Agent 不只是执行循环，而是能判断"这个目标值得继续追求吗"——结合成本、进展、风险做决策。2026 年中开始出现。</li>
+    </ol>
+  </section>
+
+  <section class="harness-section">
+    <h2>2026 年 6 月的收敛</h2>
+    <p>2026 年 6 月，三位实践者几乎同时在公开场合描述了相似的 Loop 工程实践：Boris Cherny（Meta）、Peter Steinberger（PSPDFKit/Superapp）、Addy Osmani（Google Chrome）。他们的背景不同，技术栈不同，但得出的结论惊人相似：<strong>让 agent 在循环里自主工作，比一次性给它很多任务更有效</strong>。原因是循环允许中途验证、错误恢复、状态保存，而一次性任务失败了就整个重来。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>六个 Loop 原语</h2>
+    <p>Loop 工程有六个基本构建块，你的 loop 系统最终会用到其中的一些组合：</p>
+    <ul>
+      <li><strong>Automations（自动化触发器）</strong>：基于时间、事件或条件触发循环。例如：每次 PR 创建时触发代码审查 loop。</li>
+      <li><strong>Worktrees（工作树）</strong>：每个 loop 实例在独立的 git 工作树里运行，互不干扰。并发执行多个任务的基础设施。</li>
+      <li><strong>Skills（技能）</strong>：预定义的 agent 能力模块，loop 可以按需调用。把可复用的行为封装成 skill，loop 就不用每次重新定义。</li>
+      <li><strong>Connectors（连接器）</strong>：Loop 与外部系统的接口——GitHub、Jira、Slack、CI/CD。Loop 的信号输入和输出都通过 connector。</li>
+      <li><strong>Sub-agents（子 agent）</strong>：Loop 可以 spawn 子 agent 执行特定任务，子 agent 完成后报告回主 loop。生产者-评估者架构的基础。</li>
+      <li><strong>External State（外部状态）</strong>：Loop 的状态存在 agent 上下文之外——数据库、文件系统、消息队列。这是 loop 跨会话持久化的唯一方式。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>四个隐性成本</h2>
+    <p>Loop 工程引入了四类不容忽视的隐性成本，每一类都可能悄悄侵蚀 loop 的收益：</p>
+    <ul>
+      <li><strong>验证负债</strong>：Loop 速度快，验证跟不上。每一轮的验证质量下降，错误在多轮迭代后才被发现，修复成本指数上升。</li>
+      <li><strong>理解腐烂</strong>：Loop 跑了 50 轮，代码库已经和 loop 开始时大相径庭，但 loop 的指令还是按最初的假设运行。Context 里对代码库的理解过时了。</li>
+      <li><strong>认知投降</strong>：长时间 loop 运行后，人类监督者趋向于直接接受 agent 的判断，而不是独立验证。这是 loop 自动化最危险的心理效应。</li>
+      <li><strong>令牌爆炸</strong>：Loop 每一轮的上下文累积，如果不主动压缩或重置，成本呈线性甚至超线性增长。</li>
+    </ul>
+    <p>五级成熟度阶梯：L1 单次执行 → L2 带重试的执行 → L3 目标驱动循环 → L4 多 agent 协作循环 → L5 自组织 loop 网络。大多数实践者目前在 L2–L3 之间。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-12">← 第 12 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-14">第 14 讲 →</a>
+  </nav>
+</section>

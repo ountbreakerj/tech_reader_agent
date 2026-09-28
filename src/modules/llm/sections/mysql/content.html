@@ -1,0 +1,774 @@
+<section class="llm-mod llm-m-mysql" id="llm-mysql"><div class="module-wrapper">
+<!-- 侧边栏导航 -->
+
+
+
+
+
+<!-- 主内容区 -->
+
+
+
+<!-- Hero Banner -->
+<div class="hero-banner">
+  <h1>🐬 MySQL基础：从零开始</h1>
+  <p>零基础掌握MySQL数据库，从安装配置到实战应用</p>
+</div>
+
+<!-- ==================== SECTION 1 ==================== -->
+<div class="section" id="llm-mysql-s1">
+  <h2>为什么需要数据库？</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>想象你有一个巨大的图书馆。如果所有书都堆在地上（文件存储），想找到一本特定的书会非常困难。但如果你有图书管理系统（数据库），按照类别、作者、书名等分类存放，就能快速找到需要的书。
+  </div>
+
+  <h3>文件存储的问题</h3>
+  <p>在早期的应用程序中，数据通常存储在文件中。但这种方式存在很多问题：</p>
+  <ul>
+    <li><strong>数据冗余</strong>：同一份数据可能在多个文件中重复存储</li>
+    <li><strong>数据不一致</strong>：更新一个数据需要修改多个文件，容易遗漏</li>
+    <li><strong>数据孤立</strong>：不同文件中的数据难以关联和查询</li>
+    <li><strong>安全性差</strong>：难以控制不同用户对数据的访问权限</li>
+    <li><strong>并发问题</strong>：多个用户同时修改文件会冲突</li>
+  </ul>
+
+  <h3>数据库的优势</h3>
+  <div class="compare">
+    <div class="compare-card left">
+      <h4>📁 文件存储</h4>
+      <ul>
+        <li>数据分散在多个文件中</li>
+        <li>查询需要遍历整个文件</li>
+        <li>没有事务支持</li>
+        <li>并发控制困难</li>
+        <li>数据安全性低</li>
+      </ul>
+    </div>
+    <div class="compare-card right">
+      <h4>🗄️ 数据库存储</h4>
+      <ul>
+        <li>数据集中管理，结构化存储</li>
+        <li>通过索引快速查询</li>
+        <li>完整的事务支持（ACID）</li>
+        <li>内置并发控制</li>
+        <li>细粒度的权限管理</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>关系型数据库的核心概念</h3>
+  <table>
+    <tr><th>概念</th><th>说明</th><th>类比</th></tr>
+    <tr><td><strong>表（Table）</strong></td><td>数据的集合，类似Excel表格</td><td>图书馆的书架</td></tr>
+    <tr><td><strong>行（Row）</strong></td><td>一条具体的记录</td><td>书架上的一本书</td></tr>
+    <tr><td><strong>列（Column）</strong></td><td>数据的字段</td><td>书的属性（书名、作者、出版日期）</td></tr>
+    <tr><td><strong>主键（Primary Key）</strong></td><td>唯一标识一条记录</td><td>图书的ISBN编号</td></tr>
+    <tr><td><strong>外键（Foreign Key）</strong></td><td>关联其他表的字段</td><td>图书分类ID关联到分类表</td></tr>
+  </table>
+
+  <h3>MySQL简介</h3>
+  <p>MySQL是最流行的关系型数据库之一，由Oracle公司维护。它的特点包括：</p>
+  <ul>
+    <li><strong>开源免费</strong>：社区版完全免费</li>
+    <li><strong>性能优秀</strong>：处理大规模数据效率高</li>
+    <li><strong>易于使用</strong>：SQL语法简单直观</li>
+    <li><strong>生态完善</strong>：大量工具和框架支持</li>
+    <li><strong>稳定可靠</strong>：经过20多年生产验证</li>
+  </ul>
+
+  <div class="callout callout-tip">
+    <strong>💡 典型应用场景：</strong>Web应用（WordPress、Laravel）、电商平台、内容管理系统、日志系统、企业应用等。
+  </div>
+</div>
+
+<!-- ==================== SECTION 2 ==================== -->
+<div class="section" id="llm-mysql-s2">
+  <h2>安装与配置</h2>
+
+  <h3>Windows安装（推荐）</h3>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>下载MySQL安装包</strong> — 访问 mysql.com 下载 MySQL 8.4 LTS（长期支持版，推荐生产使用）或 MySQL 9.x Innovation 版</div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>运行安装程序</strong> — 选择 "Developer Default" 安装类型</div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>配置服务器</strong> — 设置 root 密码（记住这个密码！）</div>
+  </div>
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>启动服务</strong> — 在 Windows 服务中启动 MySQL80</div>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 注意：</strong>一定要记住设置的 root 密码，忘记密码需要重置，比较麻烦。
+  </div>
+
+  <h3>Linux安装（Ubuntu/Debian）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Bash</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 更新包索引</span>
+sudo apt update
+
+<span class="cmt"># 安装MySQL服务器</span>
+sudo apt install mysql-server -y
+
+<span class="cmt"># 启动MySQL服务</span>
+sudo systemctl start mysql
+
+<span class="cmt"># 设置开机自启</span>
+sudo systemctl enable mysql
+
+<span class="cmt"># 运行安全配置脚本</span>
+sudo mysql_secure_installation
+
+<span class="cmt"># 登录MySQL</span>
+sudo mysql -u root -p</code></pre>
+  </div>
+
+  <h3>配置文件详解</h3>
+
+  <p>MySQL的配置文件位置：</p>
+  <ul>
+    <li><strong>Windows</strong>：C:\ProgramData\MySQL\MySQL Server 8.4\my.ini</li>
+    <li><strong>Linux</strong>：/etc/mysql/my.cnf</li>
+  </ul>
+
+  <h4>关键配置项</h4>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">ini</span>
+      
+    </div>
+    <pre><code>[mysqld]
+<span class="cmt"># 基础配置</span>
+port=<span class="num">3306</span>                      <span class="cmt"># 端口号，默认3306</span>
+bind-address=<span class="num">127.0.0.1</span>          <span class="cmt"># 绑定地址，127.0.0.1只允许本地访问</span>
+max_connections=<span class="num">200</span>            <span class="cmt"># 最大连接数</span>
+
+<span class="cmt"># 内存配置</span>
+innodb_buffer_pool_size=<span class="num">1G</span>     <span class="cmt"># InnoDB缓冲池大小（建议物理内存的70%）</span>
+innodb_log_buffer_size=<span class="num">64M</span>     <span class="cmt"># 日志缓冲区大小</span>
+
+<span class="cmt"># 日志配置</span>
+log_error=<span class="str">/var/log/mysql/error.log</span>  <span class="cmt"># 错误日志路径</span>
+slow_query_log=<span class="num">1</span>              <span class="cmt"># 开启慢查询日志</span>
+slow_query_log_file=<span class="str">/var/log/mysql/slow.log</span>
+long_query_time=<span class="num">2</span>             <span class="cmt"># 慢查询阈值（秒）</span>
+
+<span class="cmt"># 字符集</span>
+character-set-server=<span class="str">utf8mb4</span>
+collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 最佳实践：</strong>生产环境中，<code>innodb_buffer_pool_size</code> 应该设置为物理内存的60%-80%，这是影响性能的最重要参数。
+  </div>
+
+  <div class="callout callout-info">
+    <strong>📖 MySQL 版本说明：</strong>MySQL 目前采用 LTS + Innovation 双轨发布策略。<strong>MySQL 8.4 LTS</strong>（2024年发布）是当前推荐的生产版本，提供长期支持。<strong>MySQL 9.x Innovation</strong> 版本则包含最新特性，如原生 <code>VECTOR</code> 数据类型（支持 AI/ML 向量存储和检索），适合体验前沿功能。生产环境建议使用 LTS 版本。
+  </div>
+
+  <h3>常用命令</h3>
+
+  <table>
+    <tr><th>操作</th><th>命令</th></tr>
+    <tr><td>启动服务</td><td><code>sudo systemctl start mysql</code> (Linux) / 在服务管理器中启动 (Windows)</td></tr>
+    <tr><td>停止服务</td><td><code>sudo systemctl stop mysql</code></td></tr>
+    <tr><td>重启服务</td><td><code>sudo systemctl restart mysql</code></td></tr>
+    <tr><td>登录MySQL</td><td><code>mysql -u root -p</code></td></tr>
+    <tr><td>查看状态</td><td><code>sudo systemctl status mysql</code></td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 3 ==================== -->
+<div class="section" id="llm-mysql-s3">
+  <h2>SQL基础语法</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>SQL（Structured Query Language）就像是和数据库对话的语言。你用SQL告诉数据库"创建一个表"、"插入数据"、"查询数据"等操作。
+  </div>
+
+  <h3>创建数据库和表</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 创建数据库</span>
+<span class="kw">CREATE DATABASE</span> my_database
+<span class="kw">CHARACTER SET</span> utf8mb4
+<span class="kw">COLLATE</span> utf8mb4_unicode_ci;
+
+<span class="cmt"># 使用数据库</span>
+<span class="kw">USE</span> my_database;
+
+<span class="cmt"># 创建用户表</span>
+<span class="kw">CREATE TABLE</span> <span class="cls">users</span> (
+    <span class="var">id</span> <span class="cls">INT</span> <span class="kw">AUTO_INCREMENT PRIMARY KEY</span>,
+    <span class="var">username</span> <span class="cls">VARCHAR</span>(<span class="num">50</span>) <span class="kw">NOT NULL UNIQUE</span>,
+    <span class="var">email</span> <span class="cls">VARCHAR</span>(<span class="num">100</span>) <span class="kw">NOT NULL UNIQUE</span>,
+    <span class="var">password_hash</span> <span class="cls">VARCHAR</span>(<span class="num">255</span>) <span class="kw">NOT NULL</span>,
+    <span class="var">created_at</span> <span class="cls">TIMESTAMP</span> <span class="kw">DEFAULT CURRENT_TIMESTAMP</span>,
+    <span class="var">updated_at</span> <span class="cls">TIMESTAMP</span> <span class="kw">DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP</span>
+);</code></pre>
+  </div>
+
+  <h3>数据类型</h3>
+
+  <table>
+    <tr><th>类型</th><th>说明</th><th>使用场景</th></tr>
+    <tr><td><code>INT</code></td><td>整数，4字节</td><td>ID、计数等</td></tr>
+    <tr><td><code>BIGINT</code></td><td>大整数，8字节</td><td>大范围的ID</td></tr>
+    <tr><td><code>VARCHAR(n)</code></td><td>可变长度字符串，最多n个字符</td><td>用户名、标题等</td></tr>
+    <tr><td><code>TEXT</code></td><td>长文本，最多65535字节</td><td>文章内容、描述等</td></tr>
+    <tr><td><code>DECIMAL(m,n)</code></td><td>精确小数，m位数字，n位小数</td><td>金额、价格等</td></tr>
+    <tr><td><code>FLOAT</code></td><td>浮点数，4字节</td><td>科学计算（不建议用于金额）</td></tr>
+    <tr><td><code>DOUBLE</code></td><td>双精度浮点数，8字节</td><td>科学计算（不建议用于金额）</td></tr>
+    <tr><td><code>DATETIME</code></td><td>日期时间，'1000-01-01' 到 '9999-12-31'</td><td>时间戳</td></tr>
+    <tr><td><code>TIMESTAMP</code></td><td>时间戳，'1970-01-01' 到 '2038-01-19'</td><td>记录时间</td></tr>
+    <tr><td><code>BOOLEAN</code></td><td>布尔值，实际是TINYINT(1)</td><td>开关、标志位</td></tr>
+  </table>
+
+  <div class="callout callout-key">
+    <strong>关键点：</strong>金额等精确数值务必使用 <code>DECIMAL</code> 类型，不要使用 <code>FLOAT</code> 或 <code>DOUBLE</code>，因为浮点数有精度问题。
+  </div>
+
+  <h3>约束条件</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 创建订单表（演示各种约束）</span>
+<span class="kw">CREATE TABLE</span> <span class="cls">orders</span> (
+    <span class="var">id</span> <span class="cls">INT</span> <span class="kw">AUTO_INCREMENT PRIMARY KEY</span>,           <span class="cmt"># 主键，自动递增</span>
+    <span class="var">user_id</span> <span class="cls">INT</span> <span class="kw">NOT NULL</span>,                          <span class="cmt"># 非空约束</span>
+    <span class="var">order_number</span> <span class="cls">VARCHAR</span>(<span class="num">20</span>) <span class="kw">UNIQUE NOT NULL</span>,      <span class="cmt"># 唯一约束</span>
+    <span class="var">total_amount</span> <span class="cls">DECIMAL</span>(<span class="num">10</span>, <span class="num">2</span>) <span class="kw">NOT NULL</span>,           <span class="cmt"># 精确小数</span>
+    <span class="var">status</span> <span class="cls">ENUM</span>(<span class="str">'pending'</span>, <span class="str">'completed'</span>, <span class="str">'cancelled'</span>) <span class="kw">DEFAULT</span> <span class="str">'pending'</span>,  <span class="cmt"># 枚举类型</span>
+    <span class="var">created_at</span> <span class="cls">TIMESTAMP</span> <span class="kw">DEFAULT CURRENT_TIMESTAMP</span>,
+    <span class="kw">FOREIGN KEY</span> (<span class="var">user_id</span>) <span class="kw">REFERENCES</span> <span class="cls">users</span>(<span class="var">id</span>) <span class="kw">ON DELETE CASCADE</span>  <span class="cmt"># 外键约束</span>
+);</code></pre>
+  </div>
+
+  <h3>CRUD操作</h3>
+
+  <h4>创建数据（INSERT）</h4>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 插入单条数据</span>
+<span class="kw">INSERT INTO</span> <span class="cls">users</span> (<span class="var">username</span>, <span class="var">email</span>, <span class="var">password_hash</span>)
+<span class="kw">VALUES</span> (<span class="str">'john_doe'</span>, <span class="str">'john@example.com'</span>, <span class="str">'hashed_password_123'</span>);
+
+<span class="cmt"># 插入多条数据</span>
+<span class="kw">INSERT INTO</span> <span class="cls">users</span> (<span class="var">username</span>, <span class="var">email</span>, <span class="var">password_hash</span>)
+<span class="kw">VALUES</span>
+    (<span class="str">'jane_doe'</span>, <span class="str">'jane@example.com'</span>, <span class="str">'hashed_password_456'</span>),
+    (<span class="str">'bob_smith'</span>, <span class="str">'bob@example.com'</span>, <span class="str">'hashed_password_789'</span>);
+
+<span class="cmt"># 插入并获取自增ID</span>
+<span class="kw">INSERT INTO</span> <span class="cls">users</span> (<span class="var">username</span>, <span class="var">email</span>, <span class="var">password_hash</span>)
+<span class="kw">VALUES</span> (<span class="str">'alice_wonder'</span>, <span class="str">'alice@example.com'</span>, <span class="str">'hashed_password_abc'</span>);
+<span class="kw">SELECT</span> <span class="fn">LAST_INSERT_ID</span>();  <span class="cmt"># 获取刚插入的ID</span></code></pre>
+  </div>
+
+  <h4>查询数据（SELECT）</h4>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 查询所有用户</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">users</span>;
+
+<span class="cmt"># 查询特定列</span>
+<span class="kw">SELECT</span> <span class="var">username</span>, <span class="var">email</span> <span class="kw">FROM</span> <span class="cls">users</span>;
+
+<span class="cmt"># 条件查询</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">users</span>
+<span class="kw">WHERE</span> <span class="var">username</span> = <span class="str">'john_doe'</span>;
+
+<span class="cmt"># 多条件查询</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">users</span>
+<span class="kw">WHERE</span> <span class="var">created_at</span> >= <span class="str">'2024-01-01'</span>
+<span class="kw">AND</span> <span class="var">username</span> <span class="kw">LIKE</span> <span class="str">'%john%'</span>;
+
+<span class="cmt"># 排序和分页</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">users</span>
+<span class="kw">ORDER BY</span> <span class="var">created_at</span> <span class="kw">DESC</span>  <span class="cmt"># 降序排列</span>
+<span class="kw">LIMIT</span> <span class="num">10</span> <span class="kw">OFFSET</span> <span class="num">0</span>;        <span class="cmt"># 分页：从第0条开始，取10条</span></code></pre>
+  </div>
+
+  <h4>更新数据（UPDATE）</h4>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 更新单个用户</span>
+<span class="kw">UPDATE</span> <span class="cls">users</span>
+<span class="kw">SET</span> <span class="var">email</span> = <span class="str">'john_new@example.com'</span>
+<span class="kw">WHERE</span> <span class="var">id</span> = <span class="num">1</span>;
+
+<span class="cmt"># 批量更新</span>
+<span class="kw">UPDATE</span> <span class="cls">orders</span>
+<span class="kw">SET</span> <span class="var">status</span> = <span class="str">'completed'</span>
+<span class="kw">WHERE</span> <span class="var">created_at</span> < <span class="str">'2024-01-01'</span>;
+
+<span class="cmt"># ⚠️ 危险：不带WHERE条件会更新所有行！</span>
+<span class="kw">UPDATE</span> <span class="cls">users</span> <span class="kw">SET</span> <span class="var">status</span> = <span class="str">'active'</span>;  <span class="cmt"># 不要这样做！</span></code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 警告：</strong>执行 <code>UPDATE</code> 或 <code>DELETE</code> 操作前，一定要先用 <code>SELECT</code> 确认WHERE条件是否正确，避免误操作导致数据丢失！
+  </div>
+
+  <h4>删除数据（DELETE）</h4>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 删除单条记录</span>
+<span class="kw">DELETE FROM</span> <span class="cls">users</span>
+<span class="kw">WHERE</span> <span class="var">id</span> = <span class="num">1</span>;
+
+<span class="cmt"># ⚠️ 危险：删除所有数据</span>
+<span class="kw">DELETE FROM</span> <span class="cls">users</span>;  <span class="cmt"># 不要这样做！</span>
+
+<span class="cmt"># 更好的方式：使用TRUNCATE（快速清空表）</span>
+<span class="kw">TRUNCATE TABLE</span> <span class="cls">users</span>;</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 4 ==================== -->
+<div class="section" id="llm-mysql-s4">
+  <h2>SQL进阶</h2>
+
+  <!-- 4.1 聚合函数 -->
+  <div id="llm-mysql-s4-1">
+    <h3>聚合函数</h3>
+
+    <div class="callout callout-analogy">
+      <strong>类比：</strong>聚合函数就像是统计员，帮你计算"总数"、"平均值"、"最大值"等统计数据。
+    </div>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># 统计用户总数</span>
+<span class="kw">SELECT</span> <span class="fn">COUNT</span>(*) <span class="kw">AS</span> total_users <span class="kw">FROM</span> <span class="cls">users</span>;
+
+<span class="cmt"># 计算订单总金额</span>
+<span class="kw">SELECT</span> <span class="fn">SUM</span>(<span class="var">total_amount</span>) <span class="kw">AS</span> total_revenue <span class="kw">FROM</span> <span class="cls">orders</span>;
+
+<span class="cmt"># 计算平均订单金额</span>
+<span class="kw">SELECT</span> <span class="fn">AVG</span>(<span class="var">total_amount</span>) <span class="kw">AS</span> avg_amount <span class="kw">FROM</span> <span class="cls">orders</span>;
+
+<span class="cmt"># 查找最高和最低订单金额</span>
+<span class="kw">SELECT</span>
+    <span class="fn">MAX</span>(<span class="var">total_amount</span>) <span class="kw">AS</span> max_amount,
+    <span class="fn">MIN</span>(<span class="var">total_amount</span>) <span class="kw">AS</span> min_amount
+<span class="kw">FROM</span> <span class="cls">orders</span>;
+
+<span class="cmt"># 分组统计（GROUP BY）</span>
+<span class="kw">SELECT</span>
+    <span class="var">status</span>,
+    <span class="fn">COUNT</span>(*) <span class="kw">AS</span> count,
+    <span class="fn">SUM</span>(<span class="var">total_amount</span>) <span class="kw">AS</span> total
+<span class="kw">FROM</span> <span class="cls">orders</span>
+<span class="kw">GROUP BY</span> <span class="var">status</span>;
+
+<span class="cmt"># HAVING过滤分组结果</span>
+<span class="kw">SELECT</span>
+    <span class="var">user_id</span>,
+    <span class="fn">COUNT</span>(*) <span class="kw">AS</span> order_count
+<span class="kw">FROM</span> <span class="cls">orders</span>
+<span class="kw">GROUP BY</span> <span class="var">user_id</span>
+<span class="kw">HAVING</span> <span class="fn">COUNT</span>(*) > <span class="num">5</span>;  <span class="cmt"># 只显示订单数大于5的用户</span></code></pre>
+    </div>
+
+    <div class="callout callout-tip">
+      <strong>💡 WHERE vs HAVING：</strong><code>WHERE</code> 在分组前过滤行，<code>HAVING</code> 在分组后过滤组。聚合函数的结果只能用 <code>HAVING</code> 过滤。
+    </div>
+  </div>
+
+  <!-- 4.2 多表连接 -->
+  <div id="llm-mysql-s4-2">
+    <h3>多表连接（JOIN）</h3>
+
+    <div class="callout callout-analogy">
+      <strong>类比：</strong>JOIN就像是把两个表格按照某个共同字段合并在一起。比如，把"用户表"和"订单表"通过 <code>user_id</code> 关联起来，就能看到每个用户的订单信息。
+    </div>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># INNER JOIN：只返回两个表都有的数据</span>
+<span class="kw">SELECT</span>
+    <span class="var">u</span>.<span class="var">username</span>,
+    <span class="var">o</span>.<span class="var">order_number</span>,
+    <span class="var">o</span>.<span class="var">total_amount</span>
+<span class="kw">FROM</span> <span class="cls">users</span> <span class="var">u</span>
+<span class="kw">INNER JOIN</span> <span class="cls">orders</span> <span class="var">o</span> <span class="kw">ON</span> <span class="var">u</span>.<span class="var">id</span> = <span class="var">o</span>.<span class="var">user_id</span>;
+
+<span class="cmt"># LEFT JOIN：返回左表所有数据，右表没有的显示NULL</span>
+<span class="kw">SELECT</span>
+    <span class="var">u</span>.<span class="var">username</span>,
+    <span class="fn">COUNT</span>(<span class="var">o</span>.<span class="var">id</span>) <span class="kw">AS</span> order_count
+<span class="kw">FROM</span> <span class="cls">users</span> <span class="var">u</span>
+<span class="kw">LEFT JOIN</span> <span class="cls">orders</span> <span class="var">o</span> <span class="kw">ON</span> <span class="var">u</span>.<span class="var">id</span> = <span class="var">o</span>.<span class="var">user_id</span>
+<span class="kw">GROUP BY</span> <span class="var">u</span>.<span class="var">id</span>;
+
+<span class="cmt"># 多表连接示例</span>
+<span class="kw">SELECT</span>
+    <span class="var">u</span>.<span class="var">username</span>,
+    <span class="var">o</span>.<span class="var">order_number</span>,
+    <span class="var">p</span>.<span class="var">product_name</span>,
+    <span class="var">oi</span>.<span class="var">quantity</span>
+<span class="kw">FROM</span> <span class="cls">users</span> <span class="var">u</span>
+<span class="kw">INNER JOIN</span> <span class="cls">orders</span> <span class="var">o</span> <span class="kw">ON</span> <span class="var">u</span>.<span class="var">id</span> = <span class="var">o</span>.<span class="var">user_id</span>
+<span class="kw">INNER JOIN</span> <span class="cls">order_items</span> <span class="var">oi</span> <span class="kw">ON</span> <span class="var">o</span>.<span class="var">id</span> = <span class="var">oi</span>.<span class="var">order_id</span>
+<span class="kw">INNER JOIN</span> <span class="cls">products</span> <span class="var">p</span> <span class="kw">ON</span> <span class="var">oi</span>.<span class="var">product_id</span> = <span class="var">p</span>.<span class="var">id</span>;</code></pre>
+    </div>
+
+    <table>
+      <tr><th>JOIN类型</th><th>说明</th><th>使用场景</th></tr>
+      <tr><td><code>INNER JOIN</code></td><td>只返回两个表都有的数据</td><td>查询有关联的数据</td></tr>
+      <tr><td><code>LEFT JOIN</code></td><td>返回左表所有数据，右表没有的显示NULL</td><td>查询所有用户及其订单（包括没有订单的用户）</td></tr>
+      <tr><td><code>RIGHT JOIN</code></td><td>返回右表所有数据，左表没有的显示NULL</td><td>较少使用</td></tr>
+      <tr><td><code>CROSS JOIN</code></td><td>返回两个表的笛卡尔积</td><td>生成组合数据</td></tr>
+    </table>
+  </div>
+
+  <!-- 4.3 子查询 -->
+  <div id="llm-mysql-s4-3">
+    <h3>子查询</h3>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># IN子查询：查找下过订单的用户</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">users</span>
+<span class="kw">WHERE</span> <span class="var">id</span> <span class="kw">IN</span> (
+    <span class="kw">SELECT DISTINCT</span> <span class="var">user_id</span> <span class="kw">FROM</span> <span class="cls">orders</span>
+);
+
+<span class="cmt"># EXISTS子查询：查找有订单的用户（通常比IN更快）</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">users</span> <span class="var">u</span>
+<span class="kw">WHERE EXISTS</span> (
+    <span class="kw">SELECT</span> <span class="num">1</span> <span class="kw">FROM</span> <span class="cls">orders</span> <span class="var">o</span>
+    <span class="kw">WHERE</span> <span class="var">o</span>.<span class="var">user_id</span> = <span class="var">u</span>.<span class="var">id</span>
+);
+
+<span class="cmt"># 标量子查询：查询每个用户的订单数</span>
+<span class="kw">SELECT</span>
+    <span class="var">username</span>,
+    (
+        <span class="kw">SELECT</span> <span class="fn">COUNT</span>(*)
+        <span class="kw">FROM</span> <span class="cls">orders</span> <span class="var">o</span>
+        <span class="kw">WHERE</span> <span class="var">o</span>.<span class="var">user_id</span> = <span class="var">u</span>.<span class="var">id</span>
+    ) <span class="kw">AS</span> order_count
+<span class="kw">FROM</span> <span class="cls">users</span> <span class="var">u</span>;</code></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SECTION 5 ==================== -->
+<div class="section" id="llm-mysql-s5">
+  <h2>索引优化</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>索引就像书的目录。没有目录的书，找某一页需要从头翻到尾（全表扫描）。有了目录，直接翻到对应页码（索引查找）。
+  </div>
+
+  <h3>索引原理</h3>
+  <p>MySQL默认使用<strong>B+树</strong>作为索引结构。B+树的特点：</p>
+  <ul>
+    <li>所有数据都存储在叶子节点</li>
+    <li>叶子节点通过指针连接，支持范围查询</li>
+    <li>树的高度通常只有3-4层，查询效率高</li>
+  </ul>
+
+  <h3>创建索引</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 创建普通索引</span>
+<span class="kw">CREATE INDEX</span> idx_username <span class="kw">ON</span> <span class="cls">users</span>(<span class="var">username</span>);
+
+<span class="cmt"># 创建唯一索引</span>
+<span class="kw">CREATE UNIQUE INDEX</span> idx_email <span class="kw">ON</span> <span class="cls">users</span>(<span class="var">email</span>);
+
+<span class="cmt"># 创建复合索引（多字段）</span>
+<span class="kw">CREATE INDEX</span> idx_user_status <span class="kw">ON</span> <span class="cls">orders</span>(<span class="var">user_id</span>, <span class="var">status</span>);
+
+<span class="cmt"># 创建全文索引（用于全文搜索）</span>
+<span class="kw">CREATE FULLTEXT INDEX</span> idx_content <span class="kw">ON</span> <span class="cls">articles</span>(<span class="var">title</span>, <span class="var">content</span>);
+
+<span class="cmt"># 查看表的索引</span>
+<span class="kw">SHOW INDEX FROM</span> <span class="cls">users</span>;</code></pre>
+  </div>
+
+  <h3>索引失效场景</h3>
+
+  <div class="callout callout-pitfall">
+    <strong>🚨 常见索引失效场景：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li>对索引列使用函数：<code>WHERE YEAR(created_at) = 2024</code></li>
+      <li>对索引列进行计算：<code>WHERE id + 1 = 10</code></li>
+      <li>使用 <code>LIKE '%abc'</code>（前导通配符）</li>
+      <li>使用 <code>OR</code> 连接非索引列</li>
+      <li>类型隐式转换：<code>WHERE varchar_column = 123</code></li>
+    </ul>
+  </div>
+
+  <h3>EXPLAIN执行计划</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 分析查询执行计划</span>
+<span class="kw">EXPLAIN SELECT</span> * <span class="kw">FROM</span> <span class="cls">users</span>
+<span class="kw">WHERE</span> <span class="var">username</span> = <span class="str">'john_doe'</span>;
+
+<span class="cmt"># 输出字段说明：</span>
+<span class="cmt"># type: 访问类型（system > const > eq_ref > ref > range > index > ALL）</span>
+<span class="cmt"># key: 实际使用的索引</span>
+<span class="cmt"># rows: 预估扫描行数</span>
+<span class="cmt"># Extra: 额外信息（Using index表示使用了覆盖索引）</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 索引优化原则：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li>在WHERE、JOIN、ORDER BY的字段上创建索引</li>
+      <li>选择性高的字段更适合建索引（如用户名、邮箱）</li>
+      <li>复合索引遵循最左前缀原则</li>
+      <li>不要过度索引，索引会占用存储空间并降低写入性能</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== SECTION 6 ==================== -->
+<div class="section" id="llm-mysql-s6">
+  <h2>事务与锁</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>事务就像银行转账。从A账户扣钱和给B账户加钱必须作为一个整体完成——要么都成功，要么都失败，不能只完成一半。
+  </div>
+
+  <h3>事务ACID特性</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th><th>类比</th></tr>
+    <tr><td><strong>原子性（Atomicity）</strong></td><td>事务是不可分割的最小单位</td><td>转账要么全成功，要么全失败</td></tr>
+    <tr><td><strong>一致性（Consistency）</strong></td><td>事务前后，数据保持一致</td><td>转账前后，两个账户的总金额不变</td></tr>
+    <tr><td><strong>隔离性（Isolation）</strong></td><td>并发事务互不干扰</td><td>两个人同时转账，互不影响</td></tr>
+    <tr><td><strong>持久性（Durability）</strong></td><td>事务提交后永久保存</td><td>转账成功后，即使断电也不会丢失</td></tr>
+  </table>
+
+  <h3>事务控制</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 开启事务</span>
+<span class="kw">START TRANSACTION</span>;
+
+<span class="cmt"># 转账操作</span>
+<span class="kw">UPDATE</span> <span class="cls">accounts</span> <span class="kw">SET</span> <span class="var">balance</span> = <span class="var">balance</span> - <span class="num">1000</span> <span class="kw">WHERE</span> <span class="var">id</span> = <span class="num">1</span>;
+<span class="kw">UPDATE</span> <span class="cls">accounts</span> <span class="kw">SET</span> <span class="var">balance</span> = <span class="var">balance</span> + <span class="num">1000</span> <span class="kw">WHERE</span> <span class="var">id</span> = <span class="num">2</span>;
+
+<span class="cmt"># 检查余额是否足够</span>
+<span class="kw">SELECT</span> <span class="var">balance</span> <span class="kw">INTO</span> @balance <span class="kw">FROM</span> <span class="cls">accounts</span> <span class="kw">WHERE</span> <span class="var">id</span> = <span class="num">1</span>;
+<span class="kw">IF</span> @balance < <span class="num">0</span> <span class="kw">THEN</span>
+    <span class="kw">ROLLBACK</span>;  <span class="cmt"># 余额不足，回滚</span>
+<span class="kw">ELSE</span>
+    <span class="kw">COMMIT</span>;    <span class="cmt"># 成功，提交</span>
+<span class="kw">END IF</span>;</code></pre>
+  </div>
+
+  <h3>并发问题</h3>
+
+  <table>
+    <tr><th>问题</th><th>说明</th><th>解决方法</th></tr>
+    <tr><td><strong>脏读</strong></td><td>读到其他事务未提交的数据</td><td>READ COMMITTED隔离级别</td></tr>
+    <tr><td><strong>不可重复读</strong></td><td>同一事务内，两次读取结果不同</td><td>REPEATABLE READ隔离级别</td></tr>
+    <tr><td><strong>幻读</strong></td><td>同一事务内，查询结果行数不同</td><td>SERIALIZABLE隔离级别</td></tr>
+  </table>
+
+  <h3>事务隔离级别</h3>
+
+  <table>
+    <tr><th>隔离级别</th><th>脏读</th><th>不可重复读</th><th>幻读</th><th>性能</th></tr>
+    <tr><td>READ UNCOMMITTED</td><td>✓</td><td>✓</td><td>✓</td><td>最高</td></tr>
+    <tr><td>READ COMMITTED</td><td>✗</td><td>✓</td><td>✓</td><td>较高</td></tr>
+    <tr><td>REPEATABLE READ</td><td>✗</td><td>✗</td><td>✓*</td><td>一般（MySQL默认）</td></tr>
+    <tr><td>SERIALIZABLE</td><td>✗</td><td>✗</td><td>✗</td><td>最低</td></tr>
+  </table>
+
+  <div class="callout callout-info">
+    <strong>📖 InnoDB 与幻读：</strong>上表中标 * 的幻读列是 SQL 标准的定义。但实际上，MySQL 默认引擎 <strong>InnoDB</strong> 在 REPEATABLE READ 级别下通过 <strong>MVCC（多版本并发控制）+ Next-Key Locking</strong> 已经能防止大部分幻读场景，其行为比 SQL 标准定义的更加严格。这也是为什么 MySQL 官方文档推荐使用默认的 REPEATABLE READ 而非 SERIALIZABLE。
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 选择建议：</strong>大多数Web应用使用 <code>READ COMMITTED</code> 或 <code>REPEATABLE READ</code> 即可。金融等高一致性要求的场景使用 <code>SERIALIZABLE</code>。
+  </div>
+</div>
+
+<!-- ==================== SECTION 7 ==================== -->
+<div class="section" id="llm-mysql-s7">
+  <h2>数据库设计</h2>
+
+  <h3>范式（Normalization）</h3>
+
+  <p>范式是数据库设计的规范，用于减少数据冗余和提高数据一致性。</p>
+
+  <table>
+    <tr><th>范式</th><th>要求</th><th>示例</th></tr>
+    <tr><td><strong>第一范式（1NF）</strong></td><td>字段不可再分</td><td>不要把多个电话号码存在一个字段</td></tr>
+    <tr><td><strong>第二范式（2NF）</strong></td><td>消除部分依赖</td><td>订单商品表应该拆分为订单表和订单明细表</td></tr>
+    <tr><td><strong>第三范式（3NF）</strong></td><td>消除传递依赖</td><td>用户表不应该存储城市名称，应该存储城市ID</td></tr>
+  </table>
+
+  <h3>反范式设计</h3>
+
+  <p>有时候为了查询性能，会故意增加数据冗余（反范式）：</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 冗余字段示例：在订单表中冗余用户名</span>
+<span class="kw">CREATE TABLE</span> <span class="cls">orders</span> (
+    <span class="var">id</span> <span class="cls">INT</span> <span class="kw">PRIMARY KEY</span>,
+    <span class="var">user_id</span> <span class="cls">INT</span>,
+    <span class="var">username</span> <span class="cls">VARCHAR</span>(<span class="num">50</span>),  <span class="cmt"># 冗余字段，避免每次JOIN用户表</span>
+    <span class="var">total_amount</span> <span class="cls">DECIMAL</span>(<span class="num">10</span>, <span class="num">2</span>),
+    <span class="cmt"># ...</span>
+);</code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 反范式原则：</strong>只在读取频率远高于写入频率的场景使用反范式，并确保数据同步机制（如触发器、应用层同步）。
+  </div>
+
+  <h3>常见设计模式</h3>
+
+  <h4>树形结构（组织架构、分类）</h4>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 邻接表模型（最常用）</span>
+<span class="kw">CREATE TABLE</span> <span class="cls">categories</span> (
+    <span class="var">id</span> <span class="cls">INT</span> <span class="kw">PRIMARY KEY</span>,
+    <span class="var">name</span> <span class="cls">VARCHAR</span>(<span class="num">100</span>),
+    <span class="var">parent_id</span> <span class="cls">INT</span> <span class="kw">NULL</span>,
+    <span class="kw">FOREIGN KEY</span> (<span class="var">parent_id</span>) <span class="kw">REFERENCES</span> <span class="cls">categories</span>(<span class="var">id</span>)
+);
+
+<span class="cmt"># 查询某个节点的所有子节点（递归CTE）</span>
+<span class="kw">WITH RECURSIVE</span> category_tree <span class="kw">AS</span> (
+    <span class="kw">SELECT</span> <span class="var">id</span>, <span class="var">name</span>, <span class="var">parent_id</span>
+    <span class="kw">FROM</span> <span class="cls">categories</span>
+    <span class="kw">WHERE</span> <span class="var">id</span> = <span class="num">1</span>  <span class="cmt"># 根节点</span>
+
+    <span class="kw">UNION ALL</span>
+
+    <span class="kw">SELECT</span> <span class="var">c</span>.<span class="var">id</span>, <span class="var">c</span>.<span class="var">name</span>, <span class="var">c</span>.<span class="var">parent_id</span>
+    <span class="kw">FROM</span> <span class="cls">categories</span> <span class="var">c</span>
+    <span class="kw">INNER JOIN</span> category_tree <span class="var">ct</span> <span class="kw">ON</span> <span class="var">c</span>.<span class="var">parent_id</span> = <span class="var">ct</span>.<span class="var">id</span>
+)
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> category_tree;</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 8 ==================== -->
+<div class="section" id="llm-mysql-s8">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：基础CRUD <span class="badge">基础</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>创建一个博客系统数据库，包含用户表、文章表、评论表。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 创建 <code>blog_db</code> 数据库</p>
+      <p>② 创建 <code>users</code> 表（id、username、email、password_hash、created_at）</p>
+      <p>③ 创建 <code>posts</code> 表（id、user_id、title、content、created_at）</p>
+      <p>④ 创建 <code>comments</code> 表（id、post_id、user_id、content、created_at）</p>
+      <p>⑤ 插入测试数据（至少3个用户、5篇文章、10条评论）</p>
+      <p>⑥ 查询所有文章及其作者、评论数</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习2：索引优化 <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>优化练习1中创建的数据库。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 为 <code>users.username</code> 创建唯一索引</p>
+      <p>② 为 <code>posts.user_id</code> 和 <code>posts.created_at</code> 创建复合索引</p>
+      <p>③ 为 <code>comments.post_id</code> 创建索引</p>
+      <p>④ 使用 <code>EXPLAIN</code> 分析以下查询的执行计划：</p>
+      <p>&nbsp;&nbsp;&nbsp;• 查询某个用户的所有文章</p>
+      <p>&nbsp;&nbsp;&nbsp;• 查询某篇文章的所有评论</p>
+      <p>&nbsp;&nbsp;&nbsp;• 按时间排序查询最新文章</p>
+      <p>⑤ 优化执行计划中的性能问题</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习3：事务实践 <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>实现一个简单的转账功能，理解事务的重要性。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 创建 <code>accounts</code> 表（id、user_id、balance）</p>
+      <p>② 插入两个账户，余额分别为 1000 和 500</p>
+      <p>③ 编写一个事务，从账户1转账200到账户2</p>
+      <p>④ 测试正常情况（成功转账）</p>
+      <p>⑤ 测试异常情况（余额不足时回滚）</p>
+      <p>⑥ 验证事务的原子性（转账前后总金额不变）</p>
+    </div>
+  </div>
+</div>
+
+<!-- 底部导航 -->
+</div></section>

@@ -1,0 +1,790 @@
+<section class="llm-mod llm-m-advanced-rag" id="llm-advanced-rag"><div class="module-wrapper">
+<h1>高级 RAG 范式</h1>
+
+<p>传统的 Naive RAG 虽然简单有效，但在面对复杂查询、多源检索、幻觉控制等场景时往往力不从心。本节将系统介绍从 Naive RAG 到 Agentic RAG 的范式演进，深入剖析每种高级范式的核心思想、执行流程与适用场景。</p>
+
+<!-- ==================== 1. RAG范式演进 ==================== -->
+<h2>1. RAG 范式演进</h2>
+
+<p>RAG 技术的发展可以划分为四个阶段，每个阶段都在前一代的基础上引入了新的设计理念和工程能力。</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>范式</th>
+            <th>核心思想</th>
+            <th>关键特征</th>
+            <th>典型问题</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Naive RAG</strong></td>
+            <td>检索-拼接-生成</td>
+            <td>固定 Top-K 检索、简单 Prompt 拼接</td>
+            <td>检索噪声大、幻觉严重、上下文窗口浪费</td>
+        </tr>
+        <tr>
+            <td><strong>Advanced RAG</strong></td>
+            <td>优化检索与生成质量</td>
+            <td>查询重写、混合检索、重排序、压缩上下文</td>
+            <td>仍为线性 Pipeline，无法自我纠正</td>
+        </tr>
+        <tr>
+            <td><strong>Modular RAG</strong></td>
+            <td>模块化组装、灵活编排</td>
+            <td>可插拔组件（路由、工具调用、记忆），支持迭代检索</td>
+            <td>架构复杂度增加，调试困难</td>
+        </tr>
+        <tr>
+            <td><strong>Agentic RAG</strong></td>
+            <td>Agent 驱动的自主检索推理</td>
+            <td>多 Agent 协作、动态规划、自我反思与纠正</td>
+            <td>延迟高、成本高、可控性需设计</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="flow-diagram">┌────────────┐    ┌──────────────┐    ┌──────────────┐    ┌────────────────┐
+│ Naive RAG  │ →  │ Advanced RAG │ →  │ Modular RAG  │ →  │  Agentic RAG   │
+│  (2020)    │    │   (2023)     │    │   (2024)     │    │   (2024+)      │
+└────────────┘    └──────────────┘    └──────────────┘    └────────────────┘
+  简单检索拼接       质量优化管线        模块灵活编排          多Agent自主推理</div>
+
+<div class="callout callout-info">
+    <div class="callout-title">信息</div>
+    这四个阶段并非严格替代关系。在实际项目中，Advanced RAG 中的查询重写、重排序等技术仍然在 Agentic RAG 中广泛使用，它们是基础能力而非被抛弃的方案。
+</div>
+
+<!-- ==================== 2. GraphRAG ==================== -->
+<h2>2. GraphRAG（微软）</h2>
+
+<h3>2.1 核心原理</h3>
+<p>GraphRAG 是微软于 2024 年提出的 RAG 范式，其核心思想是：不把文档仅当作"文本片段"来检索，而是先从中抽取实体与关系，构建知识图谱，再通过社区检测算法发现主题聚类，并为每个社区生成层级摘要。</p>
+
+<p>GraphRAG 的完整流程分为 <strong>索引阶段（Indexing）</strong> 和 <strong>查询阶段（Query）</strong> 两大部分：</p>
+
+<div class="flow-diagram">索引阶段:
+文本块 → LLM抽取实体/关系 → 构建知识图谱 → 社区检测(Leiden) → 层级社区摘要
+
+查询阶段:
+┌───────────────────┐
+│  Global Query     │  ← 遍历所有社区摘要，回答全局性问题
+├───────────────────┤
+│  Local Query      │  ← 从特定实体出发，检索相关社区
+└───────────────────┘</div>
+
+<h3>2.2 知识图谱构建</h3>
+<p>GraphRAG 使用 LLM 从每个文本块中抽取结构化的实体和关系三元组，然后将它们合并为统一的知识图谱。社区检测算法（如 Leiden）将图谱划分为不同粒度的层级社区。</p>
+
+<h3>2.3 优势与局限</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>维度</th>
+            <th>优势</th>
+            <th>局限</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>全局理解</td>
+            <td>能回答"整体主题是什么""有哪些主要趋势"等全局问题</td>
+            <td>需要遍历大量社区摘要，成本随数据规模线性增长</td>
+        </tr>
+        <tr>
+            <td>关系推理</td>
+            <td>天然支持多跳推理（"A 和 B 有什么间接联系"）</td>
+            <td>实体抽取质量依赖 LLM 能力，噪声实体会影响图谱质量</td>
+        </tr>
+        <tr>
+            <td>增量更新</td>
+            <td>—</td>
+            <td>新文档需要重新抽取和合并，社区结构可能需要重新计算</td>
+        </tr>
+        <tr>
+            <td>构建成本</td>
+            <td>—</td>
+            <td>大量 LLM API 调用（抽取 + 摘要），索引时间和费用显著高于传统 RAG</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>2.4 代码示例</h3>
+<pre><code># 安装: pip install graphrag
+# 准备: 将文档放入 ./input/ 目录
+
+# === 索引阶段 ===
+# 初始化项目
+# graphrag init --root ./my_project
+
+# 将文档放入 ./my_project/input/ 后执行索引
+# graphrag index --root ./my_project
+
+import graphrag
+
+# 方式一：使用 GraphRAG 索引器（命令行）
+# graphrag index --root ./my_project --reporter rich
+
+# 方式二：使用 Python API
+from graphrag.query.indexer_adapters import read_indexer_entities, read_indexer_communities
+from graphrag.query.llm.oai.chat_openai import ChatOpenAI
+from graphrag.query.structured_search.global_search.community_context import (
+    GlobalCommunityContext,
+)
+from graphrag.query.structured_search.global_search.search import GlobalSearch
+
+# 加载索引数据
+entity_df = read_indexer_entities("./my_project/output")
+community_df = read_indexer_communities("./my_project/output")
+
+# 配置 LLM
+llm = ChatOpenAI(model="gpt-4o-mini", api_key="your-api-key")
+
+# 构建全局搜索上下文
+context_builder = GlobalCommunityContext(
+    community_reports=community_df,
+    entities=entity_df,
+    token_budget=12000,
+)
+
+# 全局搜索 —— 回答需要整体理解的问题
+search_engine = GlobalSearch(
+    llm=llm,
+    context_builder=context_builder,
+    max_tokens=4000,
+    temperature=0.1,
+)
+
+result = await search_engine.asearch("这个数据集的整体主题是什么？有哪些关键趋势？")
+print(result.response)</code></pre>
+
+<div class="callout callout-warn">
+    <div class="callout-title">警告</div>
+    GraphRAG 的索引过程对大型文档集可能非常耗时且昂贵。一个 10 万词的文档集索引可能需要数百次 LLM 调用。建议先在小规模数据上验证效果，再扩展到全量数据。
+</div>
+
+<!-- ==================== 3. Self-RAG ==================== -->
+<h2>3. Self-RAG（自我反思 RAG）</h2>
+
+<h3>3.1 核心原理</h3>
+<p>Self-RAG 由 Akari Asai 等人于 2023 年提出。其核心创新是让 LLM 在生成过程中通过<strong>特殊的反思标记（Reflection Tokens）</strong>进行自我评估，动态决定是否需要检索、检索结果是否相关、生成的答案是否有依据。</p>
+
+<h3>3.2 四个反思标记</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>标记</th>
+            <th>全称</th>
+            <th>作用</th>
+            <th>取值</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>[Retrieve]</code></td>
+            <td>Retrieve</td>
+            <td>判断当前是否需要检索外部知识</td>
+            <td>Yes / No / Continue</td>
+        </tr>
+        <tr>
+            <td><code>[ISREL]</code></td>
+            <td>Is Relevant</td>
+            <td>评估检索到的文档是否与查询相关</td>
+            <td>Relevant / Irrelevant</td>
+        </tr>
+        <tr>
+            <td><code>[ISSUP]</code></td>
+            <td>Is Supported</td>
+            <td>评估生成的答案是否被文档内容支持</td>
+            <td>Fully Supported / Partially / No Support</td>
+        </tr>
+        <tr>
+            <td><code>[ISUSE]</code></td>
+            <td>Is Useful</td>
+            <td>评估生成的答案对用户是否有用</td>
+            <td>Best / Acceptable / Not Useful</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>3.3 执行流程</h3>
+
+<div class="flow-diagram">用户查询
+    │
+    ▼
+[Retrieve]? ──No──→ 直接生成答案 ──→ 输出
+    │
+   Yes
+    │
+    ▼
+检索文档 → [ISREL]? ──Irrelevant──→ 丢弃，尝试其他文档或直接生成
+    │
+  Relevant
+    │
+    ▼
+生成候选答案 → [ISSUP]? ──No Support──→ 标记为低置信，重新生成
+    │
+  Supported
+    │
+    ▼
+[ISUSE]? ──→ 综合评分，选择最优答案输出</div>
+
+<h3>3.4 与普通 RAG 的对比</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>维度</th>
+            <th>普通 RAG</th>
+            <th>Self-RAG</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>检索决策</td>
+            <td>所有查询都检索</td>
+            <td>LLM 动态判断是否需要检索</td>
+        </tr>
+        <tr>
+            <td>相关性判断</td>
+            <td>依赖 Embedding 相似度阈值</td>
+            <td>LLM 语义级别评估</td>
+        </tr>
+        <tr>
+            <td>幻觉检测</td>
+            <td>无</td>
+            <td>通过 ISSUP 标记检测答案是否有文档支持</td>
+        </tr>
+        <tr>
+            <td>答案质量</td>
+            <td>可能包含无依据的推测</td>
+            <td>多轮反思确保答案有据可依</td>
+        </tr>
+        <tr>
+            <td>推理延迟</td>
+            <td>较低（单次生成）</td>
+            <td>较高（多次生成 + 反思评估）</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-key">
+    <div class="callout-title">关键理解</div>
+    Self-RAG 的本质是将"检索决策"和"质量评估"内置到 LLM 的生成过程中，而不是依赖外部的启发式规则。这要求模型经过专门的反思标记训练，或者在 Prompt 中显式引导模型进行结构化反思。
+</div>
+
+<!-- ==================== 4. CRAG ==================== -->
+<h2>4. CRAG（Corrective RAG，纠正式 RAG）</h2>
+
+<h3>4.1 核心原理</h3>
+<p>CRAG 由深圳先进技术研究院于 2024 年提出。其核心思想是：在检索结果返回后，增加一个<strong>轻量级评估器</strong>来判断文档质量，并根据评估结果触发不同的纠正策略。</p>
+
+<h3>4.2 三种处理路径</h3>
+
+<div class="flow-diagram">用户查询 → 检索文档
+                │
+        ┌───────┼────────┐
+        ▼       ▼        ▼
+    正确(Correct)  模糊(Ambiguous)  错误(Incorrect)
+        │       │        │
+        ▼       ▼        ▼
+    知识精炼   上下文精炼   触发 Web 搜索
+        │       │        │
+        └───────┼────────┘
+                ▼
+          答案生成</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>评估结果</th>
+            <th>含义</th>
+            <th>纠正策略</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="tag tag-green">正确</span></td>
+            <td>检索到的文档高度相关且包含答案</td>
+            <td>对文档进行知识精炼（提取关键信息），直接生成</td>
+        </tr>
+        <tr>
+            <td><span class="tag tag-orange">模糊</span></td>
+            <td>文档部分相关但信息不完整</td>
+            <td>上下文精炼（去噪、重组），结合推理生成</td>
+        </tr>
+        <tr>
+            <td><span class="tag tag-red">错误</span></td>
+            <td>文档与查询无关或信息错误</td>
+            <td>抛弃原始文档，回退到 Web 搜索获取替代信息</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>4.3 轻量评估器设计</h3>
+<p>CRAG 的评估器通常不需要很强的推理能力，可以用小型模型实现，关键在于结构化输出：</p>
+
+<pre><code>def build_crag_evaluator_prompt(query: str, document: str) -> str:
+    """构建 CRAG 文档质量评估 Prompt"""
+    return f"""你是一个文档质量评估器。请判断以下文档是否能回答用户查询。
+
+## 用户查询
+{query}
+
+## 检索到的文档
+{document}
+
+## 评估要求
+请从以下三个维度打分（1-5分）：
+1. 相关性：文档与查询主题的相关程度
+2. 完整性：文档是否包含回答查询所需的关键信息
+3. 准确性：文档中的信息是否准确可信
+
+输出 JSON 格式：
+{{
+    "relevance": <1-5>,
+    "completeness": <1-5>,
+    "accuracy": <1-5>,
+    "overall": "correct" | "ambiguous" | "incorrect",
+    "reason": "简要说明判断依据"
+}}"""
+
+
+def crag_retrieval_pipeline(query: str, retriever, web_search_fn, llm):
+    """CRAG 完整流程"""
+    # 第一步：检索
+    docs = retriever.retrieve(query, top_k=5)
+
+    # 第二步：评估每个文档
+    results = []
+    for doc in docs:
+        prompt = build_crag_evaluator_prompt(query, doc.text)
+        evaluation = llm.generate_json(prompt)
+        results.append({"doc": doc, "eval": evaluation})
+
+    # 第三步：根据评估结果选择策略
+    correct = [r for r in results if r["eval"]["overall"] == "correct"]
+    ambiguous = [r for r in results if r["eval"]["overall"] == "ambiguous"]
+
+    if correct:
+        # 路径 1：正确文档 —— 知识精炼
+        refined = knowledge_refinement(correct, llm)
+        context = "\n".join(refined)
+    elif ambiguous:
+        # 路径 2：模糊文档 —— 上下文精炼
+        context = context_refinement(query, ambiguous, llm)
+    else:
+        # 路径 3：错误文档 —— 回退 Web 搜索
+        web_results = web_search_fn(query)
+        context = f"以下是从网络搜索获得的信息：\n{web_results}"
+
+    # 第四步：生成答案
+    answer_prompt = f"基于以下信息回答用户问题。\n\n信息：{context}\n\n问题：{query}"
+    return llm.generate(answer_prompt)</code></pre>
+
+<div class="callout callout-tip">
+    <div class="callout-title">提示</div>
+    在实际部署中，CRAG 的 Web 搜索回退机制是其最大差异化优势。建议将评估阈值设计得相对保守（宁可多搜索，也不要返回低质量结果），尤其是在知识准确性要求高的场景中。
+</div>
+
+<!-- ==================== 5. Adaptive RAG ==================== -->
+<h2>5. Adaptive RAG（自适应 RAG）</h2>
+
+<h3>5.1 核心原理</h3>
+<p>Adaptive RAG 的核心思想是：<strong>不同复杂度的查询应该走不同的处理路径</strong>。一个简单的事实性问题不需要多轮检索和推理，而一个复杂的分析性问题则需要迭代式的深度检索。</p>
+
+<h3>5.2 三级路由架构</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>查询复杂度</th>
+            <th>示例</th>
+            <th>处理路径</th>
+            <th>资源消耗</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="tag tag-green">简单</span></td>
+            <td>"Python 中 list 和 tuple 的区别？"</td>
+            <td>直接由 LLM 回答，无需检索</td>
+            <td>低</td>
+        </tr>
+        <tr>
+            <td><span class="tag tag-orange">中等</span></td>
+            <td>"2024 年 RAG 领域有哪些新进展？"</td>
+            <td>单步检索 + 生成</td>
+            <td>中</td>
+        </tr>
+        <tr>
+            <td><span class="tag tag-red">复杂</span></td>
+            <td>"对比 GraphRAG 和 Self-RAG 在多跳推理上的优劣"</td>
+            <td>多步迭代检索 + 推理 + 综合</td>
+            <td>高</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>5.3 查询复杂度分类器</h3>
+
+<pre><code>def classify_query_complexity(query: str, llm) -> str:
+    """使用 LLM 判断查询复杂度"""
+    prompt = f"""请判断以下查询的复杂度等级。
+
+## 查询
+{query}
+
+## 分级标准
+- simple: 可以通过常识或基础知识直接回答的事实性问题
+- moderate: 需要检索外部知识但逻辑简单的查询
+- complex: 需要多步推理、对比分析或多源信息综合的查询
+
+请只输出一个词：simple / moderate / complex"""
+
+    return llm.generate(prompt).strip().lower()
+
+
+def adaptive_rag(query: str, llm, retriever):
+    """Adaptive RAG 主流程"""
+    complexity = classify_query_complexity(query, llm)
+
+    if complexity == "simple":
+        # 简单查询：直接 LLM 回答
+        return llm.generate(query)
+
+    elif complexity == "moderate":
+        # 中等查询：单步 RAG
+        docs = retriever.retrieve(query, top_k=3)
+        context = "\n\n".join([d.text for d in docs])
+        prompt = f"根据以下参考资料回答问题。\n\n{context}\n\n问题：{query}"
+        return llm.generate(prompt)
+
+    else:
+        # 复杂查询：多步 RAG
+        return multi_step_rag(query, llm, retriever)
+
+
+def multi_step_rag(query: str, llm, retriever, max_steps=3):
+    """多步迭代检索与推理"""
+    accumulated_context = ""
+    current_query = query
+
+    for step in range(max_steps):
+        # 检索当前子问题
+        docs = retriever.retrieve(current_query, top_k=3)
+        step_context = "\n\n".join([d.text for d in docs])
+        accumulated_context += f"\n\n--- 第{step+1}步检索 ---\n{step_context}"
+
+        # 判断是否已获得足够信息
+        judge_prompt = f"""已有信息：{accumulated_context}
+原始问题：{query}
+判断是否已有足够信息完整回答问题。输出 yes 或 no。"""
+        if llm.generate(judge_prompt).strip().lower() == "yes":
+            break
+
+        # 生成下一步子问题
+        sub_prompt = f"原始问题：{query}\n已有信息：{accumulated_context}\n请提出一个补充检索问题。"
+        current_query = llm.generate(sub_prompt)
+
+    # 综合所有信息生成答案
+    final_prompt = f"综合以下信息回答问题。\n\n{accumulated_context}\n\n问题：{query}"
+    return llm.generate(final_prompt)</code></pre>
+
+<div class="callout callout-info">
+    <div class="callout-title">信息</div>
+    Adaptive RAG 的路由分类器可以用微调的小模型实现（如 fine-tuned BERT），推理延迟可以控制在毫秒级。也可以用 LLM + few-shot 的方式快速搭建原型，后续再替换为专用分类器。
+</div>
+
+<!-- ==================== 6. Agentic RAG ==================== -->
+<h2>6. Agentic RAG（基于 Agent 的 RAG）</h2>
+
+<h3>6.1 核心原理</h3>
+<p>Agentic RAG 是目前最前沿的 RAG 范式。它将检索流程从固定的 Pipeline 转变为由多个 Agent 协作完成的动态系统。每个 Agent 拥有独立的角色、工具和决策能力。</p>
+
+<h3>6.2 Agent 角色设计</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>Agent 角色</th>
+            <th>职责</th>
+            <th>可用工具</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Router Agent</strong></td>
+            <td>分析查询意图，决定路由到哪个专门的检索 Agent</td>
+            <td>查询分类器、意图识别</td>
+        </tr>
+        <tr>
+            <td><strong>Retrieval Agent</strong></td>
+            <td>从特定知识源检索相关信息</td>
+            <td>向量检索、SQL 查询、Web 搜索、API 调用</td>
+        </tr>
+        <tr>
+            <td><strong>Reasoning Agent</strong></td>
+            <td>对检索到的信息进行推理、对比、验证</td>
+            <td>逻辑推理、事实验证、矛盾检测</td>
+        </tr>
+        <tr>
+            <td><strong>Synthesis Agent</strong></td>
+            <td>综合各 Agent 的输出，生成最终答案</td>
+            <td>文本生成、格式化、引用标注</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>6.3 与传统 Pipeline 的对比</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>维度</th>
+            <th>传统 Pipeline RAG</th>
+            <th>Agentic RAG</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>流程控制</td>
+            <td>静态、预定义的固定步骤</td>
+            <td>动态、Agent 根据情况自主决策</td>
+        </tr>
+        <tr>
+            <td>错误处理</td>
+            <td>失败则终止或重试</td>
+            <td>Agent 可以反思、换策略、换数据源</td>
+        </tr>
+        <tr>
+            <td>多源检索</td>
+            <td>通常只查询一个知识库</td>
+            <td>多个 Agent 可并行查询不同数据源</td>
+        </tr>
+        <tr>
+            <td>推理能力</td>
+            <td>单次生成，无推理迭代</td>
+            <td>支持多步推理、自我验证</td>
+        </tr>
+        <tr>
+            <td>可扩展性</td>
+            <td>增加功能需修改 Pipeline</td>
+            <td>添加新 Agent 即可扩展能力</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>6.4 LangGraph 实现示例</h3>
+<pre><code>from typing import TypedDict, List, Annotated
+from langgraph.graph import StateGraph, END
+import operator
+
+
+# 定义状态
+class AgentState(TypedDict):
+    query: str
+    route: str
+    retrieved_docs: Annotated[List[str], operator.add]
+    reasoning: str
+    answer: str
+
+
+# === 各 Agent 节点 ===
+
+def router_agent(state: AgentState) -> dict:
+    """路由 Agent：分析查询并决定走向"""
+    query = state["query"]
+    # 实际项目中用 LLM 判断
+    if "对比" in query or "比较" in query:
+        route = "comparison"
+    elif "最新" in query or "2024" in query:
+        route = "recent"
+    else:
+        route = "general"
+    return {"route": route}
+
+
+def retrieval_agent_kb(state: AgentState) -> dict:
+    """检索 Agent：查询本地知识库"""
+    docs = vector_store.similarity_search(state["query"], k=5)
+    return {"retrieved_docs": [doc.page_content for doc in docs]}
+
+
+def retrieval_agent_web(state: AgentState) -> dict:
+    """检索 Agent：查询网络"""
+    web_results = web_search_tool.invoke(state["query"])
+    return {"retrieved_docs": [web_results]}
+
+
+def reasoning_agent(state: AgentState) -> dict:
+    """推理 Agent：对检索结果进行推理验证"""
+    docs = "\n".join(state["retrieved_docs"])
+    prompt = f"""分析以下检索到的信息，评估其质量和相关性，
+识别可能的矛盾或缺失，给出推理结论。
+
+查询：{state['query']}
+检索结果：{docs}
+
+推理结论："""
+    reasoning = llm.invoke(prompt).content
+    return {"reasoning": reasoning}
+
+
+def synthesis_agent(state: AgentState) -> dict:
+    """综合 Agent：生成最终答案"""
+    prompt = f"""基于以下推理结论，生成清晰、准确的最终答案。
+
+查询：{state['query']}
+推理过程：{state['reasoning']}
+
+最终答案："""
+    answer = llm.invoke(prompt).content
+    return {"answer": answer}
+
+
+# === 构建图 ===
+graph = StateGraph(AgentState)
+
+# 添加节点
+graph.add_node("router", router_agent)
+graph.add_node("retrieve_kb", retrieval_agent_kb)
+graph.add_node("retrieve_web", retrieval_agent_web)
+graph.add_node("reasoner", reasoning_agent)
+graph.add_node("synthesizer", synthesis_agent)
+
+# 路由逻辑
+def route_decision(state: AgentState) -> str:
+    route = state["route"]
+    if route == "recent":
+        return "retrieve_web"
+    else:
+        return "retrieve_kb"
+
+# 添加边
+graph.set_entry_point("router")
+graph.add_conditional_edges("router", route_decision)
+graph.add_edge("retrieve_kb", "reasoner")
+graph.add_edge("retrieve_web", "reasoner")
+graph.add_edge("reasoner", "synthesizer")
+graph.add_edge("synthesizer", END)
+
+# 编译并运行
+app = graph.compile()
+result = app.invoke({"query": "GraphRAG 和 Self-RAG 的区别是什么？", "retrieved_docs": []})
+print(result["answer"])</code></pre>
+
+<div class="callout callout-tip">
+    <div class="callout-title">提示</div>
+    LangGraph 的状态图机制非常适合构建 Agentic RAG。关键是将每个 Agent 视为图中的一个节点，用条件边实现动态路由，用共享状态在 Agent 之间传递信息。这样既保持了灵活性，又便于调试和监控。
+</div>
+
+<!-- ==================== 7. 如何选择 ==================== -->
+<h2>7. 如何选择 RAG 范式</h2>
+
+<p>选择合适的 RAG 范式取决于你的具体场景。以下是决策参考表：</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>场景特征</th>
+            <th>推荐范式</th>
+            <th>理由</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>简单问答，查询模式固定</td>
+            <td><span class="tag tag-green">Naive / Advanced RAG</span></td>
+            <td>足够应对，架构简单易维护</td>
+        </tr>
+        <tr>
+            <td>需要全局理解（"概述""趋势"）</td>
+            <td><span class="tag tag-purple">GraphRAG</span></td>
+            <td>知识图谱 + 社区摘要是唯一能高效回答全局问题的方案</td>
+        </tr>
+        <tr>
+            <td>幻觉控制要求高（金融、医疗）</td>
+            <td><span class="tag tag-blue">Self-RAG / CRAG</span></td>
+            <td>反思和纠正机制能显著降低幻觉率</td>
+        </tr>
+        <tr>
+            <td>查询复杂度差异大</td>
+            <td><span class="tag tag-orange">Adaptive RAG</span></td>
+            <td>动态路由在延迟和成本之间取得平衡</td>
+        </tr>
+        <tr>
+            <td>多数据源、复杂工作流</td>
+            <td><span class="tag tag-red">Agentic RAG</span></td>
+            <td>Agent 协作天然支持多源和动态决策</td>
+        </tr>
+        <tr>
+            <td>需要多跳推理（论文、法律文书）</td>
+            <td><span class="tag tag-purple">GraphRAG / Agentic RAG</span></td>
+            <td>图结构或多步推理 Agent 能处理复杂关系</td>
+        </tr>
+    </tbody>
+</table>
+
+<div class="callout callout-key">
+    <div class="callout-title">重要原则</div>
+    <strong>先从简单方案开始，按需升级。</strong> 大多数项目用 Advanced RAG（查询重写 + 重排序 + 压缩）就能取得不错的效果。只在确定需要全局理解、强幻觉控制或多源协作时，再引入更复杂的范式。过度工程化是 RAG 项目最常见的失败原因。
+</div>
+
+<!-- ==================== 8. 动手练习 ==================== -->
+<h2>8. 动手练习</h2>
+
+<div class="exercise-box">
+    <h4>练习 1：实现文档质量评估器</h4>
+    <p>为 CRAG 实现一个轻量级的文档质量评估器。给定查询和文档，输出 <code>correct</code>、<code>ambiguous</code> 或 <code>incorrect</code>。</p>
+    <p><strong>要求：</strong></p>
+    <ul>
+        <li>使用 Prompt Engineering 而非微调模型</li>
+        <li>输出结构化 JSON（包含评分和理由）</li>
+        <li>尝试用 GPT-4o-mini 等小模型实现，评估其准确率</li>
+    </ul>
+</div>
+
+<div class="exercise-box">
+    <h4>练习 2：构建查询复杂度分类器</h4>
+    <p>为 Adaptive RAG 实现查询复杂度分类器，支持 <code>simple</code>、<code>moderate</code>、<code>complex</code> 三个级别。</p>
+    <p><strong>步骤：</strong></p>
+    <ul>
+        <li>手动编写 20 个标注样本（每级 6-7 个）</li>
+        <li>先用 few-shot Prompt 方式实现</li>
+        <li>测试边界 case：如"什么是机器学习"（简单）vs"机器学习和深度学习的关系"（中等）</li>
+        <li>（进阶）用标注数据微调一个 BERT 分类器，对比 LLM 方案</li>
+    </ul>
+</div>
+
+<div class="exercise-box">
+    <h4>练习 3：用 LangGraph 搭建带纠正机制的 RAG</h4>
+    <p>基于 CRAG 的思想，使用 LangGraph 实现一个带纠正机制的 RAG 系统。</p>
+    <p><strong>要求：</strong></p>
+    <ul>
+        <li>至少包含：检索节点、评估节点、纠正节点、生成节点</li>
+        <li>评估节点输出 <code>correct</code> / <code>incorrect</code>，决定是否触发纠正</li>
+        <li>纠正策略：重新改写查询后再次检索</li>
+        <li>在 LangGraph Studio 中可视化你的图</li>
+    </ul>
+</div>
+
+<div class="exercise-box">
+    <h4>练习 4：对比实验</h4>
+    <p>使用同一个测试集（至少 20 个问题），分别用 Naive RAG 和 CRAG 回答，对比以下指标：</p>
+    <ul>
+        <li>答案准确率（人工评估或 LLM-as-Judge）</li>
+        <li>幻觉率（答案中无法被文档支持的陈述占比）</li>
+        <li>平均延迟</li>
+        <li>平均 Token 消耗</li>
+    </ul>
+    <p>将结果整理成对比表，分析 CRAG 的改进幅度和额外开销。</p>
+</div>
+
+<footer>
+    <p>高级 RAG 范式 -- RAG 教程系列</p>
+</footer>
+</div></section>

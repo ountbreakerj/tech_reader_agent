@@ -1,0 +1,73 @@
+<section id="sec-h-lec-05" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 05 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-05">第 05 讲 · 让跨会话的任务保持上下文连续</h1>
+    <p>Claude Code 跑了 30 分钟，上下文快满了。你开个新会话继续，然后发现：它不记得上次做了什么决策、为什么选了方案 A、哪些文件已经改过。它得花 15 分钟重新探索，而且可能跟上次的做法不一致。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>上下文窗口是有限的资源</h2>
+    <p>即使窗口大小增长到 1M tokens，复杂任务依然会用完——agent 不只在生成代码，还要理解代码库、跟踪决策历史、处理工具输出、维护对话上下文，这些加起来增长得比窗口扩容快得多。</p>
+    <p>更深层的问题：agent 产生的信息不是均匀重要的。中间推理步骤包含"为什么"——为什么选了方案 A 而非 B，为什么跳过了某个优化。最终输出只包含"是什么"——代码本身。压缩通常保留后者但丢了前者。下一个会话看到代码却不知道为什么这么写，可能会"优化"掉一个有意为之的设计决策。</p>
+    <p>Anthropic 观察到的<strong>"上下文焦虑"</strong>：当 agent 感觉上下文快满了，它们会匆忙结束当前工作，跳过验证步骤，选简单方案而非最优方案。这是一种非理性的资源焦虑。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>状态持久化工件</h2>
+    <p>核心思路：<strong>把 agent 当成一个每次会话都会清空短期记忆的工程师来管理。</strong>每次"下班"前，必须把关键信息写下来，让下一个"接班"的 agent 能快速上手。</p>
+    <p><strong>工具 1：进度文件（PROGRESS.md）</strong></p>
+    <div class="codeblock">
+      <pre><code>## 当前状态
+- 最新 commit: abc1234 (feat: add user preferences endpoint)
+- 测试状态: 42/43 通过 (test_pagination_edge_case 失败)
+- Lint: 通过
+
+## 已完成
+- [x] 用户模型和数据库迁移
+- [x] 基础 CRUD 端点
+
+## 进行中
+- [ ] 分页功能 (90% - 边界条件测试失败)
+
+## 已知问题
+- test_pagination_edge_case 在空结果集时返回 500
+
+## 下一步
+1. 修复分页边界条件 bug
+2. 添加"是否包含已删除用户"的查询参数</code></pre></div>
+    <p><strong>工具 2：决策日志（DECISIONS.md）</strong>——记录重要设计决策和原因，格式：什么决策、为什么、什么时候做的。</p>
+    <p><strong>工具 3：git 提交作为检查点。</strong> 每完成一个原子工作单元就提交，commit message 要说清楚做了什么和为什么。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>压缩 vs 重置</h2>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">策略</th><th scope="col">优点</th><th scope="col">缺点</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">压缩（同会话内摘要）</th><td>保留连续性，agent 能看到"是什么"</td><td>"为什么"经常在摘要中丢失；不能消除上下文焦虑</td></tr>
+        <tr><th scope="row">重置（开新会话）</th><td>干净的心理状态，无焦虑</td><td>依赖交接工件的完备性，漏了关键信息就会浪费时间</td></tr>
+      </tbody>
+    </table></div>
+    <p>Anthropic 的实际数据：对于 Sonnet 4.5，上下文焦虑足够严重，以至于压缩单独不够用，上下文重置成为 harness 设计的关键组件。但对于 Opus 4.5，这种行为大幅减弱，可以不依赖重置。这意味着：<strong>harness 设计需要对目标模型有具体的理解，不能套用通用模板。</strong></p>
+  </section>
+
+  <section class="harness-section">
+    <h2>量化效果</h2>
+    <p>带状态持久化文件 vs 不带，对 12 个功能点的博客系统项目（预计 5 个会话）的对比：</p>
+    <ul>
+      <li>重建时间：从约 15 分钟降到约 3 分钟（减少约 78%）</li>
+      <li>功能完成率：从 58% 提升到 100%</li>
+      <li>隐含缺陷率：从 43% 降到 8%</li>
+    </ul>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-04">← 第 04 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-06">第 06 讲 →</a>
+  </nav>
+</section>

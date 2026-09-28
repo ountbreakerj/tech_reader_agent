@@ -1,0 +1,2098 @@
+<div class="dsh-scope">
+<div class="wrap">
+
+    <!-- ===================== S0 导读 ===================== -->
+    <section id="s0">
+      <div class="sec-head"><h1><span class="num">导读</span>怎么读这份文档</h1>
+        <div class="lead">写给「主语言 Python、不懂 TypeScript、在 agent/LLM 领域工作」的你</div>
+      </div>
+      <div class="intro-box">
+        <p><b>这份文档在做什么：</b>DeepSeek Harness（简称 DSH）是一个「一切皆插件」的 agent 运行时，核心跑在一个叫 <span class="code inl">Cordis</span> 的微内核上。它用 TypeScript 写，但设计思想与语言无关——所以我会全程用 <b>Python / agent 领域的类比</b>帮你建立直觉，不要求你懂 TS。</p>
+        <p><b>怎么读：</b></p>
+        <ul>
+          <li>左侧导航按「思想 → 脊梁 → 各能力家族」分层，建议从头顺着读。</li>
+          <li>每个模块是一张可折叠卡片：<span class="code inl">代码讲解</span> 说它「做了什么、关键接口是什么」；<span class="code inl">白话梳理</span> 用大白话 + Python 类比说清「怎么做的、为什么这样设计」。</li>
+          <li>顶部搜索框可过滤所有模块（按模块名 / 关键词），例如搜 <code class="inl">sandbox</code>、<code class="inl">waterfall</code>、<code class="inl">子代理</code>。</li>
+        </ul>
+        <p class="note">贯穿全文的三个核心比喻：<b>① ctx ≈ 依赖注入容器</b>（所有服务挂在 <code class="inl">ctx.xxx</code> 上）；<b>② waterfall ≈ ASGI / 中间件</b>（<code class="inl">next()</code> 放行、<code class="inl">return</code> 短路）；<b>③ 会话日志 ≈ append-only 的 git 历史</b>（只增不减，视图都是投影出来的）。记住这三个，全文就通了。</p>
+      </div>
+    </section>
+
+    <!-- ===================== S1 思想地基 ===================== -->
+    <section id="s1">
+      <div class="sec-head"><h1><span class="num">1</span>Cordis：插件与服务</h1>
+        <div class="lead">整个项目的「操作系统」——理解它，后面所有模块都是它的应用</div>
+      </div>
+      <div class="intro-box">
+        DSH 没有「主程序里硬编码初始化 A、B、C」。运行时是一棵被「声明」出来的插件树：每个功能（哪怕是 LLM 调用、工具、UI、沙箱）都是一个 Cordis <b>插件（plugin）</b>。插件要么是一个继承 <code class="inl">Service</code> 的类，要么是一个函数 <code class="inl">apply(ctx)</code>。
+      </div>
+
+      <div class="card" data-kw="cordis 插件 服务 ctx inject effect 依赖注入 生命周期">
+        <button class="card-head"><span class="tname">插件与服务模型</span><span class="ttag">@deepseek-ai/cordis（vendored）</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <p>核心 API 极其简单，但语义很强：</p>
+            <pre>// 插件 = 类（服务定义）或函数（副作用装配）
+export class FooService extends Service {
+  static inject = ['bar']        // 声明我依赖谁（决定挂载顺序）
+  constructor(ctx) { super(ctx, 'foo'); /* 注册到 ctx.foo */ }
+}
+
+// 或者函数式插件
+export function apply(ctx, config) {
+  ctx.effect(() => ctx.foo.register(...), 'foo.register')  // 可逆的副作用
+}</pre>
+            <ul>
+              <li><code class="pkg">ctx</code>：共享的「服务仓库」，按名字 <code class="inl">ctx.&lt;key&gt;</code> 存取。你在任意插件里都能拿到别人注册的服务。</li>
+              <li><code class="pkg">inject</code>：声明依赖。Loader 据此推导挂载顺序（被依赖者先挂），<b>不是</b>你手写 boot 顺序。</li>
+              <li><code class="pkg">ctx.effect() / ctx.on()</code>：所有「注册」都是<b>可逆效应</b>。插件卸载时自动回滚——没有手动清理的意大利面条。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把它想成 Python 的 <b>依赖注入容器（如 dependency-injector / FastAPI 的 Depends）</b>：</p>
+            <ul>
+              <li><code class="inl">ctx</code> 就是一个全局容器，里面按名字存各种「单例服务」（LLM、工具表、会话仓库……）。</li>
+              <li>你写一个插件，等于「往容器里塞一个服务，并声明我需要哪些别的已存在的服务」。</li>
+              <li><b>关键好处</b>：没有特权核心。Cordis 内核本身不知道「LLM」「工具」是什么，它只提供「挂载/注入/效应回滚」机制。所有业务都是平等的插件。换一个能力（比如把本地 bash 换成沙箱 bash）只是换一个插件，上层工具一行都不用动。</li>
+              <li><b>为什么用 effect 而不是 return 注册</b>：因为插件卸载要干净。effect 返回一个「撤销函数」，卸载时 Cordis 自动调用——类比 Python 的 <code class="inl">try/finally</code> 或 context manager 的 <code class="inl">__exit__</code>。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="waterfall serial emit parallel bail 派发 事件 中间件 钩子 环绕 串行 广播 否决 短路 拦截">
+        <button class="card-head"><span class="tname">事件派发：waterfall / serial / emit（三种 dispatch 模式详解）</span><span class="ttag">Cordis 事件总线的核心语义</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解：三种模式到底怎么跑（均对照 vendor/cordis/src/events.ts 真实实现）</div>
+            <p style="margin:4px 0 8px;">Cordis 的事件总线 <code class="inl">ctx.events</code> 一共支持 <b>5 种派发模式</b>：<code class="inl">emit / parallel / serial / bail / waterfall</code>。你日常高频率只会用到前三种，<code class="inl">parallel</code> 与 <code class="inl">bail</code> 是它们的近亲，文末顺带一提。所有模式都用 <code class="inl">ctx.on('&lt;事件名&gt;', 监听器)</code> 注册监听器，区别只在「监听器签名」和「调用方怎么把控制权交下去」。</p>
+            <table style="border-collapse:collapse;width:100%;font-size:13px;margin:6px 0;">
+              <thead><tr style="background:#23262e;">
+                <th style="border:1px solid #3a3f4b;padding:6px 8px;text-align:left;">模式</th>
+                <th style="border:1px solid #3a3f4b;padding:6px 8px;text-align:left;">监听器签名</th>
+                <th style="border:1px solid #3a3f4b;padding:6px 8px;text-align:left;">运行机制</th>
+                <th style="border:1px solid #3a3f4b;padding:6px 8px;text-align:left;">典型用途 / 真实事件</th>
+              </tr></thead>
+              <tbody>
+                <tr><td style="border:1px solid #3a3f4b;padding:6px 8px;"><b>waterfall</b></td>
+                  <td style="border:1px solid #3a3f4b;padding:6px 8px;"><code>(payload, next)</code></td>
+                  <td style="border:1px solid #3a3f4b;padding:6px 8px;">由外到内包裹；调 <code>next()</code> 放行，不调则<b>否决</b>整条链（含内置行为）；<code>return</code> 覆盖结果</td>
+                  <td style="border:1px solid #3a3f4b;padding:6px 8px;">改写/拦截：<code>agent/pre-step</code>、<code>agent/request</code>、<code>tools/pre-execute/execute/post-execute</code>、<code>llm/stream</code></td></tr>
+                <tr><td style="border:1px solid #3a3f4b;padding:6px 8px;"><b>serial</b></td>
+                  <td style="border:1px solid #3a3f4b;padding:6px 8px;"><code>(payload)</code><br>（无 next）</td>
+                  <td style="border:1px solid #3a3f4b;padding:6px 8px;">依次 <code>await</code> 每个监听器；遇到首个<b>「bail 值」</b>（非 null / 非 false / 非 undefined）立即停并把它作为结果。<b>不会</b>把上值喂给下个</td>
+                  <td style="border:1px solid #3a3f4b;padding:6px 8px;">有序裁决：<code>agent/turn-stopping</code>（「该停了吗」）</td></tr>
+                <tr><td style="border:1px solid #3a3f4b;padding:6px 8px;"><b>emit</b></td>
+                  <td style="border:1px solid #3a3f4b;padding:6px 8px;"><code>(...args)</code></td>
+                  <td style="border:1px solid #3a3f4b;padding:6px 8px;"><b>同步</b>调用所有监听器，<b>不 await</b> 它们返回的 Promise；发了就走</td>
+                  <td style="border:1px solid #3a3f4b;padding:6px 8px;">广播事实：所有 durable 会话日志（<code>turn/start</code>、<code>assistant/message</code>、<code>tool/result</code>…）、<code>agent/error</code>、<code>agent/status</code></td></tr>
+              </tbody>
+            </table>
+
+            <p style="margin:10px 0 4px;"><b>① waterfall —— 环绕中间件（最强大，也最常用）</b></p>
+            <ul style="margin:2px 0 6px;">
+              <li>监听器签名 <code class="inl">(payload, next)</code>：<b>最后一个参数才是 <code class="inl">next</code></b>，前面的参数是派发的 payload（如 <code class="inl">{ agent, messages, signal }</code>）。</li>
+              <li>机制（<code class="inl">events.ts:234</code>）：所有监听器按注册顺序「由外到内」包裹，最内层是派发时传入的默认实现（built-in）。调用 <code class="inl">next()</code> 才把控制权交给下一个监听器（最终到底层默认行为）；<b>不调用 <code class="inl">next()</code> 就等于否决整条链路</b>，包括内置行为。<code class="inl">return</code> 一个值则覆盖整条链路的结果。</li>
+              <li>真实例子（<code class="inl">packages/session/session-checkpoint-policy</code>）：每个 step 前先 flush 会话，再放行：
+<pre>ctx.on('agent/pre-step', async ({ agent }, next): Promise&lt;PreStepDecision&gt; =&gt; {
+  await ctx.sessions.flush(agent.session)
+  return next()            // 放行，并返回 next() 的结果
+})</pre></li>
+              <li>真实例子（<code class="inl">packages/subagent/subagent-in-process-driver</code>）：先 <code class="inl">await next()</code> 拿到下游决策，再据结果改写：
+<pre>childCtx.on('agent/pre-step', async ({ agent }, next) =&gt; {
+  const decision = await next()   // 先让链走完
+  if (!appended &amp;&amp; decision.kind === 'enter') { /* 再改写 */ }
+})</pre></li>
+              <li>类比 Python/ASGI：就是 <code class="inl">middleware(request, call_next)</code>，包裹在「真正处理」外面；<code class="inl">call_next()</code> ≈ <code class="inl">next()</code>。</li>
+              <li><b>高频坑</b>：忘了 <code class="inl">next()</code> → 链路卡死或被静默否决；想改写结果就 <code class="inl">await next()</code> 后处理再 return，或自己 <code class="inl">return</code> 一个值短路。</li>
+            </ul>
+
+            <p style="margin:6px 0 4px;"><b>② serial —— 有序裁决链（注意：<span style="color:#e6a23c;">不是值管道！</span>）</b></p>
+            <ul style="margin:2px 0 6px;">
+              <li>监听器签名 <code class="inl">(payload)</code>：<b>没有 <code class="inl">next</code></b>。</li>
+              <li>机制（<code class="inl">events.ts:204</code>）：按注册顺序<b>依次 <code class="inl">await</code></b> 每个监听器；一旦某个监听器返回一个「bail 值」（<code class="inl">isBailed(value) = value !== null &amp;&amp; value !== false &amp;&amp; value !== undefined</code>），立即<b>停止并把该值作为结果返回</b>。否则全部跑完、返回 undefined。</li>
+              <li><b>关键纠正</b>：serial <b>不会</b>把上一个返回值喂给下一个监听器——每个监听器拿到的都是<b>同一份原始参数</b>。它本质是「谁先表态谁说了算 / 第一个要停的就让整轮停」的<b>有序短路</b>，不是 <code class="inl">reduce</code> 式的值管道。（之前简版说「前一个喂给后一个」是不准确的，以此为准。）</li>
+              <li>真实例子（<code class="inl">packages/core/agent-loop/src/agent.ts:296</code>）：每轮结束前问所有插件「该停了吗」：
+<pre>// 调用方
+await this.dispatch.serial('agent/turn-stopping', { turn, signal })
+
+// 某个插件：想继续就注入一条消息，把轮子再转一轮
+ctx.on('agent/turn-stopping', ({ agent: subject }) =&gt; {
+  if (steps &lt; 3) subject.steer(createUserMessage({
+    content: [{ type: 'text', text: 'continue' }], source: { kind: 'plugin' }
+  }))
+})</pre></li>
+              <li>类比 Python：
+<pre>async def serial(listeners, payload):
+    for listener in listeners:            # 按注册顺序
+        r = await listener(payload)       # 永远拿到同一份 payload
+        if r not in (None, False):        # 首个「bail 值」即终
+            return r</pre></li>
+              <li>与 waterfall 区别一句话：waterfall 用 <code class="inl">next()</code> 串成「包裹链」可改写可放行；serial 没有 next，用「返回值是否 bail」做有序短路。</li>
+            </ul>
+
+            <p style="margin:6px 0 4px;"><b>③ emit —— 广播（只发不收）</b></p>
+            <ul style="margin:2px 0 6px;">
+              <li>监听器签名 <code class="inl">(...args)</code>：任意参数，无返回值约定。</li>
+              <li>机制（<code class="inl">events.ts:194</code>）：<b>同步</b>遍历所有监听器并调用，<b>不会 await 监听器返回的 Promise</b>。发了就走，不等回执。</li>
+              <li>真实例子：会话服务对每个 durable 事件只发不收；持久化插件只是订阅去落盘，发的人根本不等它：
+<pre>// 会话服务：durable 事件只发不收
+ctx.emit('session/event', session, event)
+
+// 持久化插件：订阅去落盘，发的人不等它
+ctx.on('session/event', (_session, event) =&gt; {
+  if (event.type === 'step/end') steps++
+})</pre></li>
+              <li>类比 Python：<code class="inl">logging.info(...)</code> 或发布-订阅总线 <code class="inl">bus.publish(topic, payload)</code>——发布者不关心谁在听、听的人多久处理完。</li>
+              <li><b>坑</b>：若在 emit 监听器里做异步工作却没自己接住 Promise，错误会被<b>吞掉</b>（emit 不 await）。需要「等结果」就该用 waterfall/serial 而非 emit。</li>
+            </ul>
+
+            <p style="margin:6px 0 0;"><b>补充两位近亲</b>：<code class="inl">parallel</code> 并发跑所有监听器、<code class="inl">await</code> 全部（<code class="inl">Promise.allSettled</code>，任一拒绝则抛 <code class="inl">AggregateError</code>），用于「都要做、互不依赖、要等全做完」；<code class="inl">bail</code> 是 serial 的<b>同步</b>版（按注册顺序跑，遇首个 bail 值即停、同步返回）。<b>记忆口诀</b>：要「改写/拦截」用 waterfall；要「谁先表态谁定」用 serial；要「只通知不等」用 emit。</p>
+          </div>
+          <div class="blk plain" style="background:#1b1f27;border-left:3px solid #d29922;">
+            <div class="lab">设计哲学：为什么这三种模式必须分开（各自回答什么问题）</div>
+            <p style="margin:2px 0 6px;">每一种模式不是「调用方式不同」这么浅，而是 Cordis 把「插件怎么介入运行时」这个问题，按「扩展点到底要向贡献者问什么」拆成了三个原语。三者回答的是三类<b>本质不同的问题</b>，硬塞进一个机制会丢表达力或逼出 hack：</p>
+            <ul style="margin:2px 0 6px;">
+              <li><b>emit 回答「我发生了」（通知）</b>。可观测性 / 持久化 / UI 必须在事件发生时作出反应，但<b>绝不能影响控制流</b>。若把通知做成「要等返回值」，发日志的人就被迫关心谁在听、听的人多久处理完——日志与观察者被耦合死。所以 emit 单向、不收返回值、不同步等待。Python 类比：<code class="inl">logging.info(...)</code> 或发布-订阅 <code class="inl">bus.publish(topic, payload)</code>。agent 里用在 <code class="inl">session/event</code>：一条 <code class="inl">step/end</code> 发生了，持久化 / 遥测 / UI 都去听，但都不改变循环走向。</li>
+              <li><b>waterfall 回答「你来处理 / 审批这个东西」（加工）</b>。此时<b>值才是重点</b>：同一个 payload（要发给模型的 prompt、要执行的工具调用）需被多个插件依次丰富 / 校验 / 改写 / 否决，真正被用的是「最后一个环节产出的那个版本」。这正是<b>嵌套包裹（middleware）</b>语义：外层先拿控制权，调 <code class="inl">next()</code> 把值交给内层，内层结果再返给外层。Python 类比：ASGI 的 <code class="inl">middleware(request, call_next)</code>、<code class="inl">functools.reduce</code> 合成包装函数、装饰器堆叠——一份文件依次盖几个部门的章，最后一版才生效。agent 里用在 <code class="inl">agent/pre-step / agent/request / tools/* / llm/stream</code>：凡是「模型看到的 payload」都走 waterfall。</li>
+              <li><b>serial 回答「你来决定」（裁决）</b>。决策必须「<b>任何参与者（尤其安全护栏）都能立即叫停、且顺序优先</b>」。若用 waterfall 做裁决，值会流过所有监听器、只有最后一个能真正决定，那「任意方可否决」就被破坏。serial 契约：每个监听器拿同一份原始参数，返回 void 表示放行，返回 bail 值表示「停，用这个值」，<b>第一个 bail 立即终止整条链</b>。Python 类比：<code class="inl">for h in handlers: r = h(payload); if r: return r</code>（顺序短路、首个非零即定）；Django 的 <code class="inl">process_request</code> 返回 HttpResponse 即短路。agent 里用在 <code class="inl">agent/turn-stopping</code>（「这轮该停了吗」）——护栏一旦 bail，整轮立即停，不用等其他插件表态。<b>注意：serial 不是值管道，不会把上一个人的返回值喂给下一个人，它要的是「裁决」不是「加工」。</b></li>
+            </ul>
+            <p style="margin:2px 0 4px;"><b>为什么不能合并成一个机制</b>：① 只用 emit → 收不到结果，被迫建带外通道（如全局变量传「该停了吗」），脆弱且类型不安全；② 只用 waterfall → 把决策塞进值管道，只有最后一个监听器能真正决定，破坏「任意方可否决」；③ 只用 serial → 值无法沿链变形，做不了 prompt 拼装这类「多贡献者富集同一份 payload」的事。所以本质是：<b>把「扩展点要问的问题的语义」显式建模，并让类型系统强制贡献者匹配契约</b>——这是把「依赖倒置」用到了控制流上：核心只依赖「事件 + 模式」这个抽象，不依赖任何具体行为。agent-loop 作者写 <code class="inl">dispatch.waterfall('agent/pre-step', ...)</code> 时，根本不知道、也不需要知道有哪些插件挂上来了。</p>
+            <p style="margin:2px 0 0;"><b>收尾·映射回你学过的 turn/step 生命周期</b>：<code class="inl">emit → session/event</code>（被多人观察但不影响流程）；<code class="inl">waterfall → pre-step / request / tools/* / llm/stream</code>（塑造「模型看到的 payload」）；<code class="inl">serial → turn-stopping</code>（决定控制流走向：停还是继续）。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么这样设计）</div>
+            <ul>
+              <li><b>总纲</b>：Cordis 把「插件如何介入运行时」统一抽象成 5 种派发语义；核心脊梁和所有能力接缝，都只是这些语义的<b>具体实例</b>。你不用改框架，只要 <code class="inl">ctx.on('&lt;事件名&gt;', 监听器)</code> 就能挂到任意扩展点。</li>
+              <li><b>为什么需要三种</b>：因为「介入」有三种本质不同的意图——(a) 围绕一个动作前后<b>包裹并可能改写</b>（waterfall）；(b) 多个判断者<b>按序表决、第一个反对就停</b>（serial）；(c) 只是<b>广播一个事实</b>、谁爱听听（emit）。只用一种，要么丢失表达力、要么逼大家 hack。</li>
+              <li><b>关键不变量</b>：所有 durable 会话事件都是 <code class="inl">emit</code>（只记不拦）；所有「钩子 / 接缝」（<code class="inl">pre-step</code>、<code class="inl">request</code>、<code class="inl">tools/*</code>、<code class="inl">llm/stream</code>）都是 <code class="inl">waterfall</code>；<code class="inl">turn-stopping</code> 这种「有序裁决」用 <code class="inl">serial</code>。</li>
+              <li><b>关联已学</b>：这正是第 3 章「接缝三件套」在运行时的落点——Definition 声明<b>事件名</b>，Provider/Consumer 通过 <code class="inl">ctx.on()</code> 挂监听器介入；而「事件名 + 派发模式」就是这个接缝的<b>接口契约</b>。比如 <code class="inl">llm/stream</code> 是 waterfall 接缝，<code class="inl">packages/llm/llm/src/invariant.ts:88</code> 用 <code class="inl">{ global:true, prepend:true }</code> 在最外层包了一层流校验：<code class="inl">ctx.on('llm/stream', (_options, next) =&gt; validateStream(next(), fail), { global:true, prepend:true })</code>。</li>
+              <li><b>一句话上手</b>：看到 <code class="inl">ctx.on('xxx', (...args, next) =&gt; ...)</code> 带 <code class="inl">next</code> 的就是可改写拦截点；看到没 <code class="inl">next</code> 且用于「表决」的就是 serial；看到 <code class="inl">ctx.emit</code> 就是记账/广播、别指望它返回东西。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S2 核心脊梁 ===================== -->
+    <section id="s2">
+      <div class="sec-head"><h1><span class="num">2</span>任务怎么运行：<span class="pkg">packages/core</span></h1>
+        <div class="lead">session / system-prompt / tools / agent / agent-loop —— 已读真实源码</div>
+      </div>
+      <div class="intro-box">
+        这五个包是「脊梁」：它们定义了「一次对话怎么从消息变成模型调用、再变成工具执行、再回到模型」的骨架。下面贴的是<strong>真实源码</strong>，不是伪代码。
+      </div>
+
+      <div class="card" data-kw="core session 会话 事件溯源 日志 append deepFreeze deriveMessages 投影">
+        <button class="card-head"><span class="tname">session</span><span class="ttag">packages/core/session · 事件溯源的真相源</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <pre>// Session 是 agent 全量交互历史的 append-only 真相源
+session.append&lt;T&gt;(type, data, ...opts)   // 追加事件：自动 deepFreeze + 单调 seq
+session.deriveMessages()                  // 从日志「投影」出模型可见的消息历史</pre>
+            <ul>
+              <li>每条事件被 <code class="inl">deepFreeze</code>（不可变），带单调递增 <code class="inl">seq</code>。</li>
+              <li>「模型可见」与「已记录」是<b>同一件事</b>：不进日志就进不了模型上下文。</li>
+              <li>持久化是<strong>独立插件</strong>（在 session 组里），订阅 <code class="inl">session/event</code> 去落盘，与日志本身解耦。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把一次对话当成一条 <b>git commit 历史</b>：</p>
+            <ul>
+              <li>每说一句话、模型每回一句、每次调工具，都等于 <code class="inl">git commit</code> 一条不可变记录。</li>
+              <li><code class="inl">deriveMessages()</code> 就像 <code class="inl">git checkout</code> 出「当前工作区」——从整条历史重建出模型这次该看到的消息列表。改了历史？视图自动跟着变。</li>
+              <li><b>为什么这样设计</b>：可回放、可压缩、可查询、可跨进程重建。崩溃恢复 = 重放日志。这是后面 compaction / session-query / projection 全部模块的基石。</li>
+            </ul>
+          </div>
+          <div class="blk plain" style="background:#15202b;border-left:3px solid #58a6ff;">
+            <div class="lab">深入：真实 API 与运行机理（packages/core/session/src/index.ts）</div>
+            <ul>
+              <li><b>核心类</b>：<code class="inl">class Session</code>（index.ts:425）持有 <code class="inl">log: SessionEvent[]</code>；<code class="inl">append&lt;T&gt;(type, data)</code>（index.ts:604）写入 <code class="inl">deepFreeze({ type, seq: log.length, time, data })</code>（index.ts:627）——<b>seq 即数组下标</b>，必须连续从 0 起，缺一个就抛错。</li>
+              <li><b>投影</b>：<code class="inl">deriveMessages()</code>（index.ts:726）只挑日志里被标记为「模型可见 surface」的事件，按序重建消息历史；日志是真相，消息只是视图。</li>
+              <li><b>存储层</b>：<code class="inl">class SessionStore</code>（index.ts:792）负责落盘；<code class="inl">flush(session)</code>（index.ts:1022）把内存日志写存储；<code class="inl">fork(source, boundary)</code>（index.ts:1069）从某个 seq 之前切出「分支会话」——这就是「回溯重来」的原生能力。</li>
+              <li><b>Python 类比</b>：一个只追加的 <code class="inl">list[Event]</code>，元素冻成 tuple；<code class="inl">deriveMessages</code> 像对这张表做「只选模型该行」的 SQL VIEW；<code class="inl">fork</code> 像 <code class="inl">git branch</code> 从某 commit 切新分支。</li>
+            </ul>
+          </div>
+          <div class="blk plain" style="background:#1b1422;border-left:3px solid #d2a8ff;">
+            <div class="lab">Python 实现（对照理解，可运行）</div>
+            <pre>from dataclasses import dataclass, field
+from typing import Any
+import time
+
+# 事件溯源日志 = 真相源。Event 用 frozen 近似 deepFreeze（不可变）
+@dataclass(frozen=True)
+class Event:
+    seq: int
+    type: str
+    data: Any
+    time: float = field(default_factory=time.time)
+
+class Session:
+    def __init__(self):
+        self._log: list = []
+
+    def append(self, type: str, data: Any) -> Event:
+        seq = len(self._log)
+        ev = Event(seq=seq, type=type, data=data)
+        assert ev.seq == len(self._log), "seq 必须连续（缺一个就抛错）"
+        self._log.append(ev)
+        return ev
+
+    def derive_messages(self):
+        # 投影：只挑「模型可见」的事件重建消息历史（日志是真相，消息只是视图）
+        out = []
+        for ev in self._log:
+            if ev.type == "user/message":
+                out.append({"role": "user", "content": ev.data})
+            elif ev.type == "assistant/message":
+                out.append({"role": "assistant", "content": ev.data})
+            elif ev.type == "tool/result":
+                out.append({"role": "tool", "content": ev.data})
+        return out
+
+    def fork(self, boundary: int) -> "Session":
+        child = Session()
+        child._log = list(self._log[:boundary])   # ≈ git branch 从某 seq 切分叉
+        return child
+
+# ---- demo ----
+s = Session()
+s.append("user/message", "帮我写快排")
+s.append("assistant/message", "好的，这是代码…")
+s.append("tool/call", {"name": "bash", "args": "python sort.py"})
+s.append("tool/result", "PASS")
+print("投影:", s.derive_messages())
+child = s.fork(2)   # 从 tool/call 之前分叉
+print("分叉后长度:", len(child._log))</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="core agent-loop ReactLoopAgent turn step kick preStep 循环 驱动">
+        <button class="card-head"><span class="tname">agent-loop</span><span class="ttag">packages/core/agent-loop · 真正的循环驱动</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <pre>// AgentLoop 把自己注册成 agent 工厂
+export class AgentLoop extends Service implements AgentFactory {
+  static inject = ['agents','sessions','llm','tools','systemPrompt']
+  ctx.effect(() =&gt; ctx.agents.setFactory(this), 'agentLoop.setFactory()')
+}
+
+// ReactLoopAgent：循环本体
+private async kick() { while (await this.turn()) {} }
+
+private async turn() {
+  this.append('turn/start', ...)
+  while (/* 还有活干 */) {
+    await this.preStep(...)   // 领输入 + 拼提示 + agent/pre-step
+    await this.step(...)      // 一次模型请求 + 工具调用
+  }
+  // agent/turn-stopping (serial) 判定是否停
+  this.append('turn/end', ...)
+}
+
+private async preStep(target, position) {
+  const claimed = this.inbox.claim(...)
+  const assembly = this.loopCtx.systemPrompt.assemble(...)
+  return this.dispatch.waterfall('agent/pre-step', {...},
+    () =&gt; Promise.resolve({ kind:'enter', messages: claimed }))
+}
+
+private async step(assembly) {
+  const request = await this.loopCtx.buildRequest(assembly) // agent/request 瀑布
+  const stream = this.loopCtx.llm.stream(request)           // llm/stream 瀑布
+  for await (const chunk of stream) this.append('assistant/chunk', chunk)
+  // 若模型要调工具 → executeToolCalls(...)
+}</pre>
+            <ul>
+              <li>一个 <b>turn（轮）</b> = 0..N 个 <b>step（步）</b>；一个 step = 一次模型请求 + 其工具调用。</li>
+              <li><code class="inl">kick()</code> 用 <code class="inl">while(turn())</code> 把所有轮串起来，直到 agent 主动停下。</li>
+              <li>每一步都通过 waterfall 暴露扩展点，插件可在「拼提示前 / 发请求前 / 流输出时」动手。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>这就是 agent 的「主循环」：</p>
+            <ul>
+              <li><b>turn</b>：用户发一句话，到 agent 觉得「这事办完了」之间，叫一轮。</li>
+              <li><b>step</b>：模型思考一次。模型可能回一句普通话，也可能回「我要调工具」——后者就进入工具执行，结果再喂回模型，开启下一个 step。</li>
+              <li>整个循环没有「特判某工具」，它是<b>数据驱动</b>的：模型说调啥就调啥，循环只负责「发请求→收结果→再发请求」。</li>
+              <li><code class="inl">inject</code> 声明它依赖 agents/sessions/llm/tools/systemPrompt——这些正是脊梁其它几个包，Cordis 保证它们先挂好。</li>
+            </ul>
+            <p class="note">关键不变量：<b>所有 durable 会话事件（turn/start、assistant/message、tool/call…）都是 emit 进日志；所有「钩子」（agent/pre-step、agent/request、llm/stream）都是 waterfall 扩展点</b>。前者决定「发生了什么」，后者决定「插件能怎么干预」。</p>
+          </div>
+          <div class="blk plain" style="background:#15202b;border-left:3px solid #58a6ff;">
+            <div class="lab">深入：真实 API 与运行机理（packages/core/agent-loop/src/{index,agent,tool-calls}.ts）</div>
+            <ul>
+              <li><b>工厂注册</b>：<code class="inl">AgentLoop</code>（index.ts:297）声明 <code class="inl">inject = ['agents','sessions','llm','tools','systemPrompt']</code>，并用 <code class="inl">ctx.effect(() =&gt; ctx.agents.setFactory(this))</code> 把自己注册成 agent 工厂——<b>没有写死的自举函数</b>，靠 Cordis 按依赖顺序挂载。</li>
+              <li><b>循环本体</b>：<code class="inl">ReactLoopAgent.kick()</code>（agent.ts:210）是 <code class="inl">while (await turn()) {}</code>；<code class="inl">turn()</code>（agent.ts:246）先 <code class="inl">append('turn/start')</code>，循环 <code class="inl">preStep → step</code>，末尾用 <code class="inl">dispatch.serial('agent/turn-stopping')</code> 问「该停了吗」，再 <code class="inl">append('turn/end')</code>。</li>
+              <li><b>单步</b>：<code class="inl">step()</code>（agent.ts:332）<code class="inl">buildRequest</code>（经 <code class="inl">agent/request</code> 瀑布）→ <code class="inl">llm.stream</code>（经 <code class="inl">llm/stream</code> 瀑布）→ 边流边 <code class="inl">append('assistant/chunk')</code>；模型要调工具则进 <code class="inl">executeToolCalls</code>。</li>
+              <li><b>工具调度</b>：<code class="inl">executeToolCalls</code>（tool-calls.ts:59）里的 <code class="inl">runGroup()</code>（tool-calls.ts:121）把多工具调用排成<b>独占 barrier</b>或<b>有界并行池</b>，结果严格<b>按模型给的顺序</b>提交，每段都 <code class="inl">appendToolCall / appendToolResult</code> 进 durable 日志。</li>
+              <li><b>Python 类比</b>：一个 <code class="inl">while True</code> 里反复 <code class="inl">llm.chat(messages)</code>；返回带 <code class="inl">tool_calls</code> 就 <code class="inl">for tc: run(tc)</code> 并把结果 append 回 messages。DSH 把「调 LLM / 跑工具 / 决定停」全做成带扩展点的接缝，所以你能挂插件改任意一步。</li>
+            </ul>
+          </div>
+          <div class="blk plain" style="background:#1b1422;border-left:3px solid #d2a8ff;">
+            <div class="lab">Python 实现（对照理解，可运行）</div>
+            <pre>import asyncio
+
+# 极简 LLM mock：根据输入决定「回话」还是「调工具」
+async def fake_llm(messages):
+    last = messages[-1]["content"] if messages else ""
+    if "快排" in last:
+        return {"content": None,
+                "tool_calls": [{"name": "bash", "args": {"command": "python sort.py"}}]}
+    return {"content": "已完成。", "tool_calls": []}
+
+class AgentLoop:
+    def __init__(self, session, system_prompt, tools, agents):
+        self.session, self.sp, self.tools, self.agents = session, system_prompt, tools, agents
+
+    async def kick(self):
+        while await self.turn():      # ≈ ReactLoopAgent.kick(): while(turn())
+            pass
+
+    async def turn(self):
+        self.session.append("turn/start", {})
+        steps = 0
+        while steps &lt; 5:                       # 防死循环护栏
+            assembly = self.sp.assemble()        # agent/pre-step：拼系统提示
+            if await self.step(assembly):
+                break
+            steps += 1
+        self.session.append("turn/end", {})
+        return False                             # demo：一轮后停
+
+    async def step(self, assembly):
+        messages = self.session.derive_messages()
+        messages.insert(0, {"role": "system", "content": assembly})
+        resp = await fake_llm(messages)
+        if resp["content"]:
+            self.session.append("assistant/message", resp["content"])
+            return True                          # agent/turn-stopping：停
+        for tc in resp["tool_calls"]:            # 数据驱动：模型说调啥就调啥
+            self.session.append("tool/call", tc)
+            exec = await self.tools.run(tc["name"], tc["args"])
+            self.session.append("tool/result", exec.result)
+        return False
+
+# 依赖前四个 Python 类（Session / SystemPrompt / ToolRuntime / AgentRegistry）
+loop = AgentLoop(session, sp, rt, reg)
+asyncio.run(loop.kick())
+print("最终消息流:", session.derive_messages())</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="core tools ToolRuntime pre-execute execute post-execute 工具 流水线 调度">
+        <button class="card-head"><span class="tname">tools</span><span class="ttag">packages/core/tools · 工具注册与执行流水线</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <pre>// ToolRuntime 暴露三段 waterfall 流水线
+'tools/pre-execute'(exec, next): Promise&lt;PreToolDecision&gt;
+'tools/execute'    (exec, next): Promise&lt;ToolExecutionResult&gt;
+'tools/post-execute'(exec, result, next): Promise&lt;PostToolDecision&gt;
+
+export class ToolRuntime extends Service { /* ctx.tools */ }
+register(definition): () =&gt; void   // 注册一个工具，返回注销函数</pre>
+            <ul>
+              <li>工具以 <code class="inl">ToolDefinition</code> 注册（name / description / schema / execute）。</li>
+              <li>执行时依次过 pre-execute → execute → post-execute；<b>任何一段都能拒绝</b>，但拒绝结果最终仍作为 <code class="inl">tool/result</code> 落进持久日志（可审计）。</li>
+              <li>多工具调用由调度器安排「独占 barrier 或并行池」，按模型给的顺序提交结果。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <ul>
+              <li>这是 agent 的「工具总线」。模型说「调 tool X」，就走这条流水线。</li>
+              <li><b>pre-execute</b>：调之前能拦（比如沙箱策略、审批、重复检测）。<b>execute</b>：真执行。<b>post-execute</b>：执行后处理（比如超长结果外置到文件）。</li>
+              <li>三段都是 waterfall ⇒ 任意插件可在任意阶段插入逻辑，且插件之间互不知道对方存在。</li>
+              <li>「拒绝也进日志」是刻意的：日志要诚实记录真实发生的事，哪怕是被拦掉的。</li>
+            </ul>
+          </div>
+          <div class="blk plain" style="background:#15202b;border-left:3px solid #58a6ff;">
+            <div class="lab">深入：真实 API 与运行机理（packages/core/tools/src/index.ts）</div>
+            <ul>
+              <li><b>注册表</b>：<code class="inl">class ToolRuntime</code>（index.ts:787）挂在 <code class="inl">ctx.tools</code>；<code class="inl">register(definition)</code>（index.ts:1037）注册一个工具，<b>返回注销函数</b>（Cordis effect 风格，插件卸载自动撤掉）。</li>
+              <li><b>工具定义</b>：<code class="inl">interface ToolDefinition</code>（index.ts:222）= name + description + parameters（JSON-Schema）+ execute；消费者用 <code class="inl">defineTool({...})</code>（index.ts:66）声明后调 <code class="inl">ctx.tools.register(...)</code>。</li>
+              <li><b>三段流水线</b>：pre-execute（index.ts:152）/ execute / post-execute（index.ts:175），都是 waterfall；调度器先跑 <b>pre-execute + 单调护栏</b>，再 execute，最后 post-execute。</li>
+              <li><b>单调护栏</b>：<code class="inl">registerGuard</code>（index.ts:1101，实现见 index.ts:704）在<b>每次</b> pre-execute 之后、execute 之前强制求值——如「重复工具提醒 / 超时」，是框架级保险，挂多少扩展都不 bypass。</li>
+              <li><b>Python 类比</b>：一个 <code class="inl">dict[name] → callable</code> 注册表 + 一层像 FastAPI 依赖/中间件那样的「前置钩子链」。你写的每个工具就是往 <code class="inl">ctx.tools</code> 里 <code class="inl">register</code> 一个 callable，框架负责在前后套上护栏与扩展点。</li>
+            </ul>
+          </div>
+          <div class="blk plain" style="background:#1b1422;border-left:3px solid #d2a8ff;">
+            <div class="lab">Python 实现（对照理解，可运行）</div>
+            <pre>from dataclasses import dataclass, field
+from typing import Any, Callable
+
+@dataclass
+class Exec:
+    name: str
+    args: dict
+    result: Any = None
+
+class ToolRuntime:
+    def __init__(self):
+        self._tools: dict = {}
+        self._pre: list = []          # pre-execute waterfall
+        self._post: list = []         # post-execute waterfall
+        self._guards: list = []       # 单调护栏：每次必跑，不可 bypass
+
+    def register(self, name, fn) -> Callable:
+        self._tools[name] = fn
+        def dispose():                # 返回注销函数（Cordis effect 风格）
+            self._tools.pop(name, None)
+        return dispose
+
+    def pre_execute(self, hook):  self._pre.append(hook)
+    def post_execute(self, hook): self._post.append(hook)
+    def register_guard(self, hook): self._guards.append(hook)
+
+    async def run(self, name, args):
+        exec = Exec(name=name, args=args)
+        await self._waterfall(self._pre, exec)        # 1) pre-execute（可否决）
+        async def _noop_next():                        # 2) 单调护栏
+            return None
+        for g in self._guards:
+            await g(exec, _noop_next)
+        result = self._tools[name](**args)            # 3) execute（兼容同步/异步工具）
+        if asyncio.iscoroutine(result):
+            result = await result
+        exec.result = result
+        await self._waterfall(self._post, exec)       # 4) post-execute
+        return exec
+
+    async def _waterfall(self, hooks, exec):
+        async def nxt(i=0):            # 由外到内包裹：最后一个调用真正逻辑
+            if i >= len(hooks):
+                return None
+            return await hooks[i](exec, lambda: nxt(i+1))
+        return await nxt()
+
+# ---- demo ----
+rt = ToolRuntime()
+rt.register("bash", lambda command: f"ran: {command}")
+
+async def approval(exec, nxt):                 # pre-execute 可否决
+    if exec.name == "bash" and "rm -rf" in exec.args.get("command", ""):
+        raise PermissionError("危险命令被拦")
+    return await nxt()
+rt.pre_execute(approval)
+
+async def timeout_guard(exec, nxt):             # 框架级保险：每次都跑
+    exec.timeout = exec.args.get("timeout", 30)
+    return await nxt()
+rt.register_guard(timeout_guard)
+
+import asyncio
+async def demo():
+    print(await rt.run("bash", {"command": "python sort.py"}))
+asyncio.run(demo())</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="core agent AgentRegistry withInitiator AsyncLocalStorage 因果 归属 create resume">
+        <button class="card-head"><span class="tname">agent</span><span class="ttag">packages/core/agent · Agent 注册表与因果归属</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <pre>export class AgentRegistry extends Service { /* ctx.agents */
+  withInitiator&lt;T&gt;(agent, operation) { /* 用 AsyncLocalStorage 记录"是谁发起的" */ }
+  setFactory / create / resume / register / enter / announce / get / list / roots
+}
+// AgentHandle = { agent, dispose() }</pre>
+            <ul>
+              <li><code class="inl">withInitiator</code> 用 <code class="inl">AsyncLocalStorage</code> 沿 async 调用链传递「当前是哪个 agent 发起的」，从而在任何嵌套调用里都能正确归属事件。</li>
+              <li>支持 create（新建）、resume（从日志恢复）、enter（进入某 agent 作用域）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p><code class="inl">AsyncLocalStorage</code> 是 Node 版的 <b>Python <code class="inl">contextvars.ContextVar</code></b>：在一个异步调用链上挂一个「隐式上下文」，链上任何函数都能读到「我是谁发起的」，而不用层层传参。这样子代理、工具、钩子产生的事件都能正确贴回「父 agent」。</p>
+          </div>
+          <div class="blk plain" style="background:#15202b;border-left:3px solid #58a6ff;">
+            <div class="lab">深入：真实 API 与运行机理（packages/core/agent/src/index.ts）</div>
+            <ul>
+              <li><b>户口本 + 工厂</b>：<code class="inl">class AgentRegistry</code>（index.ts:256）挂在 <code class="inl">ctx.agents</code>；<code class="inl">setFactory</code>（index.ts:372）让 agent-loop 把自己注册成工厂，<code class="inl">create</code>（index.ts:405）/ <code class="inl">resume</code>（index.ts:424）都返回 <code class="inl">AgentHandle = { agent, dispose() }</code>（index.ts:172）。</li>
+              <li><b>因果归属</b>：<code class="inl">withInitiator(agent, operation)</code>（index.ts:341）用 <code class="inl">AsyncLocalStorage</code> 把「当前是哪个 agent 发起的」钉在整条 async 链上，链上任何深层函数都能正确把事件贴回父 agent。</li>
+              <li><b>登记与可见性</b>：<code class="inl">register</code>（index.ts:450）会 <code class="inl">enter</code>（index.ts:474，进入该 agent 作用域）+ <code class="inl">announce</code>（index.ts:549，对外可见）；<code class="inl">get / list / roots</code>（index.ts:583 / 603 / 613）做查询，<code class="inl">roots</code> 只返回「没有父 agent 的顶层 agent」。</li>
+              <li><b>作用域隔离</b>：每个 agent 拥有自己的 <code class="inl">ctx</code>（<code class="inl">scopeTarget(agent, agent)</code>），所以子代理能挂与父 agent 不同的 persona / 工具 / 护栏，互不污染。</li>
+              <li><b>Python 类比</b>：进程内 <code class="inl">{id: Agent}</code> 注册表 + <code class="inl">contextvars</code> 让任意深层函数知道当前 agent；<code class="inl">resume</code> 像用 event-sourcing 重放重建对象，进程崩了也能从日志复活。</li>
+            </ul>
+          </div>
+          <div class="blk plain" style="background:#1b1422;border-left:3px solid #d2a8ff;">
+            <div class="lab">Python 实现（对照理解，可运行）</div>
+            <pre>from contextvars import ContextVar
+from dataclasses import dataclass, field
+from typing import Callable
+
+_current_agent: ContextVar = ContextVar("current_agent")  # ≈ Node AsyncLocalStorage
+
+@dataclass
+class Agent:
+    id: str
+    persona: str
+    parent: "Agent | None" = None
+    scope: dict = field(default_factory=dict)   # 独立作用域：persona/工具/护栏隔离
+
+@dataclass
+class AgentHandle:
+    agent: Agent
+    def dispose(self):
+        print(f"agent {self.agent.id} 已销毁")
+
+class AgentRegistry:
+    def __init__(self):
+        self._agents: dict = {}
+        self._factory = None
+
+    def set_factory(self, f): self._factory = f
+
+    def with_initiator(self, agent, op):
+        # 把"当前 agent"钉在整条 async 链上（因果归属）
+        token = _current_agent.set(agent)
+        try:
+            return op()
+        finally:
+            _current_agent.reset(token)
+
+    def create(self, id, persona, parent=None) -> AgentHandle:
+        a = Agent(id=id, persona=persona, parent=parent)
+        self._agents[id] = a                      # register + enter + announce
+        return AgentHandle(agent=a)
+
+    def resume(self, id) -> AgentHandle:
+        a = self._agents.get(id) or Agent(id=id, persona="&lt;recovered&gt;")  # 日志复活
+        return AgentHandle(agent=a)
+
+    def current(self): return _current_agent.get()
+    def list(self):    return list(self._agents.values())
+    def roots(self):   return [a for a in self._agents.values() if a.parent is None]
+
+# ---- demo ----
+reg = AgentRegistry()
+root = reg.create("main", "你是主代理")
+def child_work():
+    print("当前 agent:", reg.current().id)   # -> main（靠 with_initiator 传递）
+reg.with_initiator(root.agent, child_work)
+print("roots:", [a.id for a in reg.roots()])</pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="core system-prompt assemble variable 系统提示 拼装 变量">
+        <button class="card-head"><span class="tname">system-prompt</span><span class="ttag">packages/core/system-prompt · 系统提示拼装</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <pre>ctx.systemPrompt.assemble(...)              // 拼出最终系统提示
+ctx.systemPrompt.variable('provider'|'model'|'cwd', getter)  // 注册动态变量</pre>
+            <ul>
+              <li>把 persona、工具说明、各种上下文（时间、文件引用、agent 指令…）拼成模型看到的系统提示。</li>
+              <li>变量是「惰性求值」的 getter，拼装时才取当前值（如当前 cwd、当前模型）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>类比你写 agent 时 <code class="inl">system_prompt = f"你是{role}，当前目录{cwd}"</code>。DSH 把它做成了「可插拔的片段拼装器」：每个插件贡献一段提示或一个变量，循环在 pre-step 时统一 assemble。好处是换 persona / 加一段指令都是挂插件，不碰核心。</p>
+          </div>
+          <div class="blk plain" style="background:#15202b;border-left:3px solid #58a6ff;">
+            <div class="lab">深入：真实 API 与运行机理（packages/core/system-prompt/src/index.ts）</div>
+            <ul>
+              <li><b>可插拔片段</b>：<code class="inl">class SystemPrompt</code>（index.ts:338）挂在 <code class="inl">ctx.systemPrompt</code>；<code class="inl">section / context / tools / variable</code> 四个方法各自贡献一段提示 / 动态上下文 / 工具 schema / 惰性变量，全部带去重与顺序。</li>
+              <li><b>拼装即 waterfall</b>：<code class="inl">assemble(ctx)</code>（index.ts:467）收集 global + 该 agent 作用域的片段，按 <code class="inl">order</code> 排序，最后跑 <code class="inl">'system-prompt/assemble'</code> 瀑布（Events @ index.ts:31）——插件可在拼装时再改。</li>
+              <li><b>严格模板</b>：<code class="inl">renderPrompt</code>（index.ts:212）对 <code class="inl">{{variable}}</code> 做插值，未知 / 未赋值 / 格式错都直接抛错（index.ts:258 interpolate）——提前暴露配置错误，不让模型看到裸占位符。</li>
+              <li><b>顺序与作用域</b>：约定 <code class="inl">harness:identity(-100) → deployment:persona(0) → 工具说明(100-199)</code>（index.ts:128/131）；同名片段「agent 专属覆盖全局」；<code class="inl">complete: true</code> 的片段可把整段 system prompt 替换成自己。</li>
+              <li><b>Python 类比</b>：像 Jinja2 模板 + 一组「渲染时才执行的 snippet 函数」；作用域覆盖像「全局 base 模板」+「每请求 override 的 block」。换 persona / 加指令都是挂插件，不碰核心循环。</li>
+            </ul>
+          </div>
+          <div class="blk plain" style="background:#1b1422;border-left:3px solid #d2a8ff;">
+            <div class="lab">Python 实现（对照理解，可运行）</div>
+            <pre>from dataclasses import dataclass
+
+@dataclass
+class Section:
+    id: str
+    order: int
+    text: str
+
+class SystemPrompt:
+    def __init__(self):
+        self._sections: dict = {}
+        self._vars: dict = {}        # 惰性 getter：拼装时才求值
+        self._hooks: list = []       # ≈ assemble 瀑布
+
+    def section(self, id, text, order=0):
+        self._sections[id] = Section(id, order, text)
+
+    def variable(self, name, getter):
+        self._vars[name] = getter
+
+    def on_assemble(self, hook):
+        self._hooks.append(hook)
+
+    def assemble(self) -> str:
+        ordered = sorted(self._sections.values(), key=lambda s: s.order)
+        prompt = "\n".join(s.text for s in ordered)
+        for name, getter in self._vars.items():     # {{var}} 严格插值
+            token = "{{" + name + "}}"
+            if token in prompt:
+                prompt = prompt.replace(token, getter())
+            else:
+                raise KeyError(f"变量 {name} 未在模板中声明")
+        for hook in self._hooks:                    # 跑 assemble 瀑布
+            prompt = hook(self, prompt)
+        return prompt
+
+sp = SystemPrompt()
+sp.section("identity", "你是 DeepSeek 助手。", order=-100)
+sp.section("persona",  "你冷静、严谨。",       order=0)
+sp.section("ctx",      "当前目录：{{cwd}}",     order=50)
+sp.section("tools",    "可用工具：bash, fs。", order=100)
+sp.variable("cwd", lambda: "/home/user")
+print(sp.assemble())
+# 输出顺序由 order 决定：identity(-100) → persona(0) → ctx(50) → tools(100)</pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S3 能力接缝 ===================== -->
+    <section id="s3">
+      <div class="sec-head"><h1><span class="num">3</span>能力怎样接进来：Definition / Provider / Consumer</h1>
+        <div class="lead">贯穿全项目最重要的「解耦模板」——换实现零改动上层</div>
+      </div>
+      <div class="intro-box">
+        几乎每个能力家族都遵循同一套三件套：<b>Definition</b>（抽象契约，挂在 <code class="inl">ctx.xxx</code>）、<b>Provider</b>（可替换的具体实现）、<b>Consumer</b>（用这个能力的东西，比如模型面工具）。Consumer <b>只依赖 Definition，绝不 import 具体 Provider</b>。
+      </div>
+
+      <div class="card" data-kw="seam 接缝 Definition Provider Consumer shell 抽象类 解耦 接口">
+        <button class="card-head"><span class="tname">三件套范式（以 shell 为例）</span><span class="ttag">packages/shell · 最干净的实现</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <pre>// 1) Definition（抽象契约）—— packages/shell/shell
+export abstract class ShellExecutor extends Service {
+  constructor(ctx) { super(ctx, 'shell') }
+  abstract resolve(request): ShellExecSpec
+  abstract run(spec): Promise&lt;ShellRunResult&gt;
+  abstract start(spec): ShellProcess
+}
+declare module '@deepseek-ai/cordis' { interface Context { shell: ShellExecutor } }
+
+// 2) Provider（本地实现）—— packages/shell/bash-local
+export class LocalBashExecutor extends ShellExecutor {
+  static inject = ['subprocess']
+  run(spec) { return this.ctx.subprocess.spawn(['bash','-c', spec.command]) }
+}
+
+// 3) Consumer（模型面工具）—— packages/shell/tool-bash
+ctx.tools.register(defineTool({
+  name: 'bash',
+  execute: async (args, exec) =&gt; {
+    const result = await ctx.shell.run(ctx.shell.resolve(request))
+    return canonicalBashResult(result)
+  }
+}))</pre>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <ul>
+              <li><b>Definition</b> ≈ Python 的 <code class="inl">ABC</code> / <code class="inl">Protocol</code>：只定义「能跑命令」这个接口，不关心怎么跑。</li>
+              <li><b>Provider</b> ≈ 具体后端：本地用 <code class="inl">subprocess.Popen(['bash','-c',...])</code>；沙箱版套一层文件隔离；远程版（e2b）在容器里跑。换后端只换这个包。</li>
+              <li><b>Consumer</b>：模型用的 <code class="inl">bash</code> 工具，只认 <code class="inl">ctx.shell</code> 这个抽象接口。它<b>不知道、也不关心</b>底下是本地还是沙箱。</li>
+              <li><b>为什么这样设计</b>：把「能力契约」和「能力实现」彻底分开。想加一个新执行后端（比如 WASM、Docker），只需写一个新 Provider 挂上，<code class="inl">bash</code> 工具零改动。这正是 DSH「核心精简、能力可插拔」的精髓。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S4 事件系统 ===================== -->
+    <section id="s4">
+      <div class="sec-head"><h1><span class="num">4</span>事件系统：三类事件 × 三种派发</h1>
+        <div class="lead">把「发生了什么」和「插件能怎么干预」分开看</div>
+      </div>
+      <div class="card" data-kw="事件 session agent capability 持久 实时 接缝 emit waterfall serial">
+        <button class="card-head"><span class="tname">三类事件</span><span class="ttag">session（持久）/ agent（实时）/ capability（接缝）</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><b>Session 事件（持久 / 事件溯源日志）</b>：<code class="inl">turn/start、step/start、user/message、assistant/message、tool/call、tool/result、step/end、turn/end</code>。全部 <code class="inl">emit</code> 进 append-only 日志，带 seq、deepFreeze。</li>
+              <li><b>Agent 事件（实时扩展点）</b>：<code class="inl">agent/pre-step、agent/request、agent/turn-stopping、agent/error、agent/status</code>。给插件改写/拦截循环的钩子，不进持久日志。</li>
+              <li><b>Capability 事件（接缝）</b>：<code class="inl">tools/pre-execute / execute / post-execute、llm/stream</code>。能力接缝在运行时的真正落点，任意插件可插入/改写/拒绝。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <ul>
+              <li>第一类是「<b>记账</b>」：忠实记录真实发生的事，用于回放/压缩/查询。类比数据库 WAL（write-ahead log）。</li>
+              <li>第二类是「<b>拦截点</b>」：循环在关键节点广播「我要干 X 了」，插件可以改参数或拦下来。类比 Web 框架的中间件钩子。</li>
+              <li>第三类是「<b>能力切面</b>」：把工具执行、LLM 流式调用这些「接缝」也做成事件，于是沙箱、审批、重试、日志都能挂在上面，而不用写进核心。</li>
+            </ul>
+            <p class="note">派发模式回顾：session 日志事件多为 <code class="inl">emit</code>（只记不拦）；agent/capability 扩展点多数为 <code class="inl">waterfall</code>（可拦可改）；<code class="inl">serial</code> 用于「谁说了算」这类有序裁决（如 turn-stopping）。<b>三种模式的逐条详解、对比表与真实源码片段，见第 1 章「事件派发」卡片。</b></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S5 组合机制 ===================== -->
+    <section id="s5">
+      <div class="sec-head"><h1><span class="num">5</span>组合机制：Profiles / Bundles / cordis.patch.yml</h1>
+        <div class="lead">运行时不是写死的自举，而是「被声明出来」的</div>
+      </div>
+      <div class="card" data-kw="组合 bundle profile patch cordis.patch.yml composeEntries 分层 后写赢 启动">
+        <button class="card-head"><span class="tname">分层 patch 组合</span><span class="ttag">packages/boot · packages/bundle</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <pre>// 一行（row）声明一个插件
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+// boot 用 composeEntries 把多层 patch 叠成最终插件树
+boot():
+  空 entry 列表
+  → dsh-base bundle 插入 ~70 共享行
+  → profile bundle (headless / web-app)
+  → profile 用户 patch
+  → home 用户 patch  (优先级更高)
+  → --patch CLI 覆盖层 (最顶层)</pre>
+            <ul>
+              <li><b>同 id 后来赢</b>：高层的 <code class="inl">id: tools</code> 会<b>整行替换</b>低层的同名行（不深合并）。</li>
+              <li><code class="inl">!!js</code> 是「组合期代码」：在挂载时求值，如 <code class="inl">disabled: !!js process.platform === 'win32'</code>。</li>
+              <li><code class="inl">composeEntries</code> 与 <code class="inl">renderConfigDump</code> 用同一套算法 ⇒ <code class="inl">dsh --profile web --dump-config</code> 打印的树 <b>严格等于</b> 真 boot 的树。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <ul>
+              <li>类比<b>分层配置</b>：base settings → 环境覆盖 → 本地覆盖。但合并键是 row 的 <code class="inl">id</code>，且是「整段替换」而非深合并。</li>
+              <li><b>bundle</b> 就是「功能包」：<code class="inl">dsh-base</code> 是地基（每个 profile 都先叠它），<code class="inl">dsh-web-app</code> 加浏览器 UI，<code class="inl">dsh-headless</code> 加一次性跑任务模式。它们本质就是一个 <code class="inl">cordis.patch.yml</code> 补丁清单。</li>
+              <li><b>profile</b> 就是「命名的环境组合」（web / headless）。</li>
+              <li><b>最大思维转变</b>：你不再写命令式的 <code class="inl">boot(){ initA(); initB(); }</code>，而是<b>声明 row，让 Loader 按 inject 自动推导依赖顺序</b>。核心代码里没有「先挂 LLM 再挂 tools」这种硬编码。</li>
+            </ul>
+            <p class="note">经验法则（host plane vs agent plane）：一个 Service 是否留在 host 平面，不只看它被谁 inject。若它是按 session/agent 做键、且跨会话被 host 的 RPC 服务读取（如 <code class="inl">list_agents</code>），就必须留 host 平面；只有「模型可见的工具」才随 preset 落到每会话。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S6 能力家族 ===================== -->
+    <section id="s6">
+      <div class="sec-head"><h1><span class="num">6</span>能力家族：执行与 IO</h1>
+        <div class="lead">shell / subprocess / terminal / fs / lsp / skill / web / llm / e2b —— 全部遵循「接缝三件套」</div>
+      </div>
+
+      <div class="card" data-kw="shell bash pwsh ShellExecutor tool-bash bash-local bash-sandbox 执行器 接缝">
+        <button class="card-head"><span class="tname">shell</span><span class="ttag">packages/shell · 跨平台命令执行能力族</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <p><span class="pkg">Definition</span>：<code class="inl">ShellExecutor</code>（<code class="inl">ctx.shell</code>），定义 run/start/resolve。子包：</p>
+            <ul>
+              <li><code class="pkg">bash-local</code>：本地 Provider，每次 spawn <code class="inl">bash -c</code>（经 subprocess）。</li>
+              <li><code class="pkg">bash-sandbox</code>：套一层 <code class="inl">ctx.sandbox</code> 把命令关进文件沙箱；被拒的写操作作为「结果事实」返回。</li>
+              <li><code class="pkg">pwsh-local / pwsh-sandbox</code>：Windows PowerShell 镜像版。</li>
+              <li><code class="pkg">shell-env</code>：托管受信任的 <code class="inl">DSH_*</code> 环境变量。</li>
+              <li><code class="pkg">tool-bash / tool-bash-persistent</code>：模型面 <code class="inl">bash</code> 工具（前台 / 基于持久终端）。<code class="pkg">tool-pwsh*</code> 为 pwsh 镜像。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>就是前面「三件套范式」那一节的实体。抽象一个 <code class="inl">CommandRunner.run(cmd)</code>，本地实现是 <code class="inl">Popen</code>，沙箱实现是「在受限环境里跑」。模型用的 <code class="inl">bash</code> 工具只认抽象接口。换执行后端（本地/沙箱/远程）对上层零改动。<code class="inl">ctx</code> 是装这些单例的 DI 容器，<code class="inl">ctx.shell</code> 是那个抽象服务槽。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="subprocess SubprocessRuntime spawn 进程树 pty node-pty 执行世界 基底">
+        <button class="card-head"><span class="tname">subprocess</span><span class="ttag">packages/subprocess · 跑外部程序的基底</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">subprocess</code>：<code class="inl">SubprocessRuntime</code>（<code class="inl">ctx.subprocess</code>）——spawn、spawnTerminal、executable 解析、terminate、stdio 词汇。</li>
+              <li><code class="pkg">subprocess-local</code>：本地 Provider——detached 进程树、node-pty、有界输出收集/落盘、进程组信号。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>所有「跑外部程序」的地基（bash/LSP/PTY 都建在它上面），相当于 Python 的 <code class="inl">subprocess</code> 模块但更重：管「进程树」（一个命令连带子进程一起 kill）、自动把超长输出落盘、还提供「分配一个伪终端」高级能力（≈ <code class="inl">pexpect</code>/tmux 的底层）。本地也好、E2B 远程也好，都实现同一套 <code class="inl">spawn/spawnTerminal</code>——这就是「可移植的执行世界」概念。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="terminal 持久终端 pty tmux 归属 会话 tool-terminal">
+        <button class="card-head"><span class="tname">terminal</span><span class="ttag">packages/terminal · 有状态持久伪终端</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">terminal</code>：后端注册表 + 品牌化 session id + 严格按 Agent 归属的会话操作（<code class="inl">ctx.terminals</code>）。</li>
+              <li><code class="pkg">terminal-bash</code>：基于 <code class="inl">ctx.subprocess.spawnTerminal</code> 的 shell 后端。</li>
+              <li><code class="pkg">tool-terminal</code>：六个工具 <code class="inl">terminal_open/send/read/signal/close/list</code>，只能操作自己 Agent 的会话。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>相当于「程序化的 tmux」——每个 Agent 拥有自己的终端会话，cd、环境变量、后台任务都能跨工具调用保留。和一次性 <code class="inl">bash</code> 工具互补：bash 是「无状态短命令」，terminal 是「我开个 shell 一直用」。PTY ≈ <code class="inl">pexpect</code>/tmux；「按 owner 围栏」意味着 A agent 永远摸不到 B 的终端。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="fs FileSystem fs-local fs-sandbox 文件 读写 策略闸门 tool-fs str-replace-editor 观察策略">
+        <button class="card-head"><span class="tname">fs</span><span class="ttag">packages/fs · 文件系统能力族（四层栈）</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">fs</code>：<code class="inl">FileSystem</code>（<code class="inl">ctx.fs</code>）——resolve、text IO、原子写/字面编辑原语、拥有 <code class="inl">fs/*</code> 事件词汇。</li>
+              <li><code class="pkg">fs-local / fs-sandbox</code>：宿主实现 / 沙箱实现（只在 write/edit 上加围栏）。</li>
+              <li><code class="pkg">fs-observation-policy</code>：策略插件——「先读后改 + 版本守卫」，挂在 <code class="inl">fs/write-intent、fs/edit-intent、fs/observed</code> 事件上（非服务、可摘除）。</li>
+              <li><code class="pkg">tool-fs / tool-fs-search / tool-str-replace-editor</code>：模型面 read/write/edit、glob/grep、独立 str_replace_editor。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p><code class="inl">ctx.fs</code> 接口刻意贴近 fsspec 那一层的「存储原语」。关键是 <b>策略闸门用事件而非方法注入来解耦</b>——类比观察者模式 / 中间件 pipeline：一个 side-effect-only 的 <code class="inl">WeakMap</code> 记录「谁先读过这个文件」，据此决定能不能改，拔掉这个插件系统照样跑只是没了约束。搜索用 ripgrep 子进程，类比把 grep 当外部命令调。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="lsp LspService language server 跳定义 工具 tool-lsp stdio json-rpc">
+        <button class="card-head"><span class="tname">lsp</span><span class="ttag">packages/lsp · 语言服务器能力族</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">lsp</code>：<code class="inl">LspService</code>（<code class="inl">ctx.lsp</code>）——按品牌 id + 扩展名映射 Provider、四种语义操作。</li>
+              <li><code class="pkg">lsp-stdio</code>：通用多 server stdio 后端，经 <code class="inl">ctx.fs + ctx.subprocess</code> 起语言服务器（JSON-RPC，每次查询瞬开瞬关文档）。</li>
+              <li><code class="pkg">tool-lsp</code>：模型面 <code class="inl">lsp</code> 工具，四种操作。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把 LSP（Language Server Protocol）包成「只给模型四样干净操作」的适配器，底层是「起一个 language server 子进程、走 JSON-RPC」。设计取舍是「宁可少功能也不让裸协议透传」——和把 SDK 调用收敛成稳定工具接口是一回事。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="skill SkillRegistry 技能 目录 插件发现 tool-skill filesystem 分层覆盖">
+        <button class="card-head"><span class="tname">skill</span><span class="ttag">packages/skill · 可复用指令（SKILL.md）发现</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">skill</code>：<code class="inl">SkillRegistry</code>（<code class="inl">ctx.skills</code>）——Provider 注册、跨 scope 分层、快照/列表/获取。</li>
+              <li><code class="pkg">skill-filesystem</code>：本地 Provider，扫描 project/custom/user 技能根、Chokidar 监听变更。</li>
+              <li><code class="pkg">skill-badge</code>：可选内置徽章技能 Provider。</li>
+              <li><code class="pkg">tool-skill</code>：模型面 <code class="inl">skill</code> 目录 + 工具，把目录注入系统提示。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把「可插拔指令插件」做成目录服务，类似 Python 的 entry-points / 插件发现机制。每个技能是一段 markdown 指令；注册表支持「多层覆盖」（项目级盖过用户级）。模型看到的只是一个技能名清单，<code class="inl">skill</code> 工具按需把正文拉进来——类比 tool catalog。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="web WebRuntime web_search web_fetch 搜索 抓取 exa perplexity deepseek tool-web provider 路由">
+        <button class="card-head"><span class="tname">web</span><span class="ttag">packages/web · 网页搜索 + 抓取能力族</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">web</code>：<code class="inl">WebRuntime</code>（<code class="inl">ctx.web</code>）——search/fetch Provider 注册、选择策略、结果词汇。</li>
+              <li><code class="pkg">web-search-exa / perplexity / deepseek</code>：三种搜索 Provider。</li>
+              <li><code class="pkg">web-fetch-http</code>：匿名 HTTP(S) 抓取 Provider。</li>
+              <li><code class="pkg">tool-web</code>：模型面 <code class="inl">web_search / web_fetch</code>。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把「搜索引擎/网页抓取」做成统一接口，后端可换 Exa/Perplexity/DeepSeek，对模型暴露的始终是 <code class="inl">web_search/web_fetch</code> 两个工具（类比 LLM 路由层 LiteLLM，但这里是 web provider 路由）。<b>工具层绝不 import 具体 Provider</b>，选哪个后端是接缝内部的事，缺凭证/多后端歧义都变成模型能读到的结构化错误而非崩溃。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="llm LlmRuntime llm-deepseek llm-pi-ai 流式 stream 重试 token-meter 适配器 provider">
+        <button class="card-head"><span class="tname">llm</span><span class="ttag">packages/llm · 大模型接入层</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">llm</code>：<code class="inl">LlmRuntime</code>（<code class="inl">ctx.llm</code>）——Provider 路由、统一流式 <code class="inl">stream()</code>、消息/内容块词汇、<code class="inl">BlockAssembler</code>。</li>
+              <li><code class="pkg">llm-deepseek</code>：直连 DeepSeek chat-completions（fetch + SSE）。</li>
+              <li><code class="pkg">llm-pi-ai</code>：基于 pi-ai 库的多 Provider 通用适配器。</li>
+              <li><code class="pkg">llm-retry</code>：在 agent 循环的「请求失败」waterfall 上执行重试（不在 stream 内）。</li>
+              <li><code class="pkg">token-meter</code>：重放感知的 token 计量单例。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>整个 agent 的「LLM 接入层」，类比 LiteLLM / OpenAI 客户端抽象：<code class="inl">ctx.llm</code> 是统一接口，<code class="inl">llm-deepseek/llm-pi-ai</code> 是不同厂商适配器。流式输出被抽成「原始 chunk 流」，由 <code class="inl">BlockAssembler</code> 统一拼成消息（类似把 SSE token 流组装成最终回复）。<b>重试不在 stream 里包</b>，而在 agent 闭环里以「开新一轮 turn」方式重试——保证 durable 可重放。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="e2b 远程沙箱 执行世界 fs-e2b subprocess-e2b 容器 provider 可移植">
+        <button class="card-head"><span class="tname">e2b</span><span class="ttag">packages/e2b · 远程沙箱执行世界（POC）</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">e2b</code>：共享生命周期所有者（<code class="inl">ctx.e2b</code>）——建沙箱、准备目录、暴露 SDK 句柄。</li>
+              <li><code class="pkg">fs-e2b</code>：在 E2B Filesystem API 上实现 <code class="inl">ctx.fs</code>。</li>
+              <li><code class="pkg">subprocess-e2b</code>：在 E2B Commands/PTY API 上实现 <code class="inl">ctx.subprocess</code>。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把「本地进程+本地文件」这对地基整个换成「远端 E2B 容器里的进程+文件」，而上面的 bash/terminal/LSP 工具一行都不用改——因为它们只认 <code class="inl">ctx.fs/ctx.subprocess</code> 抽象。这就是「可移植的执行世界」：换执行后端 = 换两个适配器，上层无感。类比把本地 <code class="inl">subprocess/open</code> 换成「在远程容器里执行」。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="llm deepseek 视觉 vision 模型 catalog multimodal 多模态">
+        <button class="card-head"><span class="tname">LLM：DeepSeek 视觉模型入目录</span><span class="ttag">packages/llm/llm-deepseek · 0.1.1-rc.1</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="inl">feat(llm-deepseek): publish the vision model</code>——视觉模型进入 model catalog。</li>
+              <li><code class="inl">fix(llm-deepseek): address vision catalog review</code>——按 review 修正目录项。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>这是 <strong>llm 接缝的 provider 能力扩展</strong>：给 DeepSeek provider 的「能力清单」加了一项 multimodal（视觉）。对上层来说，模型选择多了一个可选项，工具调用链路完全不变——再次印证「换能力只是换插件」。</p>
+            <p>Python 类比：给一个 LLM client 的 model 枚举加了一个值，背后自动带上 <code class="inl">supports_images=True</code> 这类 capability 标记。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="sandbox bwrap landlock pid namespace 命名空间 隔离 沙箱 安全">
+        <button class="card-head"><span class="tname">Sandbox：bwrap PID 命名空间隔离</span><span class="ttag">packages/sandbox · 0.1.1-rc.1</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <p><code class="inl">fix(sandbox): isolate bwrap PID namespace</code>——在 landlock / bwrap 基础上再隔离 PID 命名空间。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>沙箱从「限制能碰哪些文件」（landlock / seccomp 思路）又加了一层「<strong>隔离进程号空间</strong>」：被执行的子进程看不到宿主机的 PID 布局，横向移动更难。</p>
+            <p>Python 无直接类比，这是系统级隔离（类似容器的 PID namespace）；把它想成「给每个被跑的命令一个独立的小世界，它以为自己就是 1 号进程」。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S7 会话存储上下文 ===================== -->
+    <section id="s7">
+      <div class="sec-head"><h1><span class="num">7</span>会话 · 存储 · 上下文</h1>
+        <div class="lead">把「一次会话」建模成 append-only 事件流：落盘、投影、查询、压缩</div>
+      </div>
+
+      <div class="card" data-kw="session 持久化 projection 投影 标题 遥测 checkpoint persistence jsonl sqlite">
+        <button class="card-head"><span class="tname">session（持久化家族）</span><span class="ttag">packages/session · 围绕核心日志的插件族</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">session-persistence</code>：抽象服务（<code class="inl">ctx.sessionPersistence</code>）+ 写入协调器（每 id 串行、批量窗口、崩溃尾修复）。</li>
+              <li><code class="pkg">session-persistence-jsonl / sqlite</code>：具体后端（行式 / 打包压缩）。</li>
+              <li><code class="pkg">session-projection / -cache</code>：从已提交事件驱动出整值快照给 UI；缓存加速冷读。</li>
+              <li><code class="pkg">session-stats / session-title* / session-telemetry*</code>：统计、标题（多种 LLM 策略）、遥测（OTel）。</li>
+              <li><code class="pkg">session-checkpoint-policy</code>：在语义边界前强制落盘。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>围绕 <code class="inl">core/session</code> 的「git 历史」做周边：persistence = 把每次 commit 落盘；projection = 从日志重建某时间点视图（可回放）；title/stats/telemetry = 对历史的只读聚合。SQLite 同样有单调 <code class="inl">SESSION_FORMAT_VERSION</code> 校验，版本不符直接拒绝（无迁移）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="storage storage-domain 通用存储 kv sqlite json 数据表单 非会话">
+        <button class="card-head"><span class="tname">storage</span><span class="ttag">packages/storage · 非会话通用 KV 存储</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">storage</code>：中枢（<code class="inl">ctx.storage</code>），连接后端与数据表单，自身不做 IO。</li>
+              <li><code class="pkg">storage-domain</code>：基于 zod schema 的 KV 域。</li>
+              <li><code class="pkg">storage-json / storage-sqlite</code>：两种落盘引擎。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>agent 框架的「配置/工作区数据库」，和会话日志完全分开。类比 Python 里「一个 dict 持久化到 JSON 或 SQLite」——<code class="inl">storage</code> 是注册表，<code class="inl">storage-domain</code> 是带 schema 校验的表，json/sqlite 是两种引擎。SQLite 同样有单调 <code class="inl">user_version</code> 校验。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="spill 溢出 大结果 外置 预览 工具输出 上下文 超限">
+        <button class="card-head"><span class="tname">spill</span><span class="ttag">packages/spill · 大工具结果外置</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">spill</code>：溢出存储接缝（<code class="inl">ctx.spillStore</code>），定义「存大文本、返回定位符」。</li>
+              <li><code class="pkg">spill-local</code>：本地实现，按 session 隔离的私有文件。</li>
+              <li><code class="pkg">spill-policy</code>：<code class="inl">tools/post-execute</code> 转换器，超限时把结果替换为「头/尾预览 + 取回定位符」。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>工具返回几 MB 日志？与其全塞进上下文（费 token、超窗口），不如存磁盘、对话里只留摘要 + 文件路径，模型想细看再 <code class="inl">read/grep</code>。定位符是不透明字符串（本地就是路径），远程可换成 URI 而不改策略层。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="session-query 检索 搜索 fts sqlite session_search 只读 引擎">
+        <button class="card-head"><span class="tname">session-query</span><span class="ttag">packages/session-query · 会话检索</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">session-query</code>：抽象查询引擎（<code class="inl">ctx.sessionQuery</code>）——可信读取、关系追踪、provider 无关过滤。</li>
+              <li><code class="pkg">session-query-sqlite</code>：用 SQLite FTS5 做全文检索。</li>
+              <li><code class="pkg">session-log-export / tool-session-query</code>：导出 + 模型面检索工具（<code class="inl">session_search</code> 等）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>会话日志的「只读搜索引擎」。类比给一堆 git 仓库建 SQLite FTS 倒排索引（独立于原始日志，可丢弃重建）。<code class="inl">tool-session-query</code> 把能力安全交给模型——「搜一下我之前哪个会话做过类似的事」，且限制只能搜同工作区。基于日志本身 ⇒ 压缩后的历史仍可被检索。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="compaction 压缩 摘要 上下文 tool-result-pruner command-compact 历史 squash 可回放">
+        <button class="card-head"><span class="tname">compaction</span><span class="ttag">packages/compaction · 上下文压缩</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">compaction</code>：压缩接缝（<code class="inl">ctx.compaction</code>）——<code class="inl">CompactionEngine</code> 抽象 + 事件协议。</li>
+              <li><code class="pkg">compaction-basic</code>：基于 token 压力 + 一次 <code class="inl">llm.stream()</code> 总结。</li>
+              <li><code class="pkg">compaction-tool-result-pruner</code>：不调模型的工具结果裁剪。</li>
+              <li><code class="pkg">command-compact</code>：人类 <code class="inl">/compact</code> 命令。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>「对话太长时做摘要」。类比把 git 历史里一长串 commit 压缩成一个 squash commit——原始 commit 仍在底层（可还原），工作区变短。<b>压缩也是通过 append-only 日志里多写一条「替换」事件完成的，绝不改写旧记录</b>。<code class="inl">pruner</code> 是更便宜的预处理（截头去尾超长工具输出）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="context agent-instructions file-reference session-reference time-context tmux-context 上下文注入 AGENTS.md @file">
+        <button class="card-head"><span class="tname">context</span><span class="ttag">packages/context · 请求上下文注入</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">agent-instructions</code>：加载 <code class="inl">AGENTS.md</code> 兼容的工作区指令，作为持久化 user 消息注入。</li>
+              <li><code class="pkg">file-reference / -local</code>：<code class="inl">@file</code> 引用发现与本地实现。</li>
+              <li><code class="pkg">session-reference</code>：把其他会话的只读快照作为上下文注入。</li>
+              <li><code class="pkg">time-context / tmux-context</code>：注入时间 / tmux 位置（opt-in）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>「每次请求前自动往提示里塞背景信息」的插件，类比 <code class="inl">system_prompt += read("AGENTS.md")</code>。区别在于 DSH 把这些<b>作为持久化事件</b>写进日志（resume 后能重建同样的上下文，且受压缩约束），而不是临时拼字符串。<code class="inl">session-reference</code> 类似「在提示里 @ 另一个会话，把它的摘要贴进来」（只读快照）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="session projection 投影 状态 客户端视图 host wire checkpoint 事件溯源 日志">
+        <button class="card-head"><span class="tname">session-projection 重构（投影状态 vs 客户端视图）</span><span class="ttag">packages/session · projection · 0.1.1-rc.1</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="inl">refactor(session-projection): separate state from client views</code>（4c421ec882）——投影状态与客户端视图解耦。</li>
+              <li><code class="inl">fix(session-projection): keep host state off wire</code>（9127d7e8b7）——host 状态不进网络。</li>
+              <li><code class="inl">refactor(session-projection): checkpoint every projection unit uniformly</code>（327b86d2ea）——每个投影单元统一 checkpoint。</li>
+            </ul>
+            <p>关联：session 是 append-only 日志，<code class="inl">deriveMessages()</code> 从日志投影出模型历史。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>这次重构把「投影」严格当成 <strong>host 内部状态</strong>：对外只暴露客户端真正需要的视图，host 自己的状态绝不通过网络发出去；并且每个投影单元都用<strong>统一的方式做 checkpoint</strong>。</p>
+            <p>Python 类比：「git 历史是真相，工作区是 checkout 出的视图」——现在进一步明确：host 的本地工作区（内部状态）不外传，只把前端要的那部分「view」发给 UI。这正是「日志是唯一真相、投影只是视图」思想的工程化收紧。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S8 编排执行 ===================== -->
+    <section id="s8">
+      <div class="sec-head"><h1><span class="num">8</span>编排 · 执行</h1>
+        <div class="lead">把 agent 自身能力（子代理、工作流、目标、任务、后台作业、代码执行）也做成可插拔插件</div>
+      </div>
+
+      <div class="card" data-kw="subagent 子代理 派发 provider acp codex claude-code fork spawn tool-subagent 多代理">
+        <button class="card-head"><span class="tname">subagent</span><span class="ttag">packages/subagent · 子代理派发</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">subagent</code>：核心 Service Definition（<code class="inl">ctx.subagents</code>）——provider 注册、委派/续跑契约、生命周期事件。</li>
+              <li><code class="pkg">subagent-in-process-driver / spawn-in-process / fork-in-process</code>：进程内驱动器（空上下文 / 带父历史种子）。</li>
+              <li><code class="pkg">subagent-acp / codex / claude-code / dsh-sdk</code>：跨进程 Provider（ACP / 真实 Codex / Claude Code SDK / 完整 DSH 运行时）。</li>
+              <li><code class="pkg">tool-subagent / -control / -report</code>：委派 / 控制 / 回报工具。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把「派一个小 agent 去干一件事」做成统一接口，后端可插拔。spawn ≈ 同进程新建干净协程；fork ≈ 快照父上下文后开新协程；acp/codex/claude-code/dsh-sdk ≈ 用 <code class="inl">Popen</code> 拉起独立子程序（甚至另一个 LLM 产品）来干这活，父只拿最终文本。模型侧工具把这套能力当「工具」用：委派 = 去叫人干活，control = 发后续消息/打断，report = 干完回来汇报。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="workflow 工作流 worker-thread 编排脚本 ralph tool-workflow 并发 fan-out">
+        <button class="card-head"><span class="tname">workflow</span><span class="ttag">packages/workflow · 动态工作流编排</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">workflow</code>：契约（<code class="inl">ctx.workflowEngine</code>）——脚本/运行/结果/事件，不决定怎么执行。</li>
+              <li><code class="pkg">workflow-worker-thread</code>：每 run 起一个 Node worker thread 执行模型写的脚本（可 fan-out 子代理）。</li>
+              <li><code class="pkg">tool-workflow / tool-ralph</code>：模型面 <code class="inl">workflow</code> 工具 / 固定策略的 <code class="inl">ralph</code> 多轮迭代工具。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>给 agent 一个「迷你编排引擎」——类似把子任务写进 Python 脚本用 <code class="inl">asyncio.gather</code>/线程池并发派发子 agent。worker thread 把重活丢进线程池跑、不阻塞主循环（注意它只是隔离 CPU、<b>不是安全边界</b>，信任等级等同 bash）。<code class="inl">ralph</code> 是把「多轮 fresh-agent 自我迭代」固化成现成工具（类比 Anthropic 的 Ralph loop）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="todo tool-todo 待办清单 会话级 整表替换">
+        <button class="card-head"><span class="tname">todo</span><span class="ttag">packages/todo · 任务清单</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">tool-todo</code>：注册 <code class="inl">todo_write(todos)</code>，整表写入会话日志 <code class="inl">todo/write</code>，无共享/子代理作用域。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>agent 的「待办清单」内存状态，等价于 Claude Code / LangGraph 的 TodoWrite。刻意不做成可插拔 provider——因为清单只属于当前这一个 session，没有「换后端」的需要。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="plan plan-mode 计划模式 软提示 exit_plan_mode 日志化 每agent">
+        <button class="card-head"><span class="tname">plan</span><span class="ttag">packages/plan · 计划模式</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">plan-mode</code>：拥有 plan 状态、部署 guidance、<code class="inl">/plan</code> 进入与 <code class="inl">exit_plan_mode</code> 退出工具。<code class="inl">plan/mode</code> 是 log-only 整值替换事件。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>Claude Code 那种 plan mode 的等价物：一种「先探索规划、别急着执行」的软提示态，靠系统提示文本约束模型，真正安全限制由别的沙箱/审批机制负责。状态在日志里，相当于 append-only 日志上的布尔开关。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="goal 目标 验收 goal-round-driver 状态机 tool-goal command-goal 跨轮">
+        <button class="card-head"><span class="tname">goal</span><span class="ttag">packages/goal · 持久化同会话目标</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">goal</code>：目标领域状态（<code class="inl">ctx.goals</code>），事件溯源，每次变更追加 <code class="inl">goal/change</code>。</li>
+              <li><code class="pkg">goal-round-driver</code>：把「已激活目标」转成顺序 goal round，每轮注入一条提示。</li>
+              <li><code class="pkg">tool-goal / command-goal</code>：模型工具 / 人类命令。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>给 agent 一个「目标 + 验收」的状态机，像 AutoGPT 的 goal 循环但限定同会话、每轮是一次普通 agent 交互。<code class="inl">goal-round-driver</code> 是「自动把目标拆成一轮轮催促模型去做的循环驱动器」。<b>没有独立评判器</b>——算不算完成由模型自己声明。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="schedule 提醒 闹钟 cron 会话内 定时器 日志">
+        <button class="card-head"><span class="tname">schedule</span><span class="ttag">packages/schedule · 会话内提醒</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">schedule</code>：版本化 <code class="inl">schedule/change</code> 事件 + 三个模型工具（create/list/delete）+ 只在有 live root Agent 时运行的定时器 owner。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>给 agent 装一个「会话内闹钟/cron」——只在它所在会话还活着时准时响，会话冷了就等下次恢复时补提醒。状态机全建在 append-only 日志上（日志即真相），无外部通知通道（无邮件/推送）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="jobs 后台作业 JobRegistry 取消 等待 通知 owner tool-jobs 队列">
+        <button class="card-head"><span class="tname">jobs</span><span class="ttag">packages/jobs · 后台作业</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">jobs</code>：作业注册表契约（<code class="inl">ctx.jobs</code>）——id/owner 隔离/读取/取消/等待/通知/清理。</li>
+              <li><code class="pkg">jobs-local</code>：进程内实现，内存记录，<code class="inl">maxConcurrentJobsPerOwner</code> 准入上限。</li>
+              <li><code class="pkg">tool-jobs</code>：控制器 <code class="inl">job_output/job_list/job_kill</code> 与完成通知。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>进程内的「后台任务框架/作业队列」，等价于用 <code class="inl">asyncio.Task</code> 或 Celery/RQ 给长耗时工具做抽象：每个后台活儿有唯一 id、状态、可取消、可等待、完成时通知发起者。registry 是接口，<code class="inl">jobs-local</code> 是内存实现，<code class="inl">tool-jobs</code> 暴露给模型当「查进度/杀任务」工具。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="code-runtime 代码执行 沙箱 worker-thread python subprocess fd3 run_code 绑定">
+        <button class="card-head"><span class="tname">code-runtime</span><span class="ttag">packages/code-runtime · 代码执行运行时</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">code-runtime</code>：Service Definition（<code class="inl">ctx.codeRuntime</code>）——「跑程序、给 {value,logs,error?}」契约 + 跨语言绑定。</li>
+              <li><code class="pkg">code-runtime-worker-thread</code>：Node worker-thread 后端（模型写 TS）。</li>
+              <li><code class="pkg">code-runtime-python</code>：CPython 子进程后端（fd3 上 JSON-lines 协议，模型写 Python）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>给 agent 一个「可插拔代码沙箱后端」，类似 Jupyter kernel / <code class="inl">exec()</code>。Service Definition 是统一接口，worker-thread 像「每跑一次开一个隔离 Node 线程」，python 后端像「fork 一个 <code class="inl">python3</code> 子进程用管道对话」。模型写 TS 还是 Python 由挂载哪个 provider 决定——换后端不改上层 <code class="inl">run_code</code> 工具。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="tool 工具 准备阶段 preparing 进度 lifecycle 生命周期 work detail 四种模式">
+        <button class="card-head"><span class="tname">工具准备阶段（preparing）与四种 Work Detail 模式</span><span class="ttag">packages/chat · tool lifecycle · 0.1.7-rc.1</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <p>工具执行生命周期从两段扩展为三段，新增 <b>preparing 阶段</b>：</p>
+            <ul>
+              <li><code class="inl">feat(chat): present tools in preparing, start, and result stages</code>（d3086e6571）——UI 侧展示 preparing / start / result 三个阶段。</li>
+              <li><code class="inl">feat(tool): show content preparation progress for file mutations</code>（b660f72d4e）——文件变更工具在 preparing 阶段展示进度。</li>
+              <li><code class="inl">feat(chat): add four work detail modes and legacy mappings</code>（015a9b202c）——引入 <code class="inl">compact / verbose / hidden / legacy</code> 四种 Work Detail 展示模式。</li>
+              <li><code class="inl">perf(tool): retain unchanged subcall branches</code>（5840898e07）+ <code class="inl">perf(chat): batch preparing tool updates</code>（b2817d77fb）——避免无变化子调用重算、批量合并 preparing 更新。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>前面学过工具执行是「pre-execute → execute → post-execute 三段瀑布」。现在在 pre-execute 之前再加了一段 <b>preparing</b>，用来展示「还在准备中」的状态，比如下载文件、索引内容。</p>
+            <p>Python 类比：类似给一个长时任务加了 <code class="inl">tqdm</code> 进度条——之前你只看到「开始」和「结束」，现在中间的准备工作也可见了。四种 Work Detail 模式则像日志的 verbose/quiet 级别：用户或部署配置可以选择看多少细节。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="agent-team 多代理 teammate lead spawn 任务板 DAG 邮箱 编排 子智能体 experimental">
+        <button class="card-head"><span class="tname">Agent Teams：多代理编排原型</span><span class="ttag">packages/experimental · agent-team · 0.1.5+</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <p><code class="pkg">agent-team</code> + <code class="pkg">tool-agent-team</code>：Lead agent 能 spawn 多个 teammate（同进程 continuable 子 agent），彼此通过持久化邮箱传消息、通过共享任务 DAG 分工。</p>
+            <ul>
+              <li><code class="inl">spawn_teammate</code> / <code class="inl">send_message</code>：模型可见工具，作用域化到当前 agent-team 上下文。</li>
+              <li>任务板：带版本号 + DAG 依赖的 CRUD，乐观锁防并发冲突。</li>
+              <li>0.1.7 优化了投影字段（<code class="inl">refactor: narrow projection fields</code>），修复了 late-activation 和 shared-projection 消费路径。</li>
+            </ul>
+            <p class="note">当前共享同一工作目录，无 worktree / 远程成员 / 文件锁；标记为 experimental，API 仍在演进。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把「一切皆插件」应用到多代理场景：Lead + teammate 只是更多 Cordis 子上下文，邮箱是持久化事件，任务板是带版本的共享状态——全部通过事件系统，不改核心循环一行代码。</p>
+            <p>Python 类比：类似 <code class="inl">asyncio</code> + 持久化消息队列（如 Redis Stream）+ 带乐观锁的任务看板，但所有 agent 共享同一进程和工作目录，协作靠消息不靠文件锁。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S9 交互界面主机 ===================== -->
+    <section id="s9">
+      <div class="sec-head"><h1><span class="num">9</span>交互 · 界面 · 主机</h1>
+        <div class="lead">agent 运行时是「平面无关的核心」；UI / 主机 / 交互全是可插拔 plugin 平面</div>
+      </div>
+
+      <div class="card" data-kw="interaction 审批 提问 命令 user-approval ask_user commands permission 人类协作">
+        <button class="card-head"><span class="tname">interaction</span><span class="ttag">packages/interaction · 人类协作平面</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">commands</code>：注册/派发人类 slash 命令，结果写 log-only 事件。</li>
+              <li><code class="pkg">user-approval</code>：一次性审批决策编排（<code class="inl">ctx.approval</code>），缺失/失败一律 fail-closed（拒绝）。</li>
+              <li><code class="pkg">permission-presets</code>：把 sandbox/mode + approval/policy 绑成旋钮组合。</li>
+              <li><code class="pkg">user-questions / tool-ask-user</code>：人类问答缝 + 模型面 <code class="inl">ask_user_question</code> 工具。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>agent 跑的时候「人」能插话的口子——让模型问你问题、让你批准危险操作、给你 <code class="inl">/feedback</code> 命令。<b>它完全不污染模型循环</b>：命令和审批结果都是「只写进日志、不喂给模型」的事件，模型只看到最终工具结果。UI 只是这些能力的适配器——没有 UI（ACP/headless）时由机器 answerer 自动回答。审批/提问/命令是 plugin 平面，和 agent 核心通过 <code class="inl">ctx.*</code> + 事件解耦。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="client web React ui-slots slot connection hmr 浏览器 GUI 前端 插件">
+        <button class="card-head"><span class="tname">client</span><span class="ttag">packages/client · Web GUI 浏览器平面</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">web</code>：浏览器启动内核，两阶段挂载整个客户端 plugin 树。</li>
+              <li><code class="pkg">connection</code>：浏览器↔主机 RPC（HTTP POST + 两条只下行 WS 事件流）。</li>
+              <li><code class="pkg">ui-renderer / ui-slots</code>：React 渲染层 + 插槽注册表（扩展插槽机制）。</li>
+              <li><code class="pkg">runtime</code>：共享客户端服务（<code class="inl">SlotRegistry / SessionRuntime / WorkspaceRuntime</code>）。</li>
+              <li><code class="pkg">modules / hmr / locale</code>：浏览器侧模块系统 / 热重载 / 本地化。</li>
+              <li><code class="pkg">ui-*</code>（40+ 包）：ui-conversation（对话）、ui-tool（工具树）、ui-settings*（设置）、ui-subagent、ui-goal、ui-plan、ui-jobs、ui-attachment、ui-skill…… 每个是一个独立 UI 插件。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>client 是浏览器里跑的 React 应用，<b>不直接碰 agent 核心</b>——它通过 <code class="inl">connection</code> 走 RPC（HTTP + WebSocket）和主机对话：发 <code class="inl">session.prompt</code> 让 agent 跑、收 <code class="inl">session/projection</code> 刷新界面。每个 UI 功能都是独立可插拔 plugin，靠 <code class="inl">ui-slots</code> 的「插槽」互相组合。对标 Python/agent 背景：client = 一个「前端微服务客户端」，通过 JSON-RPC/事件流订阅 agent 主机 API，UI 面板是 plugin，和运行时彻底解耦——换一套前端（TUI 或纯 API）核心一行都不用改。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="host webserver apiproxy frontend-static directory-picker plugin-inventory 主机 平面 HTTP RPC 网关">
+        <button class="card-head"><span class="tname">host</span><span class="ttag">packages/host · Web GUI 主机平面</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">webserver</code>：<code class="inl">node:http</code> 服务器，注册 HTTP/WS 路由（只绑 127.0.0.1 / 0.0.0.0）。</li>
+              <li><code class="pkg">frontend-static</code>：SPA 静态资源服务（抢唯一 fallback 座位）。</li>
+              <li><code class="pkg">apiproxy</code>：客户端↔主机的线协议网关（四象限可辨识联合 + Zod 双层校验）。</li>
+              <li><code class="pkg">directory-picker* / plugin-inventory</code>：工作区目录选择缝 + 当前 Loader 树只读投影。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>host 是「跑在服务器/桌面进程里、真正持有 agent 的那一端」。对外只暴露一个 HTTP 服务器，<code class="inl">frontend-static</code> 把前端丢给浏览器，业务走 <code class="inl">apiproxy</code> 那条 <code class="inl">/api</code> JSON-RPC 网关——浏览器端 <code class="inl">connection</code> 就是它的客户端 SDK。<b>agent 核心不关心前面是浏览器还是别的</b>，任何能发 <code class="inl">/api</code> 请求的客户端都行。目录选择器把「选工作目录」抽象成 capability 缝：native 还是 browse 只是后端互换。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="attachment 附件 图片 content-addressed sha256 持久引用 存储">
+        <button class="card-head"><span class="tname">attachment</span><span class="ttag">packages/attachment · 持久化附件</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">attachment</code>：不可变附件引用、图片限制与存储服务（<code class="inl">ctx.attachments</code>）。</li>
+              <li><code class="pkg">attachment-local</code>：<code class="inl">DSH_HOME</code> 下 content-addressed 私有存储（sha256 寻址）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把附件抽象成不可变、按内容寻址（sha256）的持久引用，模型/前端只拿引用 id，绝不直接碰文件路径或 base64。本地实现是 <code class="inl">DSH_HOME</code> 下一个 content-addressed blob 仓库（像 git 的 object store）。会话事件里只放引用，真正字节由独立存储后端保管，后端可插拔。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="feedback 反馈 message-feedback command-feedback 旁路 不进模型 审计">
+        <button class="card-head"><span class="tname">feedback</span><span class="ttag">packages/feedback · 已记录的人类反馈</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">command-feedback</code>：<code class="inl">feedback/record</code> log-only 事件 + <code class="inl">/feedback</code> 命令。</li>
+              <li><code class="pkg">message-feedback</code>：绑定单条消息、可编辑的侧车（Host Remote list/put/delete）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>反馈被刻意拆成两路——一路「给整段会话留一句话」（写进日志、永不进模型，纯审计/遥测）；一路「给某条 AI 回复打分+写备注」（独立侧车，可改可删，也不进模型）。两者都<b>不污染模型上下文</b>，是平行于 agent 循环的「旁路记录」。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="mcp mcp-client Model Context Protocol 桥接 工具注册 listTools callTool">
+        <button class="card-head"><span class="tname">mcp</span><span class="ttag">packages/mcp · MCP 桥接</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">mcp-client</code>：MCP 客户端桥，把外部 server 的工具注册到 <code class="inl">ctx.tools</code>。命名 <code class="inl">mcp__&lt;server&gt;__&lt;tool&gt;</code>。</li>
+              <li>激活时 <code class="inl">listTools()</code> 注册；监听 <code class="inl">tools/list_changed</code> 重同步；断开指数退避重连。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把外部 MCP 工具变成 agent 原生工具的适配层。连上任意 MCP server（stdio / HTTP），把对方工具注册进 <code class="inl">ctx.tools</code>，模型看到的和内置工具没两样——名字还特意对齐 Claude Code 的 <code class="inl">mcp__server__tool</code> 约定。MCP server 增删对 agent 核心透明，核心只认 <code class="inl">ctx.tools</code> 上的统一接口。和 UI/主机一样是挂在工具系统上的 bridge plugin。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="ask_user_question 向人类提问 结构化 选项 用户交互 user-interaction seam HarnessError">
+        <button class="card-head"><span class="tname">ask_user_question：模型向人类提问</span><span class="ttag">packages/ui · user-interaction + tool-ask-user · 0.1.2+</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <p><code class="pkg">dsh-user-interaction</code>（接缝）+ <code class="pkg">dsh-tool-ask-user</code>（工具）：前者定义提供方无关的 <code class="inl">ctx.userInteraction.ask()</code> 接口，后者向模型注册 <code class="inl">ask_user_question</code> 工具：</p>
+            <pre>ask_user_question({
+  questions: [{ id, question,
+    options?: [{ label, description? }],
+    multi_select? }]
+})
+// 结果：{ answers: [{ id, selected: string[], custom? }] }</pre>
+            <p>Web 端由 <code class="pkg">dsh-client-ui-question</code> 渲染（单选立即前进，全部回答后 Enter 提交）；TUI 端渲染键盘叠层并排队并发请求；ACP 自动化应用不挂载该工具。取消/超时以结构化 <code class="inl">UserInteractionError</code>（继承 <code class="inl">HarnessError</code>）传出。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>这是「Definition / Provider / Consumer 接缝三件套」的又一实例，目的是给模型一个<b>结构化暂停原语</b>：agent 不必停止整个 turn、以纯文本提问然后等新消息，而是调一次工具、人在 UI 上点选，结果作为工具结果回到循环，循环继续。</p>
+            <p>Python 类比：类似 <code class="inl">input()</code> 阻塞等用户输入，但升级成「带选项的问卷」——可单选、多选、自由文本，错误通过 <code class="inl">HarnessError</code> 结构化传出，让模型能区分「用户取消」和普通异常。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="TUI 终端 全屏 Windows dsh-tui 命令行 交互 键盘 pane title">
+        <button class="card-head"><span class="tname">全屏 TUI：终端界面也是可插拔插件</span><span class="ttag">packages/tui · dsh-tui · 0.1.2+</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <p>全屏终端界面（<code class="pkg">dsh-tui</code>），与 Web UI 平行，同样通过 host plane 插件挂载。主要能力：</p>
+            <ul>
+              <li>会话切换/侧边栏（含折叠态）、tool 卡片（diff / code / generic）、thinking 折叠行、turn error 展示。</li>
+              <li><code class="inl">ask_user_question</code> 在 TUI 里渲染为键盘叠层，支持排队并发请求。</li>
+              <li>Windows 支持（<code class="inl">feat: windows-tui-support</code>）、自动 pane 标题（<code class="inl">feat: tui-auto-pane-title</code>）。</li>
+              <li>交互扩展服务（<code class="inl">dsh-tui-interactive-extension-service</code>）：让其他插件向 TUI 注入自定义交互组件。</li>
+              <li>长会话渲染性能优化（<code class="inl">fix: tui-long-session-render-costs</code>）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>TUI 是「<strong>host plane / agent plane 分离</strong>」原则最直观的证明：整个终端 UI 是一批 Cordis 插件，不改 agent 运行时任何一行代码，卸掉就等于「无 UI 跑」，装上就有全屏界面。</p>
+            <p>Python 类比：就像给一个命令行 Python 工具加上基于 <code class="inl">textual</code> / <code class="inl">urwid</code> 的 TUI 层——底层逻辑完全不变，UI 是可拆卸的外挂层。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="web client host ui 子代理 subagent header ask_user_question markdown 权限 404 前端">
+        <button class="card-head"><span class="tname">Web / Client 平面改动（印证 UI 也是插件）</span><span class="ttag">packages/client · host · 0.1.1-rc.1</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="inl">feat(web): refine subagent header switcher</code>（de572dd910）——子代理切换器。</li>
+              <li><code class="inl">feat(web): answer ask_user_question over multiple lines</code>（9616790b6c）——多行问答。</li>
+              <li><code class="inl">feat(web): size markdown tables by column count</code>（000ab970f3）——表格按列数自适应宽度。</li>
+              <li><code class="inl">fix(frontend-static): return 404 for missing paths</code>（92723cafeb）——缺失路径返回 404。</li>
+              <li><code class="inl">feat(webserver): structured index injection table</code>（156bd075a9）——结构化索引注入。</li>
+              <li><code class="inl">fix(ui-conversation): render turn error after same-turn retries exhaust</code>（daaede29a5）——同轮重试耗尽后再渲染 turn error。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>这些都是 <strong>client / host 平面的独立插件</strong>，与 agent 核心通过事件 / RPC 解耦——再次印证「host plane / agent plane 分离、UI 也是可插拔插件」。它们改的是界面体验，不动 agent 运行时的任何逻辑。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S10 身份设置协议启动 ===================== -->
+    <section id="s10">
+      <div class="sec-head"><h1><span class="num">10</span>身份 · 设置 · 凭据 · 协议 · 启动</h1>
+        <div class="lead">运行时是「被声明出来」的：boot 组合 + bundle 补丁 + preset 叶子 + 可替换 Service 接缝</div>
+      </div>
+
+      <div class="card" data-kw="identity anonymous-user-id 匿名 id 遥测 反馈 共享库">
+        <button class="card-head"><span class="tname">identity</span><span class="ttag">packages/identity · 匿名身份</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">anonymous-user-id</code>：每个 Harness home 持久化一个匿名关联 UUID v4，供遥测/反馈/DeepSeek 请求复用。<b>是共享库不是 Cordis 插件</b>。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>给每个本地安装发一个稳定「匿名用户 ID」写进文件，类似前端 analytics 的匿名 client id。只用来把遥测/反馈/模型请求在不同后端间串起来，不暴露给模型、不参与鉴权。谁需要就直接 import 函数。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="settings settings-file 设置 配置 分层解析 namespace schema yaml 文件">
+        <button class="card-head"><span class="tname">settings</span><span class="ttag">packages/settings · 用户设置</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">settings</code>：命名空间注册、分层解析与提交（<code class="inl">ctx.settings</code>）。</li>
+              <li><code class="pkg">settings-file</code>：存进本地文件并监听外部编辑的 Provider。</li>
+            </ul>
+            <p>解析值 = 三层叠加：<code class="inl">schema 默认值 → 组合 base → 用户文档分区</code>。写回用加锁重读→渲染→原子 rename，保留 YAML 注释。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>「pydantic-settings + 配置文件」的服务化版本。你先注册「我有哪些配置项、类型/默认值」（schema），统一从 <code class="inl">ctx.settings</code> 读「最终值」。默认值 &lt; 部署 base &lt; 用户文件三层合并，写回本地 YAML 且保留注释。换存储后端只需换 provider——又是接缝模式。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="credentials credentials-local 凭证 引用 密钥 env .env resolve 不缓存">
+        <button class="card-head"><span class="tname">credentials</span><span class="ttag">packages/credentials · 凭证</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">credentials</code>：凭证引用接缝（<code class="inl">ctx.credentials</code>）——配置只放引用，不放大段密钥。</li>
+              <li><code class="pkg">credentials-local</code>：环境变量 + 本地文件 Provider（四层优先级：进程环境 &gt; <code class="inl">$DSH_HOME/.credentials.yaml</code> &gt; 项目 .env &gt; 用户 .env）。</li>
+            </ul>
+            <p>消费者<b>每次操作</b>才 <code class="inl">resolve(ref)</code>，绝不跨操作缓存；空值即「未配置」。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>「python-dotenv + 密钥管理服务」的干净做法。配置里写的是「环境变量名」占位符不是真密钥——配置文件能进版本库/UI。真正要用时（每个请求开始）才去取，可热轮换、不影响插件。<code class="inl">describe</code> 只返回「是否已配置」，绝不返回值——防泄露。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="acp Agent Client Protocol json-rpc stdio 自动化 服务端 程序化">
+        <button class="card-head"><span class="tname">acp</span><span class="ttag">packages/acp · 自动化专用 ACP 服务端</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">acp</code>：仅自动化的 ACP 服务端（JSON-RPC over stdio）。stdin/stdout 上驱动 <code class="inl">ctx.agents</code>。</li>
+              <li>协议：<code class="inl">initialize / session/new / session/prompt / session/cancel / session/update / session/request_permission</code>。只发「已提交」结果，不吐 token 级流式。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>一个「标准协议服务端」——外部脚本用 ACP 这套 JSON-RPC 通过 stdin/stdout 创建 agent、喂 prompt、收最终回复、批处理权限。定位类似 MCP/agent-API server，但<b>只服务于机器自动化</b>，不负责编辑器跳转、交互式提问、富文本展示（那些归 Web 端）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="sdk json-rpc protocol client server 子进程 驱动 类型安全">
+        <button class="card-head"><span class="tname">sdk</span><span class="ttag">packages/sdk · 驱动子进程的 SDK</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">protocol</code>：SDK 运行时的线协议（共享类型、<code class="inl">JsonRpcLineTransport</code>）。</li>
+              <li><code class="pkg">client</code>：TS 客户端 API（<code class="inl">DeepSeekHarness</code> 托管运行 + <code class="inl">HarnessClient</code> 低级）。</li>
+              <li><code class="pkg">server</code>：通过 stdio JSON-RPC 服务进程外 SDK 客户端的 Cordis 插件。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>「把 harness 当子进程、用类型安全的 RPC 调它」——和 LSP（语言服务器协议）一个套路：父进程 spawn 子进程，双方用 stdio 上的 JSON-RPC 通信。<code class="inl">protocol</code> 是共享接口定义，<code class="inl">client</code> 是你手里发指令的 SDK，<code class="inl">server</code> 是 harness 那侧监听的插件。Python 版是同一协议的另一种实现。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="api gateway remotes typert rpc BFF webserver 远端 装配">
+        <button class="card-head"><span class="tname">api</span><span class="ttag">packages/api · 远端 BFF + Typert RPC 网关</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">remotes</code>：Host 的 Agent/Session 身份策略 + Client 的 Remote 贡献装配。</li>
+              <li><code class="pkg">gateway</code>：Host 的 Typert 调度器 + Client 的 Remote 端点（<code class="inl">ctx.typertGateway / ctx.remote</code>）。业务 Service 继承 <code class="inl">TypertRemoteService</code>、用 <code class="inl">@Remote</code> 标记方法。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>「后端 for 前端 (BFF) + RPC 网关」。<code class="inl">gateway</code> 像 tRPC/grpc 风格调度器：把跨进程（Host/Client）的业务方法调用编解码、校验、分发；<code class="inl">remotes</code> 是「具体这个应用选哪些远端方法、用什么身份策略」。转发事件白名单就像 GraphQL 的字段选择集——只把白名单内事件推给客户端。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="typert generator loader protocol registry 类型图 生成 反射 schema 构建期 运行时">
+        <button class="card-head"><span class="tname">typert</span><span class="ttag">packages/typert · 类型图系统</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">generator</code>：TS 工程分析器 + 模型驱动的 Typert 生成器（构建期）。</li>
+              <li><code class="pkg">protocol</code>：编译器无关声明（<code class="inl">@Remote</code> 装饰器、descriptor、codec）。</li>
+              <li><code class="pkg">registry</code>：运行时注册表（<code class="inl">ctx.typert</code>），存生成的反射与 Zod schema。</li>
+              <li><code class="pkg">loader</code>：为生成的 Typert 产物做 Node-only Loader 集成（自动注册）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>「构建期从 TS 类型生成 schema/反射，运行时存进注册表供 RPC 用」——类比 tRPC 从 router 推断类型，但 DSH 是<b>从源码构建期生成</b> reflection 产物。运行时 <code class="inl">registry</code> 像「类名→类型/schema」的表，<code class="inl">loader</code> 像「自动把每个已加载插件导出的类型信息登记进这张表」。<code class="inl">protocol</code> 是大家遵守的「接口契约头文件」。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="boot app-boot cmdline composeEntries 启动 胶水 profile 配置解析">
+        <button class="card-head"><span class="tname">boot</span><span class="ttag">packages/boot · 启动胶水</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">app-boot</code>：<code class="inl">boot()</code> 创建根 context、装 Loader、跑 host 准备、挂载并 await include 树、断言 entries 已激活。<b>关键 <code class="inl">composeEntries</code></b> 在空 entry 列表上叠多层 patch 成最终插件树。</li>
+              <li><code class="pkg">cmdline</code>：launcher→app 的命令行交接（<code class="inl">--profile</code> 等少数 flag 启动器解析，其余原样交 app）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p><code class="inl">boot</code> 是「把一堆配置文件 + patch 合并成最终插件树」的启动器，很像分层配置合并。<code class="inl">composeEntries</code> 按层叠出最终配置，且它和 <code class="inl">renderConfigDump</code> 同一套算法 ⇒ dump 与 boot 不漂移。<code class="inl">cmdline</code> 把「启动器认识的 flag」和「app 自己认识的 flag」一刀切开，互不越界。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="bundle base headless web-app dsh --profile 补丁层 功能包 组合">
+        <button class="card-head"><span class="tname">bundle</span><span class="ttag">packages/bundle · profile 插件包</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">base</code>：每个 profile 最先应用的共享核心（纯 patch，~70 行核心插件）。</li>
+              <li><code class="pkg">web-app</code>：叠在 base 上，加 webserver/API gateway/workspace + web-runtime glue（浏览器 UI）。</li>
+              <li><code class="pkg">headless</code>：叠在 base 上，挂 <code class="inl">headless-runner</code>（一次性跑任务，不开端口）。</li>
+            </ul>
+            <p>patch 层按 id 叠加，<b>后写整行替换</b>（不 deep-merge）。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>bundle 是「可插拔的功能包」。base 是地基，web-app 是「加浏览器 UI」，headless 是「加一次性跑任务模式」。它们本质就是一个 <code class="inl">cordis.patch.yml</code> 补丁清单——声明「往插件树里加哪些行、改哪些行」，由 profile 组合器按 manifest 字段解析，<b>完全不靠代码</b>。类比按环境/场景加载不同插件集合（dev vs prod、web vs cli）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="preset agent-presets persona cordis.yml 每会话 叶子 组合 scope">
+        <button class="card-head"><span class="tname">preset</span><span class="ttag">packages/preset · 每会话 agent 组合</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">agent-presets</code>：preset 词表、文件系统发现、受保护的每-agent 挂载（<code class="inl">ctx.agentPresets</code>）。scope 链 <code class="inl">agent → preset → global</code>（就近覆盖最远）。</li>
+              <li><code class="pkg">persona</code>：把 agent persona 做成可组合插件行（换工具也换身份）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>preset 是「每个 session 自己的插件集合」，本质就是一份 <code class="inl">cordis.yml</code> 叶子。类比 per-request/per-session 的 profile 覆盖——部署给整个进程一套基础组合（进程级单例），preset 只携带「某个 agent 往里贡献什么」。<code class="inl">persona</code> 让预设除了换工具还能换「人设」。组合是声明式的、可被多个会话安全共享/隔离。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="credentials authorization 凭证 授权 接缝 向人类索取 登录 provider ask human 新模块">
+        <button class="card-head"><span class="tname">新增能力包：credentials/authorization</span><span class="ttag">@deepseek-ai/dsh-authorization · 0.1.1-rc.1</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <p>一个全新包，定义了<strong>不依赖 Cordis、浏览器端可直接消费</strong>的 wire-safe 类型（<code class="pkg">packages/credentials/authorization/src/types.ts</code>）：</p>
+            <pre>// 不 import 任何 cordis/service，浏览器端（apiproxy → client）可直接用
+export type AuthorizationPrompt = { signal?: AbortSignal } &amp; (
+  | { kind: 'text';   message: string; placeholder?: string }
+  | { kind: 'secret'; message: string; placeholder?: string }
+  | { kind: 'select'; message: string; options: readonly AuthorizationPromptOption[] }
+)
+export interface AuthorizationOutcome { status: 'authorized' | 'cancelled' }
+export interface AuthorizationEntry {
+  key: CredentialKey; label: string;
+  methods: readonly AuthorizationMethod[]; inFlight: boolean;
+}</pre>
+            <p>配套：<code class="inl">feat(authorization): obtain a credential by asking the human</code>（732a7361f5）、<code class="inl">feat(llm-pi-ai): sign in to a provider instead of withholding it</code>（57c5f017ac）。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>这是「Definition/Provider/Consumer 接缝三件套」的最新样板：把「向人拿密钥」做成一个<strong>可插拔能力</strong>，一个 flow 可以弹出 text / secret / select 三种问题，人在 UI 上回答，结果写回凭证记录。</p>
+            <p><strong>wire-safe 类型</strong>是关键设计：类型里不引入 Cordis，所以浏览器客户端能直接消费，而不必加载整个 Cordis 包——这就是「host plane / agent plane 分离」在类型层面的落地。</p>
+            <p>Python 类比：相当于把「OAuth 登录 / 输入 API Key」抽成一个标准「提问协议」，任何需要授权的 provider 都实现同一套接口；UI 只负责把问题渲染出来、把答案回传（类似统一的 credential backend）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="credentials 凭证 密钥 持久化 引用 加固 升级 boot">
+        <button class="card-head"><span class="tname">凭证体系整体加固</span><span class="ttag">packages/credentials · 0.1.1-rc.1</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="inl">feat(credentials): store durable credential records beside references</code>（86a9f8c862）——持久化凭证记录与引用并存。</li>
+              <li><code class="inl">fix(credentials): name reference update event explicitly</code>（fecfabcac4）——凭证引用更新事件命名显式化。</li>
+              <li><code class="inl">feat(credentials): upgrade the pre-release flat document at boot</code>（933d1f2ab2）——启动时升级旧版扁平文档格式。</li>
+              <li><code class="inl">fix(credentials,authorization,llm-pi-ai): harden the auth seams per review</code>（9eaaeaeb96）——按 review 收紧授权接缝。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把「密钥管理」从「塞进 <code class="inl">.env</code>」升级成「<strong>有版本、可持久化、可向人索取、可按 provider 登录</strong>」的服务。</p>
+            <p>Python 类比：从「读环境变量字典」进化成「带 schema 的凭证存储」（类似 <code class="inl">keyring</code> 的持久化层），并做了向前兼容——旧格式凭证在 boot 时自动升级，不会因格式变了而丢失。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="plan mode 规划 协作姿态 exit_plan_mode 会话状态 日志 dsh-mode cordis.yml 软约束">
+        <button class="card-head"><span class="tname">Plan Mode：记录到日志的协作姿态</span><span class="ttag">packages/mode · dsh-mode · 0.1.2+</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <p>新包 <code class="pkg">@deepseek-ai/dsh-mode</code>，引入「会话模式」：模式是一条<strong>记录到会话日志</strong>的具名状态，靠纯函数 <code class="inl">foldMode(events)</code> 从日志折叠出当前模式。</p>
+            <ul>
+              <li><b>进入</b>：<code class="inl">ctx.modes.set(agent, 'plan')</code>，在下一轮次边界写入 <code class="inl">mode/set</code> 事件。</li>
+              <li><b>效果</b>：在系统提示词 order-50 处注入配置好的规划指引（软约束，不动工具集/沙箱/审批）。</li>
+              <li><b>退出</b>：模型调用 <code class="inl">exit_plan_mode({ plan: string })</code>，触发 <code class="inl">ctx.userInteraction.ask()</code> 请人类评审；批准则切回 <code class="inl">default</code>，拒绝则把用户反馈作为纠正错误返回给模型。</li>
+            </ul>
+            <pre># cordis.yml 启用示例
+- id: mode
+  name: '@deepseek-ai/dsh-mode'
+  config:
+    modes:
+      plan:
+        section: |
+          You are in plan mode: explore and design,
+          then present the plan via exit_plan_mode.</pre>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>两个核心思想同时发力：</p>
+            <ul>
+              <li><b>日志是唯一真相</b>：模式从 <code class="inl">mode/set</code> 事件折叠出来，而不是存在内存变量里。恢复、fork、压缩都能还原模式。</li>
+              <li><b>一切皆插件</b>：移除 <code class="inl">dsh-mode</code> 包，整个模式功能就消失，核心循环完全不知道 Plan Mode 曾经存在。</li>
+            </ul>
+            <p>Python 类比：类似用 <code class="inl">functools.reduce</code> 把事件流折叠成当前状态——模式就是折叠的输出值；切换模式就是往流里追加一条新事件，而不是改某个全局变量。</p>
+            <p class="note">Plan Mode 只改系统提示词（软约束）。想在规划期间真的禁止写文件，要另外把沙箱模式拨到只读——两条轴独立，互不干扰。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S11 治理支撑跨语言 ===================== -->
+    <section id="s11">
+      <div class="sec-head"><h1><span class="num">11</span>治理 · 支撑 · 跨语言</h1>
+        <div class="lead">防护、自省、测试、工具链、跨语言边界——全都是可插拔插件或库，核心保持精简</div>
+      </div>
+
+      <div class="card" data-kw="guard repeat-tool-reminder timeout-policy 循环 超时 护栏 装饰器">
+        <button class="card-head"><span class="tname">guard</span><span class="ttag">packages/guard · 循环卫生 + 工具超时</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">repeat-tool-reminder</code>：对连续、参数完全相同的重复工具调用，注入「别再重复了」升级式提醒（只建议、不改写）。</li>
+              <li><code class="pkg">timeout-policy</code>：在 <code class="inl">tools/execute</code> 给声明了 <code class="inl">timeoutMs</code> 的工具套协作式截止时间，超时返回 <code class="inl">TOOL_TIMEOUT</code>。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p><code class="inl">repeat-tool-reminder</code> ≈ 带调用指纹的循环检测器（不是 <code class="inl">@retry</code>，而是「同一 (fn,args) 连续调 N 次就警告模型，但绝不拦截合法幂等轮询」）。<code class="inl">timeout-policy</code> ≈ 作用于单个工具调用的 <code class="inl">asyncio.wait_for</code> 装饰器，但只「通知」不「强杀」——信号到了工具得自己听信号停。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="hooks hook-protocol hooks-claude-code hooks-codex 生命周期 shell hook 桥接 线协议">
+        <button class="card-head"><span class="tname">hooks</span><span class="ttag">packages/hooks · Claude Code/Codex hook 桥接</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">hook-protocol</code>：共享 shell-hook 线协议库（匹配器、执行、解码、合并）。</li>
+              <li><code class="pkg">hooks-claude-code / hooks-codex</code>：把 CC/Codex 的 <code class="inl">hooks.json</code> 方言「翻译」到 harness 的 typed 拦截点（<code class="inl">agent/session-start、tools/pre-execute</code> 等）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>把「外部 pre-commit hook / GitHub Action 风格 shell 脚本」桥接到框架的中间件系统。原生 Cordis 插件本就能做同样甚至更强的事，这两个桥只是让用户「已有的 CC/Codex hook 配置能直接复用」的兼容层。类比写个适配器让旧 bash git hook 在你的 Python 应用生命周期钩子里跑。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="sandbox sandbox-local sandbox-policy sandbox-windows-acl landlock seatbelt 文件隔离 fail-closed 策略随调用">
+        <button class="card-head"><span class="tname">sandbox</span><span class="ttag">packages/sandbox · 沙箱隔离</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">sandbox</code>：进程沙箱 Service Definition（<code class="inl">ctx.sandbox</code>），<code class="inl">confine(argv, policy)</code> 返回被包裹的 argv。</li>
+              <li><code class="pkg">sandbox-local</code>：Linux 优先 bwrap→Landlock；macOS Seatbelt；Windows 限制令牌。</li>
+              <li><code class="pkg">sandbox-policy</code>：按会话的沙箱策略解析（mode + workspaceRoot）。</li>
+              <li><code class="pkg">sandbox-windows-acl</code>：Windows <code class="inl">WRITE_RESTRICTED</code> 令牌后端。</li>
+            </ul>
+            <p>没有可用后端就<b>抛错而不是放行</b>（fail-closed）；策略跟着调用走而非跟着 provider 走。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>用 Landlock / Seatbelt / 限制令牌把「一个子进程及其子孙能碰的文件」限制在一组白名单里，正是 Linux 上用 Landlock/seccomp 或 firejail 限制命令路径的思路。两个关键设计：<b>「策略随调用走」</b>（像函数调用时传 <code class="inl">read_only=True</code> 参数，不是全局开关）；<b>「fail-closed」</b>（沙箱不可用就拒绝跑，绝不「没沙箱就裸跑」）。Windows 那套是 partial（只限制写），需读侧策略配合。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="runtime-diagnostics invariants 不变量 断言 运行时 事件流 companion">
+        <button class="card-head"><span class="tname">runtime-diagnostics</span><span class="ttag">packages/runtime-diagnostics · 运行时不变量断言</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">invariants</code>：<code class="inl">InvariantRegistry</code>（<code class="inl">ctx.invariants</code>），各包发布 companion 守护事件流/可变数据关系（如「每个工具结果都能在源事件找到」）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>一套「运行时契约测试 / 不变量断言框架」，但断言对象不是单个函数，而是整个系统的<b>事件流与可变状态</b>。类比 Python 里用 property-based test 守护领域不变量，但它常驻运行进程、按包可插拔开关。「确认某方法存在」属类型/单测范畴，不属于这类运行时不变量。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="extensions tool-cordis cordis-host-runner cordis-client-runner ui-cordis self-modification 自省 自扩展 node:vm 动态包">
+        <button class="card-head"><span class="tname">extensions</span><span class="ttag">packages/extensions · 运行时自省/自扩展（原 self-modification）</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">tool-cordis</code>：模型可见的 <code class="inl">cordis_inspect / define / run / stop / undefine</code>。</li>
+              <li><code class="pkg">cordis-host-runner / -client-runner</code>：<code class="inl">node:vm</code> 沙箱（host 半）+ 浏览器半（双面体）。</li>
+              <li><code class="pkg">ui-cordis</code>：浏览器侧面板。</li>
+            </ul>
+            <p>注册表只在进程内存、代码从不落盘、重启即失；<code class="inl">node:vm</code> 隔离 globals 但<b>不是安全边界</b>（等价于给 bash 权限）。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>给 agent 一个「Jupyter/REPL 式自省与自扩展」能力：模型可 <code class="inl">inspect</code> 当前进程有哪些 service/插件/工具（像 <code class="inl">dir()</code>/反射），还能 <code class="inl">define</code> 一小段代码、<code class="inl">run</code> 起来注册新工具、再 <code class="inl">stop/undefine</code> 收回。类比运行中的解释器里 <code class="inl">eval</code> 一段代码并 <code class="inl">import</code> 新模块——但包在 <code class="inl">node:vm</code> 里且明确不是安全沙箱。这正是 AGENTS.md 里 <code class="inl">self-modification</code>（agent 检视/挂载自己的插件）的现世形态，如今落在 extensions 组。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="util brand home-paths timeout atomic-write native-command output-retention launch-environment 零依赖 工具箱">
+        <button class="card-head"><span class="tname">util</span><span class="ttag">packages/util · 零依赖工具</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">brand</code>：名义类型原语（≈ Python <code class="inl">typing.NewType</code>，给 id 加类型防混用）。</li>
+              <li><code class="pkg">timeout</code>：截止时间与超时分类（<code class="inl">AbortSignal.any</code> 融合上游取消 + 本地计时，只通知不杀）。</li>
+              <li><code class="pkg">atomic-write</code>：原子替换文件（防部分写 / symlink 劫持 / 权限放大）。</li>
+              <li><code class="pkg">native-command</code>：无 shell 的 <code class="inl">execFile</code>（≈ <code class="inl">subprocess.run([cmd,*args])</code> 非 <code class="inl">shell=True</code>）。</li>
+              <li><code class="pkg">output-retention / home-paths / launch-environment</code>：输出截断器 / 数据根路径 / 分层环境变量视图。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>DSH 版的「Python 标准库小工具箱」：brand 防 id 混用、timeout 拆成「计时/分类」（共享）与「kill」（各 capability 自己）、atomic-write 防 symlink 攻击、native-command 拒绝拼 shell 字符串、launch-environment 记得每个变量从哪一层来。微内核不替你管怎么杀进程——这是刻意的设计克制。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="test-support llm-replay llm-mock-server acp-snapshot agent-loop-testkit loader-smoke 测试 录制 重放 快照">
+        <button class="card-head"><span class="tname">test-support</span><span class="ttag">packages/test-support · 测试基础设施</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">llm-replay</code>：重放录制的模型响应（从 <code class="inl">session.jsonl</code> 重建流），无 key 也能跑快照测试。</li>
+              <li><code class="pkg">llm-mock-server</code>：确定性 OpenAI 兼容故障服务器（脚本化断流/限流/工具调用）。</li>
+              <li><code class="pkg">acp-snapshot</code>：ACP 快照测试（归一化 UUID/路径/时间后比对）。</li>
+              <li><code class="pkg">agent-loop-testkit / client-runtime / loader-smoke</code>：挂载依赖 / jsdom / 冒烟测试的 fixtures。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>DSH 版的 pytest 工具链：<code class="inl">llm-replay</code> ≈ VCR.py / <code class="inl">responses</code> 的录制回放（跑一次真实 agent 收割 .jsonl，之后无 key 确定性重放）；<code class="inl">llm-mock-server</code> ≈ 注入各种故障测恢复；<code class="inl">acp-snapshot</code> ≈ snapshot 测试 + 归一化器（让输出可比较）。<b>对你最有用</b>：<code class="inl">pnpm run test:snapshot</code> 就是无 key 回放，等于「看一次真实任务全过程」。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="examples agent-spine-demo acp-demo jsonrpc-demo 预置 bundle 模板 leaf cordis.yml">
+        <button class="card-head"><span class="tname">examples</span><span class="ttag">packages/examples · 预置 bundle / demo</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">agent-spine-demo</code>：默认「无执行器、无 UI」的 agent 脊柱 bundle（挂好每个 harness agent 都需要的核心服务集）。</li>
+              <li><code class="pkg">acp-demo / jsonrpc-demo</code>：ACP 自动化服务器 / 外部 cordis.yml 的 JSON-RPC 运行时 bin。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>DSH 版的「预置 docker-compose / 应用模板」。你不用手写整套插件装配，只需一个薄 <code class="inl">cordis.yml</code> 叶子（指定后端与入口）就能跑起完整 agent。<code class="inl">agent-spine-demo</code> 把「共享基础设施」做成可复用 bundle，demo 是在它之上加不同传输入口。类比 spine 像 FastAPI 的 <code class="inl">app = FastAPI()</code> + 公共中间件，leaf 像你传入的 router 与配置。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="experimental agent-team tool-agent-team 多代理 团队 任务板 邮箱 原型">
+        <button class="card-head"><span class="tname">experimental</span><span class="ttag">packages/experimental · 私有原型</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">agent-team</code>：隐式 root 的 Agent Teams 域——Lead/teammate 花名册、持久化对等邮箱、共享任务 DAG。</li>
+              <li><code class="pkg">tool-agent-team</code>：作用域化的 Agent Teams 工具（spawn_teammate / send_message / 任务板 CRUD）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>一个多 agent 编排原型：Lead agent 能 spawn 多个 teammate（同一进程里 continuable 子 agent，共享 cwd），彼此用「持久化邮箱」传消息、用「共享任务板（带版本号 + DAG 依赖）」分工。类比用 asyncio + 持久化消息队列 + 带乐观锁的任务看板实现「团队作战」，但所有成员共享同工作目录（无 worktree/远程成员/文件锁）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="workspace 工作区 注册表 会话 目录 项目 元数据">
+        <button class="card-head"><span class="tname">workspace</span><span class="ttag">packages/workspace · 工作区能力</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">workspace</code>：<code class="inl">ctx.workspaceRegistry</code>——注册工作区、登记其会话（实体实现包私有）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>一个「项目目录注册表」——记录「哪些目录是工作区、各工作区有哪些会话、顺序如何」，UI 侧可排序/归档。类比 IDE 的「最近打开项目」列表 + 每项目会话索引，但不碰实际文件，删除注册 ≠ 删除文件夹（两个独立能力）。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="python python sdk SDK runtime wheel subprocess json-rpc 客户端 打包运行时">
+        <button class="card-head"><span class="tname">python</span><span class="ttag">python/ · Python SDK（跨语言边界）</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">sdk</code>（<code class="inl">deepseek_harness</code>）：高层 turns API + 低层 JSON-RPC 客户端，懒启动打包的 <code class="inl">dsh-jsonrpc-agent</code> 单文件可执行。</li>
+              <li><code class="pkg">sdk-runtime</code>：打包的运行时二进制与默认 agent 配置（wheel）。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>对你（Python 背景）最直观：整体模式 = <b>subprocess + JSON-RPC</b>（像用 Python 驱动一个 MCP/LSP server：起子进程、stdio 换行 JSON 通信）。<code class="inl">sdk</code> 像 OpenAI/Anthropic 客户端的 <code class="inl">Client()+run()</code>，底层是本地起的 Node 运行时。<code class="inl">sdk-runtime</code> 像 wheel 里打包的「编译好二进制 + 默认配置」（类似 numpy 带预编译扩展）。<b>不变量</b>：运行时必须给 config，绝不「无配置就裸跑」——和 sandbox 的 fail-closed 一脉相承。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="native landlock-run node-addon 沙箱 C 启动器 原生 跨平台 wheel 自我限制">
+        <button class="card-head"><span class="tname">native</span><span class="ttag">native/ · 原生沙箱 addon（跨语言边界）</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="pkg">landlock-run</code>（<code class="inl">@deepseek-ai/node-addon-landlock-run</code>）：约 300 行 C11，静态链接 musl，先给自己装 Landlock ruleset 再 <code class="inl">exec</code> 被包裹命令；规则跨 <code class="inl">execve</code> 继承；<b>fail-closed</b>。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>用 Landlock（Linux 内核原生沙箱）做的「预编译 C 启动器」，分发方式像平台 wheel：一个 C 程序先给自己加文件系统白名单规则，再 <code class="inl">exec</code> 你的命令，子命令及子孙全受限，调用方不受影响。类比 Python 人熟悉的：用 landlock 的 C 封装 + 平台 wheel 给不可信命令套「只能读 /、读写 /tmp/work」的限制。它给上面 <code class="inl">sandbox/sandbox-local</code> 的 Linux Landlock rung 提供版本化二进制 + CLI 契约。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="plugin-manager 插件兼容 peer dependency 版本锁 registry mirror GitHub 安装 精确豁免">
+        <button class="card-head"><span class="tname">插件兼容性约束与 Registry 镜像恢复</span><span class="ttag">packages/plugin-manager · 0.1.5+</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="inl">feat(plugins): enforce DSH peer compatibility with exact exemptions</code>（2c67633990）——安装时校验插件 <code class="inl">peerDependencies</code> 与当前 DSH 版本是否兼容，支持精确豁免。</li>
+              <li><code class="inl">feat(plugins): report incompatible versions as typed refusals</code>（51d70c5f5c）——不兼容时以结构化 typed refusal 返回，而不是抛裸字符串错误。</li>
+              <li><code class="inl">feat(plugin-manager): offer mirror recovery for GitHub install failures</code>（c22b226b18）+ <code class="inl">feat: choose the first responsive public registry</code>（3c50bf6b6c）——GitHub 安装失败时自动切换公共 registry 镜像。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>「一切皆插件」带来的工程代价：插件来自外部，必须校验它们和当前运行时版本是否匹配。和 Python 的 <code class="inl">pip</code> 依赖解析类似，但 DSH 在<b>安装时</b>就给出结构化错误（typed refusal），而不是在运行时崩溃。镜像恢复则类似 pip 的 <code class="inl">--index-url</code> 降级回退，对网络不稳定场景的可靠性保障。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="build ci pnpm standalone windows 入口 发布 工程">
+        <button class="card-head"><span class="tname">Build / CI：独立 pnpm 入口与 Windows 验证</span><span class="ttag">build · ci · 0.1.1-rc.1</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <ul>
+              <li><code class="inl">fix(build): support standalone pnpm entrypoints</code>（89674edc93）+ <code class="inl">test(ci): exercise standalone pnpm on Windows</code>（4f2868409d）——支持独立 pnpm 入口、Windows 单独验证。</li>
+              <li><code class="inl">ci: split master-only jobs into ci-master.yml</code>（61f910d1c6）——CI 拆分。</li>
+              <li><code class="inl">ci: stop PR gray checks from lifecycle and release publish jobs</code>（a33ed4ddf8）——灰检查治理。</li>
+            </ul>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>发布工程层面：让「独立 pnpm 入口」和「Windows 单独跑一遍」成为可能——直接影响你本机 <code class="inl">pnpm dsh</code> 的体验。CI 把只应在 master 跑的任务拆出去、并治理了「灰色检查」误报，让 PR 状态更干净。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== S12 实战 ===================== -->
+    <section id="s12">
+      <div class="sec-head"><h1><span class="num">12</span>实战：端到端 trace + 怎么自己跑</h1>
+        <div class="lead">把前面所有拼起来：一条 turn 从消息到工具结果，以及你本机怎么真跑起来看</div>
+      </div>
+
+      <div class="card" data-kw="trace turn step 端到端 流程 消息 工具 循环 全链路">
+        <button class="card-head"><span class="tname">一条 turn 的端到端链路</span><span class="ttag">把思想 + 脊梁 + 接缝串成闭环</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（做了什么）</div>
+            <pre>1. 消息进入 agent 的 inbox（AsyncLocalStorage 做因果归属）
+2. ReactLoopAgent.turn() → append('turn/start')        [emit → 进日志]
+3. preStep(): inbox.claim() → systemPrompt.assemble()
+            → dispatch.waterfall('agent/pre-step', …)   [改写/拦截点]
+4. step(): buildRequest (agent/request 瀑布)
+           → ctx.llm.stream(request)  (llm/stream 瀑布，打 DeepSeek)
+5. 边流边 append('assistant/chunk') → 聚合 append('assistant/message')
+6. 若模型要调工具 → executeToolCalls():
+     每个 tool call 走 tools/pre-execute → execute → post-execute（三段瀑布）
+     分别 append('tool/call') / ('tool/result')
+7. 回到 4，直到 agent/turn-stopping (serial) 判定停止
+   → append('turn/end')                                 [emit → 进日志]</pre>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>这就是「用户发一句话 → 工具结果回到模型」的真实路径。每一步都对应前面学过的概念：inbox/因果归属（agent 包）、turn/step 循环（agent-loop）、系统提示拼装（system-prompt）、模型调用（llm 接缝 + waterfall）、工具执行（tools 三段流水线 + shell/bash 接缝）。</p>
+            <p>闭环本质：<b>思想地基（组合）+ 核心脊梁（turn/step 循环）+ 能力接缝（tool 三件套 + 事件 waterfall）</b>在运行时咬合在一起。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-kw="自己跑 命令 pnpm dsh headless test:snapshot dump-config DEEPSEEK_API_KEY 实操">
+        <button class="card-head"><span class="tname">你本机怎么真跑起来看</span><span class="ttag">无需读懂全部源码也能「看见」运行</span><span class="chev">▸</span></button>
+        <div class="card-body">
+          <div class="blk code">
+            <div class="lab">代码讲解（命令与入口）</div>
+            <pre># 跑一次真实任务（需 DEEPSEEK_API_KEY）
+pnpm dsh --profile headless "用 python 写个快排并跑测试"
+
+# 无 key 也能看真实运行：对照预期消息流快照回放
+pnpm run test:snapshot
+
+# 看组合出来的插件树（无需 key）
+pnpm dsh --profile web --dump-config</pre>
+            <p>项目里还有一批可直接读的叶子配置，例如 <code class="inl">examples/headless-agent/cordis.yml</code>：里面用 <code class="inl">id/name/config</code> 行声明了 settings、credentials、llm-deepseek、subprocess、bash、agent-spine、persistence、subagent、workflow、todo、fs-local 等插件——是一份「把各模块拼成可运行进程」的实物范例。</p>
+          </div>
+          <div class="blk plain">
+            <div class="lab">白话梳理（怎么做的 / 为什么）</div>
+            <p>如果你只在沙箱里（没装 pnpm / node_modules），这些命令跑不了，但思路通用：</p>
+            <ul>
+              <li><b>想看「消息怎么流动」</b>：优先 <code class="inl">pnpm run test:snapshot</code>——它无 key，对照录好的消息流快照回放，等于完整看一次真实任务的全过程。这是理解「消息是怎么一步步流动的」最高效的方式。</li>
+              <li><b>想看「运行时装了哪些插件」</b>：<code class="inl">--dump-config</code> 打印的树严格等于真 boot 的树（前面讲过 composeEntries 与 dump 同一套算法），是验证「组合机制」的实物。</li>
+              <li><b>想动手改一个能力</b>：挑一个你想改的（比如加一个新 tool，或换 LLM provider），从 Definition 写到 Consumer，走一遍「接缝」扩展流程——这正是这份文档反复铺垫的能力。</li>
+            </ul>
+            <p class="note">本沙箱里 <code class="inl">pnpm</code> / <code class="inl">node_modules</code> 均未安装，所以上面的命令我在这里实跑不了；你在自己机器上（已 <code class="inl">pnpm install</code>）能直接出结果。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="intro-box" style="margin-top:18px">
+        <b>全程回顾：</b>我们用 12 步把整个项目串了起来——① Cordis 思想地基 → ② core 核心脊梁（真实源码）→ ③ 能力接缝三件套 → ④ 事件系统三类×三种派发 → ⑤ 组合机制（Profiles/Bundles/patch）→ ⑥~⑪ 各能力家族与支撑模块（执行IO / 会话存储 / 编排执行 / 交互界面 / 身份设置协议启动 / 治理支撑跨语言）→ ⑫ 一条 turn 的端到端 trace + 怎么自己跑。
+        <br/><br/>
+        <b>一句话记忆点：</b>DSH = 「一切皆插件」的 Cordis 微内核 + 「事件溯源会话日志」做真相源 + 「Definition/Provider/Consumer 接缝」解耦每一层能力。核心永远精简，所有行为都是可挂载、可替换、可关掉的插件。
+      </div>
+    </section>
+
+
+    <footer>
+      DeepSeek Harness 模块交互式学习手册 · 基于仓库源码与 README 整理 · 面向「Python / agent 背景、不懂 TS」的读者 · 所有代码片段来自真实源码或官方文档。
+    </footer>
+</div>
+      </div></div>

@@ -1,0 +1,2625 @@
+<div class="module" id="mod-lg" hidden>
+<!-- @learning-menu -->
+<div class="lg-scope">
+
+<div class="content">
+
+<!-- 右侧章节目录 -->
+
+
+<h1>🦜 LangGraph Sub-Agents 实战教程</h1>
+<p class="subtitle">从零构建一个能 <strong>写代码 → 生测试 → 做审查 → 自动修复</strong> 的 Multi-Agent<sup class="tp-mark" data-tp="multi-agent" role="button" tabindex="0" title="查看技术点详情" aria-label="查看技术点详情">?</sup> Pipeline</p>
+
+<div class="hero">
+  <h4>🎯 你将收获什么</h4>
+  <p>深入理解 LangGraph 核心概念（State / Node / Edge / 条件分支 / 持久化 / Sub-Graph / 并行执行）<br>
+  掌握 LangChain & LangGraph 常用 API 速查<br>
+  掌握 Sub-Agent 协作模式，学会控制中间流程与产物流转<br>
+  通过 4 个实战案例获得<strong>独立构建 Agent 工作流</strong>的能力</p>
+</div>
+
+<!-- ==================== SECTION 1 ==================== -->
+<div class="section" id="lg-s1">
+<h2>LangChain 速览回顾</h2>
+
+<p>先花 3 分钟快速回顾 LangChain 核心概念 —— 后面 LangGraph 的很多东西都建立在这些基础之上。</p>
+
+<div class="callout callout-analogy">
+  <strong>类比时间：</strong>如果把 LLM 应用比作做菜，LangChain 给你提供了<strong>食材</strong>（Prompt 模板）、<strong>厨具</strong>（LLM 调用）和<strong>调料</strong>（工具/Tool）。但怎么做菜（流程编排），它只提供了一种非常简单的方案 —— 链（Chain）。
+</div>
+
+<h3>LangChain 核心组件</h3>
+
+<table>
+  <tr><th>组件</th><th>作用</th><th>一句话</th></tr>
+  <tr><td><code>PromptTemplate</code></td><td>模板化提示词</td><td>把变量填进模板，生成完整 prompt</td></tr>
+  <tr><td><code>ChatModel</code></td><td>调用大模型</td><td>封装 API 调用，统一接口（推荐 Claude Sonnet 5）</td></tr>
+  <tr><td><code>OutputParser</code></td><td>解析输出</td><td>把 LLM 的文本输出变成结构化数据</td></tr>
+  <tr><td><code>Tool</code></td><td>给 LLM 接外部能力</td><td>搜索、计算、读文件……</td></tr>
+  <tr><td><code>Chain (LCEL)</code></td><td>串联组件</td><td><code>prompt | llm | parser</code> 管道语法</td></tr>
+  <tr><td><code>Agent</code></td><td>自主决策 + 工具调用</td><td>LLM 自己决定用什么工具、调几次</td></tr>
+</table>
+
+<div class="callout callout-key">
+  <strong>关键限制：</strong>LangChain 的 Chain 是<strong>线性管道</strong> —— A → B → C，数据单向流动。Agent 虽然能循环调用工具，但流程控制能力有限，很难实现复杂的分支、回退、并行、人工审核等场景。
+</div>
+
+<p>举个例子，用 LangChain LCEL 写一个简单的代码生成链：</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+<span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> <span class="cls">StrOutputParser</span>
+
+<span class="cmt"># 三个组件，一条链</span>
+prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(
+    <span class="str">"请用 Python 实现以下需求：{requirement}"</span>
+)
+llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-sonnet-5"</span>)
+parser <span class="op">=</span> <span class="cls">StrOutputParser</span>()
+
+<span class="cmt"># LCEL 管道语法：prompt → llm → parser</span>
+chain <span class="op">=</span> prompt <span class="op">|</span> llm <span class="op">|</span> parser
+
+<span class="cmt"># 运行</span>
+result <span class="op">=</span> chain.<span class="fn">invoke</span>({<span class="str">"requirement"</span>: <span class="str">"一个冒泡排序函数"</span>})
+<span class="fn">print</span>(result)</code></pre>
+</div>
+
+<p>这就是你已经掌握的 LangChain —— 简单、线性、好用。但当需求变成：</p>
+
+<ul>
+  <li>生成代码 → <strong>如果</strong>有 bug → 修复 → 重新审查 → <strong>循环直到通过</strong></li>
+  <li>多个 Agent <strong>并行</strong>工作，最后汇总</li>
+  <li>中间需要<strong>人类审核</strong>再继续</li>
+</ul>
+
+<p>Chain 就力不从心了。这就是 LangGraph 登场的原因。</p>
+
+<div class="callout callout-practice" id="prac-s1">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>你是一个翻译助手开发者。用户输入一句中文，你需要：</p>
+    <p>① 用 <code>PromptTemplate</code> 构建一个「中文→英文」翻译提示词</p>
+    <p>② 用 <code>ChatAnthropic</code> 调用模型完成翻译</p>
+    <p>③ 用 <code>StrOutputParser</code> 解析输出</p>
+    <p>④ 把上面三步用 <strong>LCEL 管道语法</strong> <code>prompt | llm | parser</code> 串联起来</p>
+    <p>⑤ 最后用 <code>chain.invoke()</code> 传入一句话测试，打印翻译结果</p>
+  </div>
+  <div class="practice-hint">
+    <strong>提示词参考：</strong><br>
+    <code>system</code>: "你是一个专业的中英文翻译。只输出翻译结果，不要解释。"<br>
+    <code>human</code>: "请把以下中文翻译成英文：{text}"
+  </div>
+</div>
+</div>
+
+<!-- ==================== SECTION 2 ==================== -->
+<div class="section" id="lg-s2">
+<h2>为什么需要 LangGraph？</h2>
+
+<div class="compare">
+  <div class="compare-card left">
+    <h4>⛓️ LangChain Chain</h4>
+    <ul>
+      <li>线性管道 A → B → C</li>
+      <li>数据单向流动</li>
+      <li>没有原生循环支持</li>
+      <li>难以实现分支和回退</li>
+      <li>状态管理靠外部变量</li>
+    </ul>
+  </div>
+  <div class="compare-card right">
+    <h4>🕸️ LangGraph</h4>
+    <ul>
+      <li>图结构（任意连接）</li>
+      <li>状态在节点间共享和修改</li>
+      <li>原生支持循环和条件分支</li>
+      <li>内置持久化和断点恢复</li>
+      <li>原生支持 Human-in-the-Loop</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout callout-analogy">
+  <strong>类比：</strong>LangChain 的 Chain 像是<strong>流水线</strong> —— 传送带从头到尾，工位固定顺序。LangGraph 像是<strong>乐高积木</strong> —— 你可以用积木（节点）和连接件（边）拼出任何形状的工作流：有环的、有分支的、并行的，随你设计。
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph LR
+    subgraph Chain["LangChain Chain"]
+        A1[Prompt] --> A2[LLM]
+        A2 --> A3[Parser]
+    end
+    subgraph Graph["LangGraph"]
+        B1[节点A] --> B2{条件判断}
+        B2 -->|通过| B3[节点B]
+        B2 -->|不通过| B4[节点C]
+        B4 --> B1
+    end
+  </pre>
+  <div class="caption">图 1：Chain（线性）vs Graph（图结构）的流程对比</div>
+</div>
+
+<h3>LangGraph 是什么？</h3>
+
+<p>一句话：<strong>LangGraph 是 LangChain 生态中的图编排框架</strong>，专门用来构建有状态的、多步骤的 AI 工作流。它由 LangChain 团队开发，是构建复杂 Agent 系统的首选方案。</p>
+
+<table>
+  <tr><th>特性</th><th>说明</th></tr>
+  <tr><td>图结构</td><td>用节点（Node）和边（Edge）定义任意复杂的工作流</td></tr>
+  <tr><td>状态管理</td><td>显式的共享状态对象，在节点间传递和修改</td></tr>
+  <tr><td>条件路由</td><td>根据状态动态决定下一步走哪条路</td></tr>
+  <tr><td>循环支持</td><td>天然支持「审查→修复→再审查」这种循环</td></tr>
+  <tr><td>持久化</td><td>内置 Checkpoint，可以暂停、恢复、回溯</td></tr>
+  <tr><td>Human-in-the-Loop</td><td>在任意节点插入人类审核断点</td></tr>
+  <tr><td>流式输出</td><td>支持逐节点流式返回中间结果</td></tr>
+  <tr><td>Sub-Graph</td><td>将子图作为节点嵌入主图，实现模块化</td></tr>
+  <tr><td>并行执行</td><td>多节点并行运行，支持 Map-Reduce 模式</td></tr>
+</table>
+
+<div class="callout callout-practice" id="prac-s2">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>你需要构建一个「文章改写器」，流程如下：</p>
+    <p>① 用户输入一段文字 → <strong>节点A</strong> 改写为正式风格</p>
+    <p>② → <strong>节点B</strong> 检查改写结果是否达到「正式语气」标准</p>
+    <p>③ → 如果不达标，<strong>回到节点A</strong> 重新改写（加上之前的反馈）</p>
+    <p>④ → 如果达标，输出最终结果</p>
+    <p>这个<strong>循环</strong>的需求，正好说明了为什么需要 LangGraph 而不是 LangChain。</p>
+    <p>请先用 <strong>LangChain LCEL</strong> 思考能否实现，再用 <strong>LangGraph</strong> 实现。对比两者的差异。</p>
+  </div>
+  <div class="practice-hint">
+    <strong>要点：</strong>State 需要 <code>text</code>（原文）、<code>rewritten</code>（改写结果）、<code>is_formal</code>（是否达标）、<code>feedback</code>（反馈意见）、<code>attempts</code>（尝试次数）。条件边根据 <code>is_formal</code> 决定「结束」还是「重写」。
+  </div>
+</div>
+</div>
+
+<!-- ==================== SECTION 3 ==================== -->
+<div class="section" id="lg-s3">
+<h2>LangGraph 核心概念全解</h2>
+
+<p>逐个拆解 LangGraph 的 6 大核心概念。每个概念都配<strong>类比 + 图解 + 代码</strong>，确保你真正理解。</p>
+
+<!-- 3.1 State -->
+<div id="s3-1">
+<h3>State（状态）— 共享记忆</h3>
+
+<div class="callout callout-analogy">
+  <strong>类比：</strong>想象一个多人协作的<strong>共享白板</strong>。每个参与者（节点）都可以在白板上写字、擦除、修改。所有人看到的都是同一块白板的最新内容。State 就是这块白板。
+</div>
+
+<p>State 是 LangGraph 的<strong>核心中的核心</strong>。它是一个 Python 对象（通常是 <code>TypedDict</code> 或 <code>Pydantic BaseModel</code>），在整个图的执行过程中被所有节点共享。</p>
+
+<h4>定义 State</h4>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">Annotated</span>, <span class="cls">TypedDict</span>
+<span class="kw">from</span> operator <span class="kw">import</span> add
+
+<span class="kw">class</span> <span class="cls">CodeGenState</span>(<span class="cls">TypedDict</span>):
+    <span class="cmt"># 用户需求</span>
+    requirement: <span class="cls">str</span>
+    <span class="cmt"># 生成的代码</span>
+    code: <span class="cls">str</span>
+    <span class="cmt"># 生成的测试</span>
+    tests: <span class="cls">str</span>
+    <span class="cmt"># 审查意见</span>
+    review_feedback: <span class="cls">str</span>
+    <span class="cmt"># 审查是否通过</span>
+    is_approved: <span class="cls">bool</span>
+    <span class="cmt"># 修复轮次计数</span>
+    revision_count: <span class="cls">int</span>
+    <span class="cmt"># 历史记录（用 Annotated + add 实现追加而非覆盖）</span>
+    history: <span class="cls">Annotated</span>[<span class="cls">list</span>[<span class="cls">str</span>], add]</code></pre>
+</div>
+
+<div class="callout callout-key">
+  <strong>关键语法 <code>Annotated[list[str], add]</code>：</strong>默认情况下，节点返回的字典会<strong>覆盖</strong> State 中同名字段。但加上 <code>Annotated[list, add]</code> 后，新的列表会<strong>追加</strong>到原有列表后面，而不是替换。这在记录历史日志时非常有用。这里的 <code>add</code> 就是一个 <strong>reducer 函数</strong>，后面高级详解会深入讲。
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph LR
+    S["State: requirement / code / tests"]
+    N1["节点A 生成代码"] -->|写入 code| S
+    S -->|读取 code| N2["节点B 生成测试"]
+    N2 -->|写入 tests| S
+    S -->|读取所有| N3["节点C 审查"]
+  </pre>
+  <div class="caption">图 2：State 作为共享白板，所有节点都读写它</div>
+</div>
+
+<div class="callout callout-practice" id="prac-s3-1">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>你要为一个「小说写作助手」设计 State。系统有三个角色：</p>
+    <p>① <strong>大纲师</strong>：根据主题生成故事大纲</p>
+    <p>② <strong>写手</strong>：根据大纲写出正文</p>
+    <p>③ <strong>编辑</strong>：审查正文，给出修改意见</p>
+    <p>你需要定义一个 State，包含所有必要的字段，让三个角色能通过 State 协作。特别注意：修改意见要<strong>追加记录</strong>而不是覆盖（用 <code>Annotated[list, add]</code>）。</p>
+    <p>请用 <code>TypedDict</code> 定义这个 State，至少包含 6 个字段，并为每个字段写注释说明「谁写入、谁读取」。</p>
+  </div>
+  <div class="practice-hint">
+    <strong>参考字段：</strong><code>topic</code>（主题）、<code>outline</code>（大纲）、<code>draft</code>（草稿）、<code>revision_feedback</code>（修改意见列表，用 <code>Annotated[list[str], add]</code>）、<code>is_final</code>（是否定稿）、<code>revision_count</code>（修订次数）
+  </div>
+</div>
+</div>
+
+<!-- 3.2 Node -->
+<div id="s3-2">
+<h3>Node（节点）— 干活的人</h3>
+
+<div class="callout callout-analogy">
+  <strong>类比：</strong>如果 State 是白板，Node 就是一个个<strong>工人</strong>。每个工人走到白板前，读取上面的内容，做自己的工作，然后把结果写回白板。
+</div>
+
+<p>Node 就是一个普通的 <strong>Python 函数</strong>，接收当前 State，处理后返回一个字典（要更新的字段）。也可以是另一个编译好的 Graph（子图）。</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+
+llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-sonnet-5"</span>)
+
+<span class="kw">def</span> <span class="fn">generate_code</span>(state: <span class="cls">CodeGenState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""代码生成节点：读取需求，生成代码"""</span>
+    requirement <span class="op">=</span> state[<span class="str">"requirement"</span>]
+
+    prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(<span class="str">"""
+    请用 Python 实现以下需求，只输出代码，不要解释：
+    {requirement}
+    """</span>)
+    chain <span class="op">=</span> prompt <span class="op">|</span> llm
+    result <span class="op">=</span> chain.<span class="fn">invoke</span>({<span class="str">"requirement"</span>: requirement})
+
+    <span class="cmt"># 返回要更新的字段（不是完整 State）</span>
+    <span class="kw">return</span> {
+        <span class="str">"code"</span>: result.content,
+        <span class="str">"history"</span>: [<span class="str">f"✅ 生成了代码（{<span class="fn">len</span>(result.content)} 字符）"</span>]
+    }</code></pre>
+</div>
+
+<div class="callout callout-tip">
+  <strong>要点：</strong>节点函数的返回值是一个<strong>字典</strong>，只包含要更新的 State 字段。LangGraph 会自动把它合并到当前 State 中。你不需要返回完整的 State。
+</div>
+
+<h4>节点的签名规则</h4>
+
+<table>
+  <tr><th>形式</th><th>签名</th><th>说明</th></tr>
+  <tr><td>只读取 State</td><td><code>def node(state: State)</code></td><td>最常见的形式</td></tr>
+  <tr><td>需要 config</td><td><code>def node(state: State, config)</code></td><td>需要读取运行时配置时</td></tr>
+  <tr><td>返回更新</td><td><code>return {"key": value}</code></td><td>返回字典，自动合并到 State</td></tr>
+</table>
+
+<div class="callout callout-practice" id="prac-s3-2">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>继续「小说写作助手」。现在你需要实现<strong>写手节点</strong>：</p>
+    <p>① 接收 <code>NovelState</code> 作为参数</p>
+    <p>② 从 State 中读取 <code>outline</code>（大纲）</p>
+    <p>③ 调用 <code>ChatAnthropic</code>，用一个精心设计的 <code>ChatPromptTemplate</code> 让 LLM 写出正文</p>
+    <p>④ 返回一个字典，更新 <code>draft</code> 和 <code>history</code> 字段</p>
+    <p>思考：你的 prompt 需要包含哪些信息？如果编辑给出了 <code>revision_feedback</code>，你的节点是否需要读取它来改进？</p>
+  </div>
+  <div class="practice-hint">
+    <strong>关键：</strong>节点函数只返回要更新的字段（字典），不要返回完整 State。<br>
+    <strong>Prompt 参考：</strong>system = "你是一个有创意的小说写手。根据大纲写出引人入胜的正文，注意人物刻画和情节推进。"<br>
+    human = "请根据以下大纲写正文：\n{outline}\n\n修改意见（如有）：{feedback}"
+  </div>
+</div>
+</div>
+
+<!-- 3.3 Edge -->
+<div id="s3-3">
+<h3>Edge &amp; 条件分支 — 流程控制</h3>
+
+<div class="callout callout-analogy">
+  <strong>类比：</strong>Node 是工人，Edge 就是工人之间的<strong>传话规则</strong>。「做完后把结果传给下一个人」—— 这是普通边。「如果质量不合格，传给修复组；如果合格，传给发布组」—— 这是条件边。
+</div>
+
+<h4>普通边（Normal Edge）</h4>
+
+<p>最简单的情况：A 做完就去 B。</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>
+
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">CodeGenState</span>)
+
+<span class="cmt"># 添加节点</span>
+graph.<span class="fn">add_node</span>(<span class="str">"generate"</span>, generate_code)
+graph.<span class="fn">add_node</span>(<span class="str">"review"</span>, review_code)
+
+<span class="cmt"># 添加普通边：generate → review</span>
+graph.<span class="fn">add_edge</span>(<span class="str">"generate"</span>, <span class="str">"review"</span>)</code></pre>
+</div>
+
+<h4>条件边（Conditional Edge）</h4>
+
+<p>根据 State 的值，动态决定下一步去哪里。这是 LangGraph 最强大的特性之一。</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">def</span> <span class="fn">should_continue</span>(state: <span class="cls">CodeGenState</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="str">"""路由函数：根据审查结果决定下一步"""</span>
+    <span class="kw">if</span> state[<span class="str">"is_approved"</span>]:
+        <span class="kw">return</span> <span class="str">"approved"</span>   <span class="cmt"># 通过 → 结束</span>
+    <span class="kw">elif</span> state[<span class="str">"revision_count"</span>] <span class="op">>=</span> <span class="num">3</span>:
+        <span class="kw">return</span> <span class="str">"max_retries"</span> <span class="cmt"># 超过重试上限 → 结束</span>
+    <span class="kw">else</span>:
+        <span class="kw">return</span> <span class="str">"revise"</span>      <span class="cmt"># 不通过且未超限 → 去修复</span>
+
+<span class="cmt"># 添加条件边</span>
+graph.<span class="fn">add_conditional_edges</span>(
+    <span class="str">"review"</span>,           <span class="cmt"># 源节点</span>
+    should_continue,    <span class="cmt"># 路由函数</span>
+    {
+        <span class="str">"approved"</span>: <span class="str">"__end__"</span>,  <span class="cmt"># 通过 → 结束</span>
+        <span class="str">"max_retries"</span>: <span class="str">"__end__"</span>, <span class="cmt"># 超限 → 结束</span>
+        <span class="str">"revise"</span>: <span class="str">"revise_code"</span>,  <span class="cmt"># 需修复 → 修复节点</span>
+    }
+)</code></pre>
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph TD
+    R["代码审查 review_code"] -->|判断| D{通过?}
+    D -->|通过| END["结束"]
+    D -->|不通过且重试不足3次| FIX["自动修复 revise_code"]
+    D -->|不通过且重试已达3次| END2["结束-超限"]
+    FIX -->|重新审查| R
+  </pre>
+  <div class="caption">图 3：条件边实现「审查→修复→再审查」循环</div>
+</div>
+
+<div class="callout callout-key">
+  <strong>路由函数的规则：</strong>
+  <ul>
+    <li>接收当前 State，返回一个<strong>字符串</strong>（路由 key）</li>
+    <li>返回值必须是 <code>add_conditional_edges</code> 映射字典中的 key 之一</li>
+    <li><code>__end__</code> 是 LangGraph 的内置特殊节点，表示流程结束</li>
+  </ul>
+</div>
+
+<div class="callout callout-practice" id="prac-s3-3">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>继续「小说写作助手」。你需要定义<strong>编辑节点的路由函数</strong>：</p>
+    <p>① 编辑审查完正文后，根据 <code>is_final</code> 和 <code>revision_count</code> 决定下一步</p>
+    <p>② 如果定稿（<code>is_final=True</code>）→ 流程结束</p>
+    <p>③ 如果修订次数 ≥ 3 → 强制结束（防止无限循环）</p>
+    <p>④ 否则 → 回到写手节点重新修改</p>
+    <p>请实现这个 <code>should_continue_writing</code> 路由函数，并用 <code>add_conditional_edges</code> 把它挂到图上。</p>
+  </div>
+  <div class="practice-hint">
+    <strong>关键：</strong>路由函数返回的字符串必须和 <code>add_conditional_edges</code> 映射字典中的 key 完全一致。<br>
+    映射：<code>{"final": END, "max_retries": END, "revise": "writer"}</code>
+  </div>
+</div>
+</div>
+
+<!-- 3.4 Graph -->
+<div id="s3-4">
+<h3>Graph 编排 — 把一切串起来</h3>
+
+<div class="callout callout-analogy">
+  <strong>类比：</strong>State 是白板，Node 是工人，Edge 是传话规则 —— 那 <code>StateGraph</code> 就是<strong>项目经理</strong>，负责把所有人和规则组织起来，定义「谁先做、谁后做、做完给谁」。
+</div>
+
+<p>完整的图构建流程就 4 步：</p>
+
+<div class="step"><div class="step-num">1</div><div class="step-content"><strong>创建图</strong> — 传入 State 类型</div></div>
+<div class="step"><div class="step-num">2</div><div class="step-content"><strong>添加节点</strong> — 把函数注册为有名节点</div></div>
+<div class="step"><div class="step-num">3</div><div class="step-content"><strong>添加边</strong> — 定义节点之间的连接（普通边 + 条件边）</div></div>
+<div class="step"><div class="step-num">4</div><div class="step-content"><strong>编译</strong> — 调用 <code>.compile()</code> 生成可执行的图</div></div>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># Step 1: 创建图</span>
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">CodeGenState</span>)
+
+<span class="cmt"># Step 2: 添加节点</span>
+graph.<span class="fn">add_node</span>(<span class="str">"generate"</span>, generate_code)
+graph.<span class="fn">add_node</span>(<span class="str">"test_gen"</span>, generate_tests)
+graph.<span class="fn">add_node</span>(<span class="str">"review"</span>, review_code)
+graph.<span class="fn">add_node</span>(<span class="str">"revise"</span>, revise_code)
+
+<span class="cmt"># Step 3: 添加边</span>
+graph.<span class="fn">set_entry_point</span>(<span class="str">"generate"</span>)       <span class="cmt"># 入口</span>
+graph.<span class="fn">add_edge</span>(<span class="str">"generate"</span>, <span class="str">"test_gen"</span>)   <span class="cmt"># 普通边</span>
+graph.<span class="fn">add_edge</span>(<span class="str">"test_gen"</span>, <span class="str">"review"</span>)     <span class="cmt"># 普通边</span>
+graph.<span class="fn">add_conditional_edges</span>(             <span class="cmt"># 条件边</span>
+    <span class="str">"review"</span>, should_continue,
+    {<span class="str">"approved"</span>: <span class="str">"__end__"</span>, <span class="str">"revise"</span>: <span class="str">"revise"</span>}
+)
+graph.<span class="fn">add_edge</span>(<span class="str">"revise"</span>, <span class="str">"review"</span>)      <span class="cmt"># 修复后回到审查</span>
+
+<span class="cmt"># Step 4: 编译</span>
+app <span class="op">=</span> graph.<span class="fn">compile</span>()</code></pre>
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph TD
+    START(["开始"]) --> GEN["生成代码 generate"]
+    GEN --> TEST["生成测试 test_gen"]
+    TEST --> REVIEW["代码审查 review"]
+    REVIEW -->|通过| END(["结束"])
+    REVIEW -->|不通过| FIX["自动修复 revise"]
+    FIX --> REVIEW
+  </pre>
+  <div class="caption">图 4：完整的代码生成 Pipeline 流程图</div>
+</div>
+
+<div class="callout callout-practice" id="prac-s3-4">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>把「小说写作助手」的全部零件组装起来！</p>
+    <p>① 创建 <code>StateGraph</code>，传入你之前定义的 <code>NovelState</code></p>
+    <p>② 添加 3 个节点：<code>"outliner"</code>（大纲师）、<code>"writer"</code>（写手）、<code>"editor"</code>（编辑）</p>
+    <p>③ 设置入口：<code>START → outliner</code></p>
+    <p>④ 添加普通边：<code>outliner → writer → editor</code></p>
+    <p>⑤ 添加条件边：编辑后根据路由函数决定「结束 / 重写」</p>
+    <p>⑥ 添加循环边：<code>writer → editor</code>（修改后重新审查）</p>
+    <p>⑦ <code>.compile()</code> 编译，并用 <code>.invoke()</code> 传入一个主题测试</p>
+  </div>
+  <div class="practice-hint">
+    <strong>检查清单：</strong><br>
+    • 有 <code>set_entry_point("outliner")</code> 或 <code>add_edge(START, "outliner")</code><br>
+    • 条件边的路由函数返回值和映射字典 key 一一对应<br>
+    • 修复后有边回到编辑节点形成循环<br>
+    • 别忘了在 <code>invoke()</code> 时传入完整的初始 State（所有字段都要有初始值）
+  </div>
+</div>
+</div>
+
+<!-- 3.5 持久化 -->
+<div id="s3-5">
+<h3>持久化与 Checkpoint — 记忆不丢失</h3>
+
+<div class="callout callout-analogy">
+  <strong>类比：</strong>玩游戏时的<strong>存档系统</strong>。每走一步自动存档（Checkpoint），你可以随时读档回到任意一步，也可以在游戏崩溃后从最近的存档继续。LangGraph 的持久化就是这个存档系统。
+</div>
+
+<p>持久化的核心用途：</p>
+
+<ul>
+  <li><strong>断点恢复</strong>：流程中断后（网络错误、进程重启），从上次的 Checkpoint 继续</li>
+  <li><strong>Human-in-the-Loop</strong>：在某个节点暂停，等人类审核后再继续</li>
+  <li><strong>时间回溯</strong>：查看任意一步的状态快照，方便调试</li>
+  <li><strong>长期记忆</strong>：跨会话保持 Agent 的记忆</li>
+</ul>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langgraph.checkpoint.memory <span class="kw">import</span> <span class="cls">InMemorySaver</span>
+
+<span class="cmt"># 创建 Checkpoint 存储（内存版，生产环境可用 SQLite / PostgreSQL）</span>
+checkpointer <span class="op">=</span> <span class="cls">InMemorySaver</span>()
+
+<span class="cmt"># 编译时传入 checkpointer</span>
+app <span class="op">=</span> graph.<span class="fn">compile</span>(checkpointer<span class="op">=</span>checkpointer)
+
+<span class="cmt"># 运行时指定 thread_id（标识一次会话）</span>
+config <span class="op">=</span> {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"session-001"</span>}}
+result <span class="op">=</span> app.<span class="fn">invoke</span>(
+    {<span class="str">"requirement"</span>: <span class="str">"实现一个 LRU Cache"</span>},
+    config<span class="op">=</span>config
+)
+
+<span class="cmt"># 之后可以从这个 thread 的任意 checkpoint 恢复</span>
+history <span class="op">=</span> app.<span class="fn">get_state_history</span>(config)
+<span class="kw">for</span> snapshot <span class="kw">in</span> history:
+    <span class="fn">print</span>(snapshot.metadata[<span class="str">"step"</span>], snapshot.values)</code></pre>
+</div>
+
+<div class="callout callout-warn">
+  <strong>注意：</strong><code>InMemorySaver</code> 是内存存储，进程结束就没了。生产环境请用 <code>SqliteSaver</code> 或 <code>PostgresSaver</code>（详见高级详解章节）。
+</div>
+
+<div class="callout callout-practice" id="prac-s3-5">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>给「小说写作助手」加上<strong>存档功能</strong>！</p>
+    <p>① 创建 <code>InMemorySaver</code> 实例，传入 <code>graph.compile(checkpointer=...)</code></p>
+    <p>② 运行时指定 <code>config = {"configurable": {"thread_id": "novel-001"}}</code></p>
+    <p>③ 运行一次后，用 <code>app.get_state_history(config)</code> 查看所有 Checkpoint 快照</p>
+    <p>④ 尝试从某个中间 Checkpoint 恢复执行（用 <code>app.invoke(None, config=config)</code>）</p>
+    <p>思考：如果你把 <code>thread_id</code> 改成 <code>"novel-002"</code>，之前的存档还在吗？</p>
+  </div>
+  <div class="practice-hint">
+    <strong>验证方法：</strong>在每次运行后打印 <code>len(list(app.get_state_history(config)))</code>，观察 Checkpoint 数量是否随着节点执行递增。<br>
+    每个节点执行后都会自动产生一个 Checkpoint。
+  </div>
+</div>
+</div>
+
+<!-- 3.6 HITL -->
+<div id="s3-6">
+<h3>Human-in-the-Loop — 人类介入</h3>
+
+<div class="callout callout-analogy">
+  <strong>类比：自动驾驶汽车</strong> —— 大部分时候自动行驶，但在复杂路口会提示「请人类接管」。LangGraph 的 Human-in-the-Loop 就是这个「请人类接管」的机制。
+</div>
+
+<p>LangGraph 有两代写法。先看现在推荐的那一种：在节点里直接调 <code>interrupt()</code>，把「要问人类什么」当成数据交出去；外部想好了，再用 <code>Command(resume=…)</code> 把答案送回去。两边通过 Checkpoint 衔接，所以 <strong>必须配 <code>checkpointer</code></strong>，否则无处存放挂起的现场。</p>
+
+<div class="diagram">
+  <pre class="mermaid">
+sequenceDiagram
+    participant App as 应用代码
+    participant G as LangGraph
+    participant H as 人类
+    App->>G: invoke(state, config)
+    G->>G: 节点执行到 interrupt()
+    G->>G: 存 Checkpoint 并挂起
+    G-->>App: 返回 __interrupt__ 携带 payload
+    App->>H: 展示 payload 请求决策
+    H-->>App: 给出判断
+    App->>G: invoke(Command(resume=…), config)
+    G->>G: 从 Checkpoint 恢复，该节点从头重跑
+    G-->>App: 继续跑完剩下的图
+  </pre>
+  <div class="caption">图 5：interrupt() 与 Command(resume) 的一轮完整往返</div>
+</div>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+  </div>
+  <pre><code><span class="kw">from</span> langgraph.types <span class="kw">import</span> <span class="fn">interrupt</span>, <span class="cls">Command</span>
+
+<span class="kw">def</span> <span class="fn">review_node</span>(state: <span class="cls">ProjectState</span>) <span class="op">-&gt;</span> <span class="cls">dict</span>:
+    <span class="cmt"># interrupt() 把 payload 交给外部，并在此处挂起</span>
+    <span class="cmt"># 恢复后，它的返回值就是 Command(resume=...) 传进来的东西</span>
+    decision <span class="op">=</span> <span class="fn">interrupt</span>({
+        <span class="str">"question"</span>: <span class="str">"这段代码是否通过审查？"</span>,
+        <span class="str">"code"</span>: state[<span class="str">"code"</span>],
+    })
+    <span class="kw">return</span> {
+        <span class="str">"is_approved"</span>: decision[<span class="str">"approved"</span>],
+        <span class="str">"review_result"</span>: decision.<span class="fn">get</span>(<span class="str">"comment"</span>, <span class="str">""</span>),
+    }
+
+<span class="cmt"># 编译时不需要再写 interrupt_before / interrupt_after，但 checkpointer 是必选</span>
+app <span class="op">=</span> graph.<span class="fn">compile</span>(checkpointer<span class="op">=</span>checkpointer)
+
+<span class="cmt"># 第一次跑 —— 到 interrupt() 就停</span>
+result <span class="op">=</span> app.<span class="fn">invoke</span>(initial_state, config<span class="op">=</span>config)
+<span class="fn">print</span>(result[<span class="str">"__interrupt__"</span>])   <span class="cmt"># 拿到上面交出的 payload</span>
+
+<span class="cmt"># 也可以从快照里读，适合跨进程、跨请求的场景</span>
+snapshot <span class="op">=</span> app.<span class="fn">get_state</span>(config)
+<span class="fn">print</span>(snapshot.tasks[0].interrupts)
+
+<span class="cmt"># 人类决定后恢复；resume 的值会成为 interrupt() 的返回值</span>
+final <span class="op">=</span> app.<span class="fn">invoke</span>(
+    <span class="cls">Command</span>(resume<span class="op">=</span>{<span class="str">"approved"</span>: <span class="kw">True</span>, <span class="str">"comment"</span>: <span class="str">"逻辑没问题"</span>}),
+    config<span class="op">=</span>config,
+)</code></pre>
+</div>
+
+<div class="callout callout-warn">
+  <strong>最容易踩的坑：恢复时节点是「从头重跑」的。</strong><code>interrupt()</code> 不是协程挂起，不会从那一行接着往下走——LangGraph 会把整个节点函数重新执行一遍，只是这一次 <code>interrupt()</code> 直接返回你传的值。所以 <code>interrupt()</code> <strong>之前</strong>的代码会跑两次：写数据库、发邮件、扣费这类有副作用的操作千万不要放在它前面，要么移到 <code>interrupt()</code> 之后，要么拆到单独的节点里。
+</div>
+
+<h4>补充：编译期的静态断点</h4>
+
+<p>早期的写法是在 <code>compile()</code> 时声明 <code>interrupt_before</code> 或 <code>interrupt_after</code>，它们仍然可用，而且在「只想在固定位置停下来看一眼」时更简单：不用改节点代码，适合调试和临时埋点。</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+  </div>
+  <pre><code><span class="cmt"># 在 "review" 节点后暂停，不需要改节点函数</span>
+app <span class="op">=</span> graph.<span class="fn">compile</span>(
+    checkpointer<span class="op">=</span>checkpointer,
+    interrupt_after<span class="op">=</span>[<span class="str">"review"</span>],
+)
+
+result <span class="op">=</span> app.<span class="fn">invoke</span>(initial_state, config<span class="op">=</span>config)
+
+<span class="cmt"># 静态断点靠改 State 来传递人类的意志</span>
+app.<span class="fn">update_state</span>(config, {<span class="str">"is_approved"</span>: <span class="kw">True</span>})
+
+<span class="cmt"># 传 None 表示「从暂停点继续，不给新输入」</span>
+result <span class="op">=</span> app.<span class="fn">invoke</span>(<span class="kw">None</span>, config<span class="op">=</span>config)</code></pre>
+</div>
+
+<div class="callout callout-tip">
+  <strong>两种写法怎么选：</strong>需要把「问题」和「答案」都当数据传递（审批表单、工具调用确认、多轮改写）就用 <code>interrupt()</code>；只是想在固定位置打个断点看看 State，编译期的 <code>interrupt_after</code> 更轻。两者可以共存。
+</div>
+
+<div class="callout callout-practice" id="prac-s3-6">
+  <div class="practice-header">
+    <span class="badge">✏️ 动手练习</span> 挑战
+  </div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>给「小说写作助手」加上人类审核关卡，用运行时 <code>interrupt()</code> 实现。</p>
+    <p>① 在 <code>editor</code> 节点里调 <code>interrupt()</code>，payload 把当前 <code>draft</code> 交出来。</p>
+    <p>② 第一次 <code>invoke()</code> 后，从返回值的 <code>__interrupt__</code> 里把 <code>draft</code> 打印出来读一读。</p>
+    <p>③ 用 <code>Command(resume=…)</code> 送回你的判断：满意就传 <code>{"final": True}</code>，要改就传 <code>{"final": False, "feedback": "…"}</code>。</p>
+    <p>④ 节点把 <code>decision</code> 写回 State，用条件边决定是收尾还是打回重写。</p>
+    <p><strong>观察：</strong>在 <code>interrupt()</code> 上一行加一句 <code>print("editor 进来了")</code>，恢复后你会看到它打印了两次—— 这就是「节点从头重跑」的直接证据。</p>
+  </div>
+<div class="practice-hint">
+    <strong>调试技巧：</strong><code>app.get_state(config).next</code> 告诉你恢复后下一步会跑哪个节点；<br>
+    <code>app.get_state(config).tasks[0].interrupts</code> 里能看到完整的中断 payload。
+  </div>
+</div>
+</div>
+
+<h2 id="s-cheat-lc">📋 LangChain 代码速查表</h2>
+
+<p>以下是 LangChain 最常用的 API 和模式，按使用频率排列。示例默认使用 <code>Claude Sonnet 5</code>；模型 ID 会随版本更新，部署前请以 Anthropic 当前 models 列表和 provider 包文档为准。</p>
+
+<h3>1. 安装与基础设置</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Bash</span>
+    
+  </div>
+  <pre><code><span class="cmt"># 安装核心包</span>
+pip install langchain langchain-anthropic langchain-core
+
+<span class="cmt"># 安装 LangGraph（图编排框架）</span>
+pip install langgraph
+
+<span class="cmt"># 设置 API Key</span>
+<span class="kw">export</span> ANTHROPIC_API_KEY<span class="op">=</span><span class="str">"sk-ant-..."</span></code></pre>
+</div>
+
+<h3>2. ChatModel 调用</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> langchain_openai <span class="kw">import</span> <span class="cls">ChatOpenAI</span>
+
+<span class="cmt"># Claude Sonnet 5（推荐：最佳性价比，编程能力强）</span>
+llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-sonnet-5"</span>)
+
+<span class="cmt"># Claude Opus 5（最强推理能力，适合复杂任务）</span>
+llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-opus-5"</span>)
+
+<span class="cmt"># Claude Haiku 4.5（最快最便宜，适合简单任务）</span>
+llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-haiku-4-5-20251001"</span>)
+
+<span class="cmt"># 调用方式</span>
+result <span class="op">=</span> llm.<span class="fn">invoke</span>(<span class="str">"你好，请介绍一下自己"</span>)
+<span class="fn">print</span>(result.content)  <span class="cmt"># 文本内容</span></code></pre>
+</div>
+
+<div class="callout callout-tip">
+  <strong>模型选择建议：</strong>Claude Sonnet 5 是编程和 Agent 场景的最佳默认选择 —— 速度快、能力强、价格合理。Opus 5 适合需要深度推理的复杂任务（如架构设计、数学证明）。Haiku 4.5 适合高并发、低成本的简单任务（如分类、提取）。
+</div>
+
+<h3>3. PromptTemplate</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>, <span class="cls">PromptTemplate</span>
+
+<span class="cmt"># 方式一：from_template —— 单字符串模板</span>
+prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(
+    <span class="str">"请用 {language} 实现：{requirement}"</span>
+)
+
+<span class="cmt"># 方式二：from_messages —— 多消息模板（推荐）</span>
+prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+    (<span class="str">"system"</span>, <span class="str">"你是一个资深 {role}。请用中文回答。"</span>),
+    (<span class="str">"human"</span>, <span class="str">"{question}"</span>)
+])
+
+<span class="cmt"># 格式化</span>
+messages <span class="op">=</span> prompt.<span class="fn">format_messages</span>(role<span class="op">=</span><span class="str">"Python 开发者"</span>, question<span class="op">=</span><span class="str">"如何实现快速排序？"</span>)</code></pre>
+</div>
+
+<h3>4. LCEL 管道语法</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langchain_core.output_parsers <span class="kw">import</span> <span class="cls">StrOutputParser</span>, <span class="cls">JsonOutputParser</span>
+<span class="kw">from</span> langchain_core.runnables <span class="kw">import</span> <span class="cls">RunnablePassthrough</span>
+
+<span class="cmt"># 基础管道：prompt | llm | parser</span>
+chain <span class="op">=</span> prompt <span class="op">|</span> llm <span class="op">|</span> <span class="cls">StrOutputParser</span>()
+result <span class="op">=</span> chain.<span class="fn">invoke</span>({<span class="str">"question"</span>: <span class="str">"什么是递归？"</span>})
+
+<span class="cmt"># 链式组合：前一个链的输出作为后一个链的输入</span>
+analysis_chain <span class="op">=</span> analysis_prompt <span class="op">|</span> llm <span class="op">|</span> <span class="cls">StrOutputParser</span>()
+summary_chain <span class="op">=</span> summary_prompt <span class="op">|</span> llm <span class="op">|</span> <span class="cls">StrOutputParser</span>()
+full_chain <span class="op">=</span> {<span class="str">"analysis"</span>: analysis_chain} <span class="op">|</span> summary_chain
+
+<span class="cmt"># RunnablePassthrough —— 透传原始输入</span>
+chain <span class="op">=</span> {<span class="str">"context"</span>: retriever, <span class="str">"question"</span>: <span class="cls">RunnablePassthrough</span>()} <span class="op">|</span> prompt <span class="op">|</span> llm</code></pre>
+</div>
+
+<h3>5. Tool 定义与绑定</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langchain_core.tools <span class="kw">import</span> tool
+
+<span class="cmt"># 用 @tool 装饰器定义工具（推荐）</span>
+<span class="dec">@tool</span>
+<span class="kw">def</span> <span class="fn">search_web</span>(query: <span class="cls">str</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="str">"""搜索互联网获取最新信息。输入为搜索关键词。"""</span>
+    <span class="cmt"># 实际搜索逻辑...</span>
+    <span class="kw">return</span> <span class="str">f"搜索结果：关于 '{query}' 的信息..."</span>
+
+<span class="dec">@tool</span>
+<span class="kw">def</span> <span class="fn">calculate</span>(expression: <span class="cls">str</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="str">"""计算数学表达式。输入为数学表达式字符串。"""</span>
+    <span class="kw">return</span> <span class="fn">str</span>(<span class="fn">eval</span>(expression))
+
+<span class="cmt"># 绑定工具到 LLM</span>
+llm_with_tools <span class="op">=</span> llm.<span class="fn">bind_tools</span>([search_web, calculate])</code></pre>
+</div>
+
+<h3>6. 结构化输出</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> pydantic <span class="kw">import</span> <span class="cls">BaseModel</span>, <span class="cls">Field</span>
+
+<span class="cmt"># 定义输出结构</span>
+<span class="kw">class</span> <span class="cls">CodeReview</span>(<span class="cls">BaseModel</span>):
+    is_approved: <span class="cls">bool</span> <span class="op">=</span> <span class="cls">Field</span>(description<span class="op">=</span><span class="str">"是否通过审查"</span>)
+    score: <span class="cls">int</span> <span class="op">=</span> <span class="cls">Field</span>(description<span class="op">=</span><span class="str">"代码质量评分 1-10"</span>)
+    issues: <span class="cls">list</span>[<span class="cls">str</span>] <span class="op">=</span> <span class="cls">Field</span>(description<span class="op">=</span><span class="str">"发现的问题列表"</span>)
+    suggestions: <span class="cls">list</span>[<span class="cls">str</span>] <span class="op">=</span> <span class="cls">Field</span>(description<span class="op">=</span><span class="str">"改进建议"</span>)
+
+<span class="cmt"># 绑定结构化输出（替代手动 JSON 解析）</span>
+structured_llm <span class="op">=</span> llm.<span class="fn">with_structured_output</span>(<span class="cls">CodeReview</span>)
+result <span class="op">=</span> structured_llm.<span class="fn">invoke</span>(<span class="str">"请审查这段代码：..."</span>)
+<span class="fn">print</span>(result.is_approved, result.score)  <span class="cmt"># 直接访问属性</span></code></pre>
+</div>
+
+<div class="callout callout-key">
+  <strong>重要：</strong><code>with_structured_output()</code> 是 LangChain 最推荐的输出解析方式，比手动 <code>json.loads()</code> 可靠得多。两点需要说清楚：<strong>一是它不会自动重试</strong>——校验失败第一次就抛 <code>ValidationError</code>，要重试得自己叠加 <code>OutputFixingParser</code>，或在 LangGraph 里给节点配 <code>retry_policy</code>；<strong>二是「严格按 Schema 输出」只在模型服务端支持约束解码时才成立</strong>，其余情况仍是尽力而为。
+</div>
+
+<h3>7. 消息历史管理</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langchain_core.messages <span class="kw">import</span> <span class="cls">HumanMessage</span>, <span class="cls">AIMessage</span>, <span class="cls">SystemMessage</span>
+
+<span class="cmt"># 手动管理消息列表</span>
+messages <span class="op">=</span> [
+    <span class="cls">SystemMessage</span>(content<span class="op">=</span><span class="str">"你是一个助手"</span>),
+    <span class="cls">HumanMessage</span>(content<span class="op">=</span><span class="str">"你好"</span>),
+    <span class="cls">AIMessage</span>(content<span class="op">=</span><span class="str">"你好！有什么可以帮你的？"</span>),
+    <span class="cls">HumanMessage</span>(content<span class="op">=</span><span class="str">"解释一下递归"</span>),
+]
+result <span class="op">=</span> llm.<span class="fn">invoke</span>(messages)
+
+<span class="cmt"># 使用 InMemoryChatMessageHistory 自动管理</span>
+<span class="kw">from</span> langchain_core.chat_history <span class="kw">import</span> <span class="cls">InMemoryChatMessageHistory</span>
+history <span class="op">=</span> <span class="cls">InMemoryChatMessageHistory</span>()
+history.<span class="fn">add_user_message</span>(<span class="str">"你好"</span>)
+history.<span class="fn">add_ai_message</span>(<span class="str">"你好！"</span>)
+result <span class="op">=</span> llm.<span class="fn">invoke</span>(history.messages)</code></pre>
+</div>
+
+<h3>速查表：LangChain 常用类一览</h3>
+
+<table>
+  <tr><th>类别</th><th>类/函数</th><th>用途</th></tr>
+  <tr><td>模型</td><td><code>ChatAnthropic</code></td><td>Claude 系列模型调用</td></tr>
+  <tr><td>模型</td><td><code>ChatOpenAI</code></td><td>OpenAI 系列模型调用</td></tr>
+  <tr><td>提示词</td><td><code>ChatPromptTemplate</code></td><td>多消息对话模板</td></tr>
+  <tr><td>提示词</td><td><code>PromptTemplate</code></td><td>单字符串模板</td></tr>
+  <tr><td>输出解析</td><td><code>StrOutputParser</code></td><td>提取文本内容</td></tr>
+  <tr><td>输出解析</td><td><code>JsonOutputParser</code></td><td>解析 JSON 输出</td></tr>
+  <tr><td>输出解析</td><td><code>with_structured_output()</code></td><td>Pydantic 结构化输出（推荐）</td></tr>
+  <tr><td>工具</td><td><code>@tool</code></td><td>定义工具函数</td></tr>
+  <tr><td>消息</td><td><code>HumanMessage / AIMessage</code></td><td>构造对话消息</td></tr>
+  <tr><td>管道</td><td><code>prompt | llm | parser</code></td><td>LCEL 链式组合</td></tr>
+</table>
+
+<div class="callout callout-practice" id="prac-lc">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>构建一个「智能客服分流系统」。用户发来一段文字，你需要：</p>
+    <p>① 用 <code>ChatPromptTemplate.from_messages()</code> 构建一个分类提示词（system + human）</p>
+    <p>② 用 <code>with_structured_output()</code> + Pydantic 让 LLM 输出结构化分类结果</p>
+    <p>③ 输出结构包含：<code>category</code>（"技术问题" / "退款" / "投诉" / "其他"）、<code>urgency</code>（1-5）、<code>summary</code>（一句话摘要）</p>
+    <p>④ 用 LCEL 管道 <code>prompt | llm</code> 串联，<code>invoke()</code> 测试 3 条不同的用户消息</p>
+    <p>⑤ 打印结果，验证结构化输出的字段是否正确</p>
+  </div>
+  <div class="practice-hint">
+    <strong>提示词参考：</strong><br>
+    system = "你是一个客服分流专家。分析用户消息，判断问题类别和紧急程度。"<br>
+    human = "用户消息：{message}"<br><br>
+    <strong>结构化输出：</strong>先定义 <code>class Classification(BaseModel)</code>，再用 <code>llm.with_structured_output(Classification)</code> 包装 LLM，返回值直接是 Pydantic 对象。
+  </div>
+</div>
+</div>
+
+<!-- ==================== SECTION: LangGraph 速查表 ==================== -->
+<div class="section" id="s-cheat-lg">
+<h2>📋 LangGraph 代码速查表</h2>
+
+<p>LangGraph 核心 API 和常用模式速查。每个模式都配完整可运行代码。</p>
+
+<h3>1. 最小可运行示例</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">TypedDict</span>
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">START</span>, <span class="cls">END</span>
+
+<span class="cmt"># 1. 定义 State</span>
+<span class="kw">class</span> <span class="cls">State</span>(<span class="cls">TypedDict</span>):
+    input: <span class="cls">str</span>
+    output: <span class="cls">str</span>
+
+<span class="cmt"># 2. 定义节点</span>
+<span class="kw">def</span> <span class="fn">process</span>(state: <span class="cls">State</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="kw">return</span> {<span class="str">"output"</span>: state[<span class="str">"input"</span>].<span class="fn">upper</span>()}
+
+<span class="cmt"># 3. 构建图</span>
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">State</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"process"</span>, process)
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"process"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"process"</span>, <span class="cls">END</span>)
+
+<span class="cmt"># 4. 编译 & 运行</span>
+app <span class="op">=</span> graph.<span class="fn">compile</span>()
+result <span class="op">=</span> app.<span class="fn">invoke</span>({<span class="str">"input"</span>: <span class="str">"hello langgraph"</span>})
+<span class="fn">print</span>(result)  <span class="cmt"># {'input': 'hello langgraph', 'output': 'HELLO LANGGRAPH'}</span></code></pre>
+</div>
+
+<h3>2. 条件路由模式</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">def</span> <span class="fn">router</span>(state: <span class="cls">State</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="str">"""路由函数：返回路由 key"""</span>
+    <span class="kw">if</span> some_condition:
+        <span class="kw">return</span> <span class="str">"path_a"</span>
+    <span class="kw">else</span>:
+        <span class="kw">return</span> <span class="str">"path_b"</span>
+
+<span class="cmt"># 添加条件边</span>
+graph.<span class="fn">add_conditional_edges</span>(
+    <span class="str">"source_node"</span>,    <span class="cmt"># 源节点</span>
+    router,            <span class="cmt"># 路由函数</span>
+    {                  <span class="cmt"># 路由映射</span>
+        <span class="str">"path_a"</span>: <span class="str">"node_a"</span>,
+        <span class="str">"path_b"</span>: <span class="str">"node_b"</span>,
+        <span class="str">"end"</span>: <span class="cls">END</span>,
+    }
+)</code></pre>
+</div>
+
+<h3>3. 循环模式（审查→修复→再审查）</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">class</span> <span class="cls">LoopState</span>(<span class="cls">TypedDict</span>):
+    content: <span class="cls">str</span>
+    approved: <span class="cls">bool</span>
+    attempts: <span class="cls">int</span>
+
+<span class="kw">def</span> <span class="fn">check</span>(state: <span class="cls">LoopState</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="kw">if</span> state[<span class="str">"approved"</span>]:
+        <span class="kw">return</span> <span class="str">"done"</span>
+    <span class="kw">elif</span> state[<span class="str">"attempts"</span>] <span class="op">>=</span> <span class="num">3</span>:
+        <span class="kw">return</span> <span class="str">"give_up"</span>
+    <span class="kw">return</span> <span class="str">"fix"</span>
+
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">LoopState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"generate"</span>, generate)
+graph.<span class="fn">add_node</span>(<span class="str">"review"</span>, review)
+graph.<span class="fn">add_node</span>(<span class="str">"fix"</span>, fix)
+
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"generate"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"generate"</span>, <span class="str">"review"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"fix"</span>, <span class="str">"review"</span>)       <span class="cmt"># 修复 → 重新审查</span>
+graph.<span class="fn">add_conditional_edges</span>(<span class="str">"review"</span>, check,
+    {<span class="str">"done"</span>: <span class="cls">END</span>, <span class="str">"give_up"</span>: <span class="cls">END</span>, <span class="str">"fix"</span>: <span class="str">"fix"</span>})</code></pre>
+</div>
+
+<h3>4. 持久化 + Human-in-the-Loop</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langgraph.checkpoint.memory <span class="kw">import</span> <span class="cls">InMemorySaver</span>
+
+checkpointer <span class="op">=</span> <span class="cls">InMemorySaver</span>()
+
+<span class="cmt"># 编译时启用持久化 + 在某节点后中断</span>
+app <span class="op">=</span> graph.<span class="fn">compile</span>(
+    checkpointer<span class="op">=</span>checkpointer,
+    interrupt_after<span class="op">=</span>[<span class="str">"review"</span>],   <span class="cmt"># 审查后暂停</span>
+    <span class="cmt"># interrupt_before=["fix"],    # 或修复前暂停</span>
+)
+
+config <span class="op">=</span> {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"my-thread"</span>}}
+
+<span class="cmt"># 第一次运行（会在 review 后暂停）</span>
+result <span class="op">=</span> app.<span class="fn">invoke</span>(input_state, config<span class="op">=</span>config)
+
+<span class="cmt"># 人类检查后修改 State</span>
+app.<span class="fn">update_state</span>(config, {<span class="str">"approved"</span>: <span class="kw">True</span>})
+
+<span class="cmt"># 继续执行</span>
+result <span class="op">=</span> app.<span class="fn">invoke</span>(<span class="kw">None</span>, config<span class="op">=</span>config)</code></pre>
+</div>
+
+<h3>5. 流式输出</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># stream_mode="updates"：每个节点完成后输出增量</span>
+<span class="kw">for</span> event <span class="kw">in</span> app.<span class="fn">stream</span>(input_state, config, stream_mode<span class="op">=</span><span class="str">"updates"</span>):
+    <span class="kw">for</span> node_name, output <span class="kw">in</span> event.<span class="fn">items</span>():
+        <span class="fn">print</span>(<span class="str">f"[{node_name}] {output}"</span>)
+
+<span class="cmt"># stream_mode="values"：每次输出完整 State</span>
+<span class="kw">for</span> state <span class="kw">in</span> app.<span class="fn">stream</span>(input_state, config, stream_mode<span class="op">=</span><span class="str">"values"</span>):
+    <span class="fn">print</span>(state)
+
+<span class="cmt"># 多模式组合</span>
+<span class="kw">for</span> event <span class="kw">in</span> app.<span class="fn">stream</span>(input_state, stream_mode<span class="op">=</span>[<span class="str">"updates"</span>, <span class="str">"custom"</span>]):
+    <span class="fn">print</span>(event)</code></pre>
+</div>
+
+<h3>6. Pydantic State（推荐生产使用）</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> pydantic <span class="kw">import</span> <span class="cls">BaseModel</span>, <span class="cls">Field</span>, <span class="cls">ConfigDict</span>
+
+<span class="cmt"># 用 Pydantic 替代 TypedDict（有数据验证）</span>
+<span class="kw">class</span> <span class="cls">AgentState</span>(<span class="cls">BaseModel</span>):
+    messages: <span class="cls">list</span>[<span class="cls">str</span>] <span class="op">=</span> <span class="cls">Field</span>(default_factory<span class="op">=</span><span class="cls">list</span>)
+    step: <span class="cls">int</span> <span class="op">=</span> <span class="num">0</span>
+    is_done: <span class="cls">bool</span> <span class="op">=</span> <span class="kw">False</span>
+
+    <span class="cmt"># Pydantic v2 用 model_config，v1 的 class Config 已弃用</span>
+    <span class="cmt"># 另外 reducer 与 extra 无关：reducer 一律写成 Annotated[list[str], add]</span>
+    model_config <span class="op">=</span> <span class="cls">ConfigDict</span>(extra<span class="op">=</span><span class="str">"forbid"</span>)
+
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">AgentState</span>)</code></pre>
+</div>
+
+<h3>速查表：LangGraph 核心 API 一览</h3>
+
+<table>
+  <tr><th>API</th><th>用途</th><th>示例</th></tr>
+  <tr><td><code>StateGraph(State)</code></td><td>创建图</td><td><code>graph = StateGraph(MyState)</code></td></tr>
+  <tr><td><code>.add_node(name, fn)</code></td><td>添加节点</td><td><code>graph.add_node("worker", work_fn)</code></td></tr>
+  <tr><td><code>.add_edge(a, b)</code></td><td>添加普通边</td><td><code>graph.add_edge("a", "b")</code></td></tr>
+  <tr><td><code>.add_conditional_edges()</code></td><td>添加条件边</td><td>见上方条件路由模式</td></tr>
+  <tr><td><code>START / END</code></td><td>内置起止节点</td><td><code>graph.add_edge(START, "first")</code></td></tr>
+  <tr><td><code>.compile()</code></td><td>编译图</td><td><code>app = graph.compile()</code></td></tr>
+  <tr><td><code>.invoke(state)</code></td><td>运行（完整返回）</td><td><code>result = app.invoke(input)</code></td></tr>
+  <tr><td><code>.stream(state)</code></td><td>运行（流式返回）</td><td><code>for e in app.stream(input): ...</code></td></tr>
+  <tr><td><code>.get_state(config)</code></td><td>获取当前状态</td><td><code>app.get_state(config)</code></td></tr>
+  <tr><td><code>.update_state()</code></td><td>更新状态</td><td><code>app.update_state(cfg, vals)</code></td></tr>
+  <tr><td><code>.get_state_history()</code></td><td>获取历史快照</td><td><code>list(app.get_state_history(cfg))</code></td></tr>
+</table>
+
+<div class="callout callout-practice" id="prac-lg">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>构建一个「面试模拟器」，包含循环 + 条件路由 + 持久化。</p>
+    <p>① <strong>State：</strong><code>topic</code>（面试主题）、<code>question</code>（当前问题）、<code>answer</code>（用户回答）、<code>feedback</code>（评估反馈）、<code>score</code>（得分 1-10）、<code>round</code>（第几轮）、<code>final_report</code>（最终报告）</p>
+    <p>② <strong>节点A 生成问题：</strong>根据主题和轮次生成面试题</p>
+    <p>③ <strong>节点B 模拟回答：</strong>让 LLM 扮演候选人回答问题</p>
+    <p>④ <strong>节点C 评估：</strong>给回答打分，给出反馈</p>
+    <p>⑤ <strong>条件路由：</strong>round ≥ 3 → 生成报告并结束；否则 → 回到节点A 问下一题</p>
+    <p>⑥ 加上 <code>InMemorySaver</code>，用 <code>stream_mode="updates"</code> 流式运行，观察每步的 State 变化</p>
+  </div>
+  <div class="practice-hint">
+    <strong>模式：</strong>这是一个「循环 N 次然后结束」的经典模式 —— 用 <code>round</code> 字段做计数器，条件边检查 <code>round >= 3</code>。<br>
+    <strong>加分：</strong>给 State 的 <code>history</code> 用 <code>Annotated[list[str], add]</code> 追加每轮的日志。
+  </div>
+</div>
+</div>
+
+<!-- ==================== SECTION 4: Sub-Agent ==================== -->
+<div class="section" id="lg-s4">
+<h2>Sub-Agent 模式详解</h2>
+
+<div class="callout callout-analogy">
+  <strong>类比：</strong>一个创业公司 —— CEO（主 Agent）不亲自写代码、不做设计、不搞销售，而是把任务分配给 CTO、CFO、CMO（Sub-Agents）。每个 Sub-Agent 有自己的专业领域和工具，CEO 负责协调和决策。
+</div>
+
+<p>Sub-Agent 模式是 LangGraph 构建多 Agent 系统的核心范式。掌握它，你就能构建任意复杂的 Agent 工作流。</p>
+
+<h3>Sub-Agent 的核心三要素</h3>
+
+<div class="step"><div class="step-num">1</div><div class="step-content"><strong>主 Agent（Orchestrator）</strong>：接收用户输入，决定调用哪个 Sub-Agent，汇总结果，控制整体流程</div></div>
+<div class="step"><div class="step-num">2</div><div class="step-content"><strong>Sub-Agent（Worker）</strong>：专注做一件事，有自己的 prompt、工具和输出格式</div></div>
+<div class="step"><div class="step-num">3</div><div class="step-content"><strong>共享 State</strong>：所有 Agent 通过同一个 State 对象通信。这是协作的「白板」</div></div>
+
+<h3>两种协作模式</h3>
+
+<div class="compare">
+  <div class="compare-card left">
+    <h4>🔄 串行流水线</h4>
+    <p>A → B → C，每一步依赖前一步的输出</p>
+    <p><strong>适合：</strong>代码生成→测试→审查 这种有明确先后顺序的场景</p>
+    <p><strong>控制力：</strong>你可以精确控制每个 Agent 的执行顺序，观察中间 State 变化</p>
+  </div>
+  <div class="compare-card right">
+    <h4>⚡ 并行扇出/扇入</h4>
+    <p>A → [B, C, D] 并行 → E 汇总</p>
+    <p><strong>适合：</strong>多个维度同时审查（安全、性能、风格）</p>
+    <p><strong>控制力：</strong>扇出前/扇入后都可以插入处理逻辑，控制中间产物的流转</p>
+  </div>
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph TD
+    subgraph Serial["串行模式"]
+        S1["Agent A"] --> S2["Agent B"] --> S3["Agent C"]
+    end
+    subgraph Parallel["并行模式"]
+        P1["Agent A"] --> P2["Agent B"]
+        P1 --> P3["Agent C"]
+        P1 --> P4["Agent D"]
+        P2 --> P5["Agent E"]
+        P3 --> P5
+        P4 --> P5
+    end
+  </pre>
+  <div class="caption">图 6：Sub-Agent 的两种协作模式</div>
+</div>
+
+<h3>如何控制中间流程与产物流转</h3>
+
+<p>这是你学完后最需要的能力。核心思路：<strong>State 就是你控制流程的抓手</strong>。</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># 控制中间产物流转的三种手段：</span>
+
+<span class="cmt"># 1. State 字段 —— Agent 之间传递数据的通道</span>
+<span class="cmt">#    Agent A 写入 state["code"]，Agent B 读取 state["code"]</span>
+<span class="cmt">#    你可以在任何节点中添加「转换逻辑」来处理中间产物</span>
+
+<span class="kw">def</span> <span class="fn">transform_before_review</span>(state: <span class="cls">State</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""在审查之前，对代码做预处理"""</span>
+    code <span class="op">=</span> state[<span class="str">"code"</span>]
+    <span class="cmt"># 比如：提取代码块、移除注释、格式化...</span>
+    cleaned <span class="op">=</span> <span class="fn">extract_python_code</span>(code)
+    <span class="kw">return</span> {<span class="str">"code"</span>: cleaned}
+
+<span class="cmt"># 2. 条件边 —— 根据中间产物决定下一步</span>
+<span class="kw">def</span> <span class="fn">route_by_quality</span>(state: <span class="cls">State</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="str">"""根据代码质量评分路由到不同 Agent"""</span>
+    score <span class="op">=</span> state.<span class="fn">get</span>(<span class="str">"quality_score"</span>, <span class="num">0</span>)
+    <span class="kw">if</span> score < class="op">>=</span> <span class="num">8</span>:
+        <span class="kw">return</span> <span class="str">"publish"</span>    <span class="cmt"># 高质量 → 直接发布</span>
+    <span class="kw">elif</span> score <span class="op">>=</span> <span class="num">5</span>:
+        <span class="kw">return</span> <span class="str">"minor_fix"</span>  <span class="cmt"># 中等 → 小修</span>
+    <span class="kw">else</span>:
+        <span class="kw">return</span> <span class="str">"rewrite"</span>    <span class="cmt"># 低质量 → 重写</span>
+
+<span class="cmt"># 3. interrupt —— 在关键节点暂停，让人类检查/修改中间产物</span>
+app <span class="op">=</span> graph.<span class="fn">compile</span>(
+    checkpointer<span class="op">=</span>checkpointer,
+    interrupt_after<span class="op">=</span>[<span class="str">"generate"</span>]  <span class="cmt"># 生成后暂停，人类检查代码再继续</span>
+)</code></pre>
+</div>
+
+<div class="callout callout-key">
+  <strong>掌握这个模式：</strong>你构建任何 Agent 工作流时，都遵循这个思路 —— ① 定义 State（确定需要哪些中间产物）→ ② 定义每个 Sub-Agent（读取哪些 State 字段、写入哪些字段）→ ③ 用边和条件路由控制流转顺序 → ④ 在关键节点用 interrupt 让人类介入。这就是 LangGraph 的核心工作方式。
+</div>
+
+<div class="callout callout-info">
+  <strong>在接下来的实战项目中</strong>，我们会使用<strong>串行流水线 + 条件循环</strong>的模式：Generator → TestGen → Reviewer → [Fixer → Reviewer → ...] 直到审查通过。你会看到每个 Agent 如何读写 State，条件边如何控制流转。
+</div>
+
+<div class="callout callout-practice" id="prac-s4">
+  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
+  <div class="practice-body">
+    <p><strong>场景：</strong>构建一个「旅行规划师」系统，使用 <strong>Sub-Agent 串行流水线</strong>模式：</p>
+    <p>① <strong>Agent 1 需求分析师</strong>：读取用户的旅行描述，输出结构化信息（目的地、天数、预算、偏好）</p>
+    <p>② <strong>Agent 2 行程规划师</strong>：读取结构化需求，生成每日行程安排</p>
+    <p>③ <strong>Agent 3 预算审核员</strong>：审查行程是否超预算，给出评分和意见</p>
+    <p>④ <strong>条件循环：</strong>如果预算审核不通过 → Agent 4（行程优化器）缩减行程 → 重新审核（最多 2 轮）</p>
+    <p>请完整实现：State 定义 → 4 个 Agent 函数 → Graph 组装 → 条件路由 → 运行测试。</p>
+  </div>
+  <div class="practice-hint">
+    <strong>State 设计参考：</strong><br>
+    <code>user_input</code>（原始描述）、<code>destination</code>、<code>days</code>、<code>budget</code>、<code>preferences</code>（需求分析输出）、<code>itinerary</code>（行程）、<code>budget_review</code>（审核意见）、<code>within_budget</code>（bool）、<code>revision_count</code><br><br>
+    <strong>核心：</strong>这道题综合了前面所有知识点 —— State 设计、节点函数、LCEL 管道、条件路由、循环控制。做完它，你就真正掌握了 LangGraph。
+  </div>
+</div>
+</div>
+
+
+<h3>create_agent：从单 Agent 到多 Agent 编排</h3>
+
+<p>截至 2026-09-04，LangChain v1 构建工具调用 Agent 的推荐入口是 <code>langchain.agents.create_agent</code>。旧教程常见的 <code>langgraph.prebuilt.create_react_agent</code> 已由它取代。<code>create_agent</code> 适合快速创建一个遵循「模型判断 → 调用工具 → 读取结果 → 继续判断」循环的 ReAct<sup class="tp-mark" data-tp="react" role="button" tabindex="0" title="查看技术点详情" aria-label="查看技术点详情">?</sup> Agent：</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header"><span class="code-lang">Python</span></div>
+  <pre><code><span class="kw">from</span> langchain.agents <span class="kw">import</span> <span class="fn">create_agent</span>
+
+research_agent <span class="op">=</span> <span class="fn">create_agent</span>(
+    model<span class="op">=</span><span class="str">"openai:gpt-5.5"</span>,
+    tools<span class="op">=</span>[search_web, read_document],
+    system_prompt<span class="op">=</span><span class="str">"你是研究员。先核实资料，再给出带来源的事实摘要。"</span>,
+)
+
+result <span class="op">=</span> research_agent.<span class="fn">invoke</span>({
+    <span class="str">"messages"</span>: [{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"整理量子计算的主要应用"</span>}]
+})
+<span class="fn">print</span>(result[<span class="str">"messages"</span>][<span class="num">-1</span>].content)</code></pre>
+</div>
+
+<div class="callout callout-key">
+  <strong>选择边界：</strong>单个 ReAct 循环优先使用 <code>create_agent</code>；当多个 Agent 需要串联、存在确定性分支或循环、需要检查中间产物，或者子图要跨项目复用时，应退回手写 <code>StateGraph</code>。多 Agent 系统通常是「若干个 <code>create_agent</code> + 一个显式 <code>StateGraph</code> 编排层」。
+</div>
+
+<h3>MessagesState：消息如何安全地累积</h3>
+
+<p><code>MessagesState</code> 是 LangGraph 为消息型工作流提供的预定义 State。它包含 <code>messages</code> 字段，并已经绑定消息 reducer：节点返回新消息时会按消息 ID 合并，而不是把整段历史粗暴覆盖。需要业务字段时，可以直接继承它：</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header"><span class="code-lang">Python</span></div>
+  <pre><code><span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">MessagesState</span>
+
+<span class="kw">class</span> <span class="cls">TeamState</span>(<span class="cls">MessagesState</span>):
+    task: <span class="cls">str</span>
+    research_notes: <span class="cls">str</span>
+    final_answer: <span class="cls">str</span>
+    handoff_count: <span class="cls">int</span></code></pre>
+</div>
+
+<div class="callout callout-warn">
+  <strong>这里容易出错：</strong>如果自己声明 <code>messages: list</code> 却没有消息 reducer，并行节点或连续节点可能互相覆盖历史。纯消息工作流直接使用 <code>MessagesState</code>；需要额外字段时继承它，不要重新定义同名 <code>messages</code> 字段。
+</div>
+
+<h3>Supervisor 与 handoff：由谁决定下一位执行者</h3>
+
+<p><strong>Supervisor</strong> 是负责分派与验收的编排节点；<strong>handoff</strong> 是把控制权连同必要状态交给下一位 Agent。handoff 不应只是提示词里的「请转交」，而应落实为图中的路由。下面的 supervisor 根据 State 决定先研究、再写作，工作节点用 <code>Command(update=..., goto=...)</code> 同时提交产物并把控制权交回 supervisor：</p>
+
+<div class="diagram">
+  <pre class="mermaid">
+flowchart LR
+    U[用户任务] --> S{Supervisor}
+    S -->|缺研究资料| R[Research Agent]
+    R -->|handoff: research_notes| S
+    S -->|资料齐全且未成稿| W[Writer Agent]
+    W -->|handoff: final_answer| S
+    S -->|验收通过| E([END])
+  </pre>
+  <div class="caption">图 7：Supervisor 通过 State 与 handoff 控制多 Agent 流转</div>
+</div>
+
+<div class="code-block-wrapper">
+  <div class="code-header"><span class="code-lang">Python</span></div>
+  <pre><code><span class="kw">from</span> langchain.agents <span class="kw">import</span> <span class="fn">create_agent</span>
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">MessagesState</span>, <span class="cls">START</span>, <span class="cls">END</span>
+<span class="kw">from</span> langgraph.types <span class="kw">import</span> <span class="cls">Command</span>
+
+<span class="kw">class</span> <span class="cls">TeamState</span>(<span class="cls">MessagesState</span>):
+    task: <span class="cls">str</span>
+    research_notes: <span class="cls">str</span>
+    final_answer: <span class="cls">str</span>
+
+researcher <span class="op">=</span> <span class="fn">create_agent</span>(
+    model<span class="op">=</span><span class="str">"openai:gpt-5.5"</span>, tools<span class="op">=</span>[search_web],
+    system_prompt<span class="op">=</span><span class="str">"只输出核实过的事实摘要。"</span>,
+)
+writer <span class="op">=</span> <span class="fn">create_agent</span>(
+    model<span class="op">=</span><span class="str">"openai:gpt-5.5"</span>, tools<span class="op">=</span>[],
+    system_prompt<span class="op">=</span><span class="str">"根据提供的资料写成清晰的教学正文。"</span>,
+)
+
+<span class="kw">def</span> <span class="fn">supervisor</span>(state: <span class="cls">TeamState</span>):
+    <span class="kw">if</span> <span class="kw">not</span> state.<span class="fn">get</span>(<span class="str">"research_notes"</span>):
+        <span class="kw">return</span> <span class="cls">Command</span>(goto<span class="op">=</span><span class="str">"researcher"</span>)
+    <span class="kw">if</span> <span class="kw">not</span> state.<span class="fn">get</span>(<span class="str">"final_answer"</span>):
+        <span class="kw">return</span> <span class="cls">Command</span>(goto<span class="op">=</span><span class="str">"writer"</span>)
+    <span class="kw">return</span> <span class="cls">Command</span>(goto<span class="op">=</span><span class="cls">END</span>)
+
+<span class="kw">def</span> <span class="fn">research_node</span>(state: <span class="cls">TeamState</span>):
+    result <span class="op">=</span> researcher.<span class="fn">invoke</span>({
+        <span class="str">"messages"</span>: [{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: state[<span class="str">"task"</span>]}]
+    })
+    notes <span class="op">=</span> result[<span class="str">"messages"</span>][<span class="num">-1</span>].content
+    <span class="kw">return</span> <span class="cls">Command</span>(
+        update<span class="op">=</span>{<span class="str">"research_notes"</span>: notes}, goto<span class="op">=</span><span class="str">"supervisor"</span>
+    )
+
+<span class="kw">def</span> <span class="fn">write_node</span>(state: <span class="cls">TeamState</span>):
+    prompt <span class="op">=</span> <span class="str">f"任务：{state['task']}\n资料：{state['research_notes']}"</span>
+    result <span class="op">=</span> writer.<span class="fn">invoke</span>({
+        <span class="str">"messages"</span>: [{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: prompt}]
+    })
+    answer <span class="op">=</span> result[<span class="str">"messages"</span>][<span class="num">-1</span>].content
+    <span class="kw">return</span> <span class="cls">Command</span>(
+        update<span class="op">=</span>{<span class="str">"final_answer"</span>: answer}, goto<span class="op">=</span><span class="str">"supervisor"</span>
+    )
+
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">TeamState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"supervisor"</span>, supervisor)
+graph.<span class="fn">add_node</span>(<span class="str">"researcher"</span>, research_node)
+graph.<span class="fn">add_node</span>(<span class="str">"writer"</span>, write_node)
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"supervisor"</span>)
+app <span class="op">=</span> graph.<span class="fn">compile</span>()</code></pre>
+</div>
+
+<table>
+  <tr><th>模式</th><th>控制权</th><th>适用场景</th></tr>
+  <tr><td>Supervisor</td><td>集中在一个编排节点</td><td>流程需要统一验收、预算与停止条件</td></tr>
+  <tr><td>直接 handoff</td><td>当前 Agent 决定下一位</td><td>角色切换自然、路径较少的对话系统</td></tr>
+  <tr><td>固定流水线</td><td>由静态边决定</td><td>步骤稳定、合规要求高、需要可预测执行</td></tr>
+</table>
+
+<div class="callout callout-warn">
+  <strong>这里容易出错：</strong>handoff 必须传递最小但完整的上下文，并设置最大移交次数或终止条件，否则 Agent 可能互相转交形成循环。涉及副作用的工具还要配合持久化与 HITL，不能只依赖 supervisor 的自然语言判断。
+</div>
+
+<!-- ==================== SECTION 5: 实战项目 ==================== -->
+<div class="section" id="lg-s5">
+<h2>实战项目：CodeGen + Review Pipeline</h2>
+
+<p>构建一个<strong>完整的、可运行的</strong>代码生成 + 审查系统。它能：</p>
+
+<ol>
+  <li>根据自然语言需求<strong>生成 Python 代码</strong></li>
+  <li>为生成的代码<strong>自动编写单元测试</strong></li>
+  <li><strong>审查代码质量</strong>（正确性、风格、边界情况）</li>
+  <li>如果审查不通过，<strong>自动修复并重新审查</strong>（最多 3 轮）</li>
+</ol>
+
+<!-- 5.1 -->
+<div id="s5-1">
+<h3>项目架构总览</h3>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph TD
+    USER(["用户输入需求"]) --> GEN
+
+    subgraph Pipeline["CodeGen + Review Pipeline"]
+        GEN["Agent 1 代码生成器"] -->|写入 code| TEST["Agent 2 测试生成器"]
+        TEST -->|写入 tests| REV["Agent 3 代码审查员"]
+        REV -->|判断| DEC{通过?}
+        DEC -->|通过| DONE(["输出最终结果"])
+        DEC -->|不通过且轮次不足3次| FIX["Agent 4 自动修复器"]
+        DEC -->|不通过且轮次已达3次| DONE
+        FIX -->|更新 code 轮次+1| REV
+    end
+  </pre>
+  <div class="caption">图 8：完整的 CodeGen + Review Pipeline 架构</div>
+</div>
+
+<h4>四个 Agent 的分工</h4>
+
+<table>
+  <tr><th>Agent</th><th>角色</th><th>读取 State</th><th>写入 State</th></tr>
+  <tr><td>💻 代码生成器</td><td>把需求变成代码</td><td>requirement</td><td>code, history</td></tr>
+  <tr><td>🧪 测试生成器</td><td>为代码写单元测试</td><td>code</td><td>tests, history</td></tr>
+  <tr><td>🔍 代码审查员</td><td>审查代码质量</td><td>code, tests</td><td>review_feedback, is_approved, history</td></tr>
+  <tr><td>🔧 自动修复器</td><td>根据审查意见修复代码</td><td>code, review_feedback</td><td>code, revision_count, history</td></tr>
+</table>
+
+<div class="callout callout-tip">
+  <strong>注意读写关系：</strong>每个 Agent 从 State 的哪些字段读取、往哪些字段写入，就是你控制「信息流转」的核心手段。理解这张表 = 理解整个 Pipeline。
+</div>
+</div>
+
+<!-- 5.2 -->
+<div id="s5-2">
+<h3>Step 1：定义 State</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># state.py</span>
+<span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">Annotated</span>, <span class="cls">TypedDict</span>
+<span class="kw">from</span> operator <span class="kw">import</span> add
+
+<span class="kw">class</span> <span class="cls">CodeGenState</span>(<span class="cls">TypedDict</span>):
+    <span class="str">"""
+    整个 Pipeline 的共享状态。
+    所有 Agent 都通过读写这个对象来协作。
+    """</span>
+    <span class="cmt"># ===== 输入 =====</span>
+    requirement: <span class="cls">str</span>          <span class="cmt"># 用户的自然语言需求</span>
+
+    <span class="cmt"># ===== 中间产物（Sub-Agent 之间流转的数据）=====</span>
+    code: <span class="cls">str</span>                 <span class="cmt"># 当前版本的代码（生成器写入 → 审查器读取 → 修复器更新）</span>
+    tests: <span class="cls">str</span>                <span class="cmt"># 单元测试（测试器写入 → 审查器读取）</span>
+    review_feedback: <span class="cls">str</span>      <span class="cmt"># 审查意见（审查器写入 → 修复器读取）</span>
+
+    <span class="cmt"># ===== 控制流 =====</span>
+    is_approved: <span class="cls">bool</span>         <span class="cmt"># 审查是否通过（条件边的判断依据）</span>
+    revision_count: <span class="cls">int</span>       <span class="cmt"># 修复轮次（防止无限循环）</span>
+
+    <span class="cmt"># ===== 追踪 =====</span>
+    history: <span class="cls">Annotated</span>[<span class="cls">list</span>[<span class="cls">str</span>], add]  <span class="cmt"># 每步日志，追加而非覆盖</span></code></pre>
+</div>
+</div>
+
+<!-- 5.3 -->
+<div id="s5-3">
+<h3>Step 2：Agent 1 — 代码生成器</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># agents.py</span>
+<span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+
+llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-sonnet-5"</span>, temperature<span class="op">=</span><span class="num">0</span>)
+
+<span class="kw">def</span> <span class="fn">generate_code</span>(state: <span class="cls">CodeGenState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""
+    Agent 1: 代码生成器
+    读取: state["requirement"]
+    写入: state["code"], state["history"]
+    """</span>
+    prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+        (<span class="str">"system"</span>, <span class="str">"""你是一个资深 Python 开发者。
+请根据用户需求编写高质量的 Python 代码。
+
+要求：
+1. 代码简洁、可读、符合 PEP 8
+2. 包含类型注解
+3. 包含 docstring
+4. 处理边界情况
+5. 只输出代码，不要解释"""</span>),
+        (<span class="str">"human"</span>, <span class="str">"需求：{requirement}"</span>)
+    ])
+
+    chain <span class="op">=</span> prompt <span class="op">|</span> llm
+    result <span class="op">=</span> chain.<span class="fn">invoke</span>({<span class="str">"requirement"</span>: state[<span class="str">"requirement"</span>]})
+
+    <span class="kw">return</span> {
+        <span class="str">"code"</span>: result.content,
+        <span class="str">"history"</span>: [<span class="str">f"💻 [代码生成器] 生成了 {<span class="fn">len</span>(result.content)} 字符的代码"</span>]
+    }</code></pre>
+</div>
+</div>
+
+<!-- 5.4 -->
+<div id="s5-4">
+<h3>Step 3：Agent 2 — 测试生成器</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">def</span> <span class="fn">generate_tests</span>(state: <span class="cls">CodeGenState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""
+    Agent 2: 测试生成器
+    读取: state["code"]   ← 上一个 Agent 写入的数据
+    写入: state["tests"], state["history"]
+    """</span>
+    prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+        (<span class="str">"system"</span>, <span class="str">"""你是一个专业的测试工程师。
+请为给定的 Python 代码编写全面的单元测试。
+
+要求：
+1. 使用 pytest 风格
+2. 覆盖正常场景、边界情况、异常场景
+3. 测试函数命名清晰，体现测试意图
+4. 只输出测试代码，不要解释"""</span>),
+        (<span class="str">"human"</span>, <span class="str">"""请为以下代码编写单元测试：
+
+```python
+{code}
+```"""</span>)
+    ])
+
+    chain <span class="op">=</span> prompt <span class="op">|</span> llm
+    result <span class="op">=</span> chain.<span class="fn">invoke</span>({<span class="str">"code"</span>: state[<span class="str">"code"</span>]})
+
+    <span class="kw">return</span> {
+        <span class="str">"tests"</span>: result.content,
+        <span class="str">"history"</span>: [<span class="str">"🧪 [测试生成器] 生成了单元测试"</span>]
+    }</code></pre>
+</div>
+</div>
+
+<!-- 5.5 -->
+<div id="s5-5">
+<h3>Step 4：Agent 3 — 代码审查员</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">import</span> json
+
+<span class="kw">def</span> <span class="fn">review_code</span>(state: <span class="cls">CodeGenState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""
+    Agent 3: 代码审查员
+    读取: state["code"], state["tests"]
+    写入: state["review_feedback"], state["is_approved"], state["history"]
+    注意：is_approved 是条件边的判断依据，决定流程走向
+    """</span>
+    prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+        (<span class="str">"system"</span>, <span class="str">"""你是一个严格的代码审查专家。
+请审查以下 Python 代码和测试，评估代码质量。
+
+审查维度：
+1. 正确性：逻辑是否正确？能否处理边界情况？
+2. 可读性：命名、注释、结构是否清晰？
+3. 健壮性：异常处理是否完善？
+4. 测试覆盖：测试是否充分？
+
+请严格按以下 JSON 格式输出（不要输出其他内容）：
+{{
+    "is_approved": true/false,
+    "score": 1-10,
+    "issues": ["问题1", "问题2"],
+    "suggestions": ["建议1", "建议2"]
+}}"""</span>),
+        (<span class="str">"human"</span>, <span class="str">"""## 代码
+```python
+{code}
+```
+
+## 测试
+```python
+{tests}
+```"""</span>)
+    ])
+
+    chain <span class="op">=</span> prompt <span class="op">|</span> llm
+    result <span class="op">=</span> chain.<span class="fn">invoke</span>({
+        <span class="str">"code"</span>: state[<span class="str">"code"</span>],
+        <span class="str">"tests"</span>: state[<span class="str">"tests"</span>]
+    })
+
+    <span class="cmt"># 解析 JSON（带异常兜底）</span>
+    <span class="kw">try</span>:
+        review <span class="op">=</span> json.<span class="fn">loads</span>(result.content)
+        is_approved <span class="op">=</span> review.<span class="fn">get</span>(<span class="str">"is_approved"</span>, <span class="kw">False</span>)
+        feedback <span class="op">=</span> json.<span class="fn">dumps</span>(review, ensure_ascii<span class="op">=</span><span class="kw">False</span>, indent<span class="op">=</span><span class="num">2</span>)
+    <span class="kw">except</span> <span class="cls">json.JSONDecodeError</span>:
+        is_approved <span class="op">=</span> <span class="kw">False</span>
+        feedback <span class="op">=</span> result.content
+
+    emoji <span class="op">=</span> <span class="str">"✅"</span> <span class="kw">if</span> is_approved <span class="kw">else</span> <span class="str">"❌"</span>
+    <span class="kw">return</span> {
+        <span class="str">"review_feedback"</span>: feedback,
+        <span class="str">"is_approved"</span>: is_approved,
+        <span class="str">"history"</span>: [<span class="str">f"🔍 [审查员] 审查完成 — {emoji} {'通过' if is_approved else '需要修改'}"</span>]
+    }</code></pre>
+</div>
+</div>
+
+<!-- 5.6 -->
+<div id="s5-6">
+<h3>Step 5：Agent 4 — 自动修复器</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">def</span> <span class="fn">revise_code</span>(state: <span class="cls">CodeGenState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""
+    Agent 4: 自动修复器
+    读取: state["code"], state["review_feedback"]
+    写入: state["code"]（覆盖）, state["revision_count"], state["history"]
+    """</span>
+    prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_messages</span>([
+        (<span class="str">"system"</span>, <span class="str">"""你是一个经验丰富的开发者。
+请根据审查意见修复代码。只输出修复后的完整代码，不要解释。
+
+要求：
+1. 保留原有功能
+2. 修复审查中指出的所有问题
+3. 遵循审查中的改进建议
+4. 只输出代码"""</span>),
+        (<span class="str">"human"</span>, <span class="str">"""## 当前代码
+```python
+{code}
+```
+
+## 审查意见
+{feedback}
+
+请输出修复后的完整代码："""</span>)
+    ])
+
+    chain <span class="op">=</span> prompt <span class="op">|</span> llm
+    result <span class="op">=</span> chain.<span class="fn">invoke</span>({
+        <span class="str">"code"</span>: state[<span class="str">"code"</span>],
+        <span class="str">"feedback"</span>: state[<span class="str">"review_feedback"</span>]
+    })
+
+    new_count <span class="op">=</span> state.<span class="fn">get</span>(<span class="str">"revision_count"</span>, <span class="num">0</span>) <span class="op">+</span> <span class="num">1</span>
+    <span class="kw">return</span> {
+        <span class="str">"code"</span>: result.content,
+        <span class="str">"revision_count"</span>: new_count,
+        <span class="str">"history"</span>: [<span class="str">f"🔧 [修复器] 第 {new_count} 轮修复完成"</span>]
+    }</code></pre>
+</div>
+</div>
+
+<!-- 5.7 -->
+<div id="s5-7">
+<h3>Step 6：构建 Graph &amp; 条件路由</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># graph.py</span>
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">START</span>, <span class="cls">END</span>
+<span class="kw">from</span> langgraph.checkpoint.memory <span class="kw">import</span> <span class="cls">InMemorySaver</span>
+
+<span class="cmt"># ===== 路由函数（控制流程的核心）=====</span>
+<span class="kw">def</span> <span class="fn">should_continue</span>(state: <span class="cls">CodeGenState</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="str">"""根据审查结果决定下一步"""</span>
+    <span class="kw">if</span> state[<span class="str">"is_approved"</span>]:
+        <span class="kw">return</span> <span class="str">"approved"</span>
+    <span class="kw">elif</span> state.<span class="fn">get</span>(<span class="str">"revision_count"</span>, <span class="num">0</span>) <span class="op">>=</span> <span class="num">3</span>:
+        <span class="kw">return</span> <span class="str">"max_retries"</span>
+    <span class="kw">else</span>:
+        <span class="kw">return</span> <span class="str">"revise"</span>
+
+<span class="cmt"># ===== 构建图 =====</span>
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">CodeGenState</span>)
+
+<span class="cmt"># 添加 4 个节点</span>
+graph.<span class="fn">add_node</span>(<span class="str">"generate"</span>, generate_code)
+graph.<span class="fn">add_node</span>(<span class="str">"test_gen"</span>, generate_tests)
+graph.<span class="fn">add_node</span>(<span class="str">"review"</span>, review_code)
+graph.<span class="fn">add_node</span>(<span class="str">"revise"</span>, revise_code)
+
+<span class="cmt"># 设置入口和普通边</span>
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"generate"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"generate"</span>, <span class="str">"test_gen"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"test_gen"</span>, <span class="str">"review"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"revise"</span>, <span class="str">"review"</span>)  <span class="cmt"># 修复后回到审查 → 形成循环</span>
+
+<span class="cmt"># 添加条件边（动态路由）</span>
+graph.<span class="fn">add_conditional_edges</span>(
+    <span class="str">"review"</span>,
+    should_continue,
+    {
+        <span class="str">"approved"</span>: <span class="cls">END</span>,
+        <span class="str">"max_retries"</span>: <span class="cls">END</span>,
+        <span class="str">"revise"</span>: <span class="str">"revise"</span>,
+    }
+)
+
+<span class="cmt"># 编译（带持久化）</span>
+checkpointer <span class="op">=</span> <span class="cls">InMemorySaver</span>()
+app <span class="op">=</span> graph.<span class="fn">compile</span>(checkpointer<span class="op">=</span>checkpointer)</code></pre>
+</div>
+
+<div class="callout callout-info">
+  <strong>图的执行顺序：</strong>
+  <ol>
+    <li>从 <code>generate</code> 节点开始（<code>START</code> → <code>"generate"</code>）</li>
+    <li>执行 <code>generate</code> → 普通边 → <code>test_gen</code></li>
+    <li>执行 <code>test_gen</code> → 普通边 → <code>review</code></li>
+    <li>执行 <code>review</code> → 条件边 → 根据 <code>should_continue</code> 返回值路由</li>
+    <li>如果去 <code>revise</code>，修复后通过普通边回到 <code>review</code>，形成循环</li>
+  </ol>
+</div>
+</div>
+
+<!-- 5.8 -->
+<div id="s5-8">
+<h3>Step 7：运行 &amp; 查看结果</h3>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># main.py</span>
+<span class="kw">import</span> pprint
+
+<span class="cmt"># 初始状态</span>
+initial_state <span class="op">=</span> {
+    <span class="str">"requirement"</span>: <span class="str">"实现一个 LRU Cache，支持 get 和 put 操作，O(1) 时间复杂度"</span>,
+    <span class="str">"code"</span>: <span class="str">""</span>,
+    <span class="str">"tests"</span>: <span class="str">""</span>,
+    <span class="str">"review_feedback"</span>: <span class="str">""</span>,
+    <span class="str">"is_approved"</span>: <span class="kw">False</span>,
+    <span class="str">"revision_count"</span>: <span class="num">0</span>,
+    <span class="str">"history"</span>: []
+}
+
+<span class="cmt"># 运行配置</span>
+config <span class="op">=</span> {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"demo-001"</span>}}
+
+<span class="cmt"># 执行！</span>
+<span class="fn">print</span>(<span class="str">"🚀 Pipeline 启动...\n"</span>)
+result <span class="op">=</span> app.<span class="fn">invoke</span>(initial_state, config<span class="op">=</span>config)
+
+<span class="cmt"># 输出结果</span>
+<span class="fn">print</span>(<span class="str">"\n"</span> <span class="op">+</span> <span class="str">"="</span> <span class="op">*</span> <span class="num">60</span>)
+<span class="fn">print</span>(<span class="str">"📊 Pipeline 执行完成！"</span>)
+<span class="fn">print</span>(<span class="str">"="</span> <span class="op">*</span> <span class="num">60</span>)
+
+<span class="fn">print</span>(<span class="str">f"\n✅ 审查通过: {result['is_approved']}"</span>)
+<span class="fn">print</span>(<span class="str">f"🔄 修复轮次: {result['revision_count']}"</span>)
+
+<span class="fn">print</span>(<span class="str">"\n📝 执行日志:"</span>)
+<span class="kw">for</span> log <span class="kw">in</span> result[<span class="str">"history"</span>]:
+    <span class="fn">print</span>(<span class="str">f"  {log}"</span>)
+
+<span class="fn">print</span>(<span class="str">"\n💻 最终代码:"</span>)
+<span class="fn">print</span>(result[<span class="str">"code"</span>])
+
+<span class="fn">print</span>(<span class="str">"\n🧪 单元测试:"</span>)
+<span class="fn">print</span>(result[<span class="str">"tests"</span>])</code></pre>
+</div>
+
+<h4>预期输出示例</h4>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Output</span>
+    
+  </div>
+  <pre><code>🚀 Pipeline 启动...
+
+============================================================
+📊 Pipeline 执行完成！============================================================
+
+✅ 审查通过: True
+🔄 修复轮次: 1
+
+📝 执行日志:
+  💻 [代码生成器] 生成了 1247 字符的代码
+  🧪 [测试生成器] 生成了单元测试
+  🔍 [审查员] 审查完成 — ❌ 需要修改
+  🔧 [修复器] 第 1 轮修复完成
+  🔍 [审查员] 审查完成 — ✅ 通过
+
+💻 最终代码:
+from collections import OrderedDict
+...
+
+🧪 单元测试:
+import pytest
+...</code></pre>
+</div>
+
+<div class="flow-summary">
+  <h4>🎉 恭喜！你已经理解了整个 Pipeline 的工作原理</h4>
+  <p>4 个 Agent 各司其职，通过共享 State 协作，条件边控制循环，直到代码质量达标。<br>
+  这就是 LangGraph 的核心工作模式 —— 理解了它，你就能构建任何 Agent 工作流。</p>
+</div>
+</div>
+</div>
+
+<!-- ==================== SECTION: LangGraph 高级详解 ==================== -->
+<div class="section" id="s-advanced">
+<h2>LangGraph 高级详解</h2>
+
+<p>前面你已经掌握了核心概念。这一章深入讲解 6 个高级特性，学完后你就能独立设计任意复杂的 Agent 工作流。</p>
+
+<!-- 6.1 Sub-Graph -->
+<div id="s-adv-1">
+<h3>6.1 Sub-Graph — 子图模块化</h3>
+
+<div class="callout callout-analogy">
+  <strong>类比：</strong>如果一个函数太长，你会拆成多个小函数。Sub-Graph 就是把一个大图拆成多个小图 —— 每个子图负责一个独立的功能模块，然后像搭积木一样组合起来。
+</div>
+
+<p><strong>什么时候用 Sub-Graph？</strong></p>
+<ul>
+  <li>某个流程（如「审查+修复循环」）在多处复用</li>
+  <li>主图太复杂，需要模块化拆分</li>
+  <li>不同团队负责不同子流程</li>
+</ul>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># ===== 子图：审查 + 修复循环 =====</span>
+<span class="cmt"># 子图和主图共享同一个 State 类型，这样数据自然流通</span>
+
+<span class="kw">def</span> <span class="fn">build_review_subgraph</span>():
+    <span class="str">"""构建「审查→修复」子图"""</span>
+    sub <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">CodeGenState</span>)
+
+    sub.<span class="fn">add_node</span>(<span class="str">"review"</span>, review_code)
+    sub.<span class="fn">add_node</span>(<span class="str">"revise"</span>, revise_code)
+
+    sub.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"review"</span>)
+    sub.<span class="fn">add_edge</span>(<span class="str">"revise"</span>, <span class="str">"review"</span>)
+    sub.<span class="fn">add_conditional_edges</span>(
+        <span class="str">"review"</span>, should_continue,
+        {<span class="str">"approved"</span>: <span class="cls">END</span>, <span class="str">"max_retries"</span>: <span class="cls">END</span>, <span class="str">"revise"</span>: <span class="str">"revise"</span>}
+    )
+
+    <span class="kw">return</span> sub.<span class="fn">compile</span>()
+
+<span class="cmt"># ===== 主图：组装所有模块 =====</span>
+review_loop <span class="op">=</span> <span class="fn">build_review_subgraph</span>()
+
+main <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">CodeGenState</span>)
+main.<span class="fn">add_node</span>(<span class="str">"generate"</span>, generate_code)
+main.<span class="fn">add_node</span>(<span class="str">"test_gen"</span>, generate_tests)
+main.<span class="fn">add_node</span>(<span class="str">"review_loop"</span>, review_loop)  <span class="cmt"># 子图作为节点！</span>
+
+main.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"generate"</span>)
+main.<span class="fn">add_edge</span>(<span class="str">"generate"</span>, <span class="str">"test_gen"</span>)
+main.<span class="fn">add_edge</span>(<span class="str">"test_gen"</span>, <span class="str">"review_loop"</span>)
+main.<span class="fn">add_edge</span>(<span class="str">"review_loop"</span>, <span class="cls">END</span>)
+
+app <span class="op">=</span> main.<span class="fn">compile</span>()</code></pre>
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph TD
+    START(["开始"]) --> GEN["代码生成"]
+    GEN --> TEST["测试生成"]
+    TEST --> SUB
+
+    subgraph SUB["子图-审查循环"]
+        REV["审查"] --> DEC{通过?}
+        DEC -->|否| FIX["修复"]
+        FIX --> REV
+        DEC -->|是| SUB_END(["子图结束"])
+    end
+
+    SUB --> END(["结束"])
+  </pre>
+  <div class="caption">图 9：Sub-Graph 把「审查+修复循环」封装为独立模块</div>
+</div>
+
+<div class="callout callout-key">
+  <strong>关键点：</strong>子图和主图<strong>共享同一个 State 类型</strong>。子图内部的节点可以直接读写主图的 State 字段，数据自动流通，无需额外配置。
+</div>
+</div>
+
+<!-- 6.2 并行 -->
+<div id="s-adv-2">
+<h3>6.2 并行执行 &amp; Map-Reduce</h3>
+
+<p>当多个任务互不依赖时，可以让它们<strong>并行</strong>执行，大幅缩短总耗时。</p>
+
+<h4>扇出/扇入模式（Fan-out / Fan-in）</h4>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># 三个维度的并行审查</span>
+
+<span class="kw">class</span> <span class="cls">ReviewState</span>(<span class="cls">TypedDict</span>):
+    code: <span class="cls">str</span>
+    security_feedback: <span class="cls">str</span>
+    perf_feedback: <span class="cls">str</span>
+    style_feedback: <span class="cls">str</span>
+    merged_feedback: <span class="cls">str</span>
+
+<span class="kw">def</span> <span class="fn">security_review</span>(state): <span class="kw">return</span> {<span class="str">"security_feedback"</span>: <span class="str">"安全审查结果..."</span>}
+<span class="kw">def</span> <span class="fn">perf_review</span>(state):    <span class="kw">return</span> {<span class="str">"perf_feedback"</span>: <span class="str">"性能审查结果..."</span>}
+<span class="kw">def</span> <span class="fn">style_review</span>(state):   <span class="kw">return</span> {<span class="str">"style_feedback"</span>: <span class="str">"风格审查结果..."</span>}
+<span class="kw">def</span> <span class="fn">merge_reviews</span>(state):
+    <span class="cmt"># 汇总所有审查意见</span>
+    merged <span class="op">=</span> <span class="str">f"安全：{state['security_feedback']}\n"</span> \
+             <span class="str">f"性能：{state['perf_feedback']}\n"</span> \
+             <span class="str">f"风格：{state['style_feedback']}"</span>
+    <span class="kw">return</span> {<span class="str">"merged_feedback"</span>: merged}
+
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">ReviewState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"security"</span>, security_review)
+graph.<span class="fn">add_node</span>(<span class="str">"perf"</span>, perf_review)
+graph.<span class="fn">add_node</span>(<span class="str">"style"</span>, style_review)
+graph.<span class="fn">add_node</span>(<span class="str">"merge"</span>, merge_reviews)
+
+<span class="cmt"># 扇出：一个节点同时指向多个节点 → 自动并行执行</span>
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"security"</span>)
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"perf"</span>)
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"style"</span>)
+
+<span class="cmt"># 扇入：多个节点都指向同一个节点 → 等所有完成后才执行</span>
+graph.<span class="fn">add_edge</span>(<span class="str">"security"</span>, <span class="str">"merge"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"perf"</span>, <span class="str">"merge"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"style"</span>, <span class="str">"merge"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"merge"</span>, <span class="cls">END</span>)</code></pre>
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph TD
+    START(["开始"]) --> SEC["安全审查"]
+    START --> PERF["性能审查"]
+    START --> STYLE["风格审查"]
+    SEC --> MERGE["汇总"]
+    PERF --> MERGE
+    STYLE --> MERGE
+    MERGE --> END(["结束"])
+  </pre>
+  <div class="caption">图 10：扇出/扇入并行审查模式</div>
+</div>
+
+<h4>Send API — 动态 Map-Reduce</h4>
+
+<p>当需要对<strong>列表数据</strong>中的每一项并行处理时，使用 <code>Send</code> API：</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> langgraph.types <span class="kw">import</span> <span class="cls">Send</span>
+
+<span class="kw">class</span> <span class="cls">BatchState</span>(<span class="cls">TypedDict</span>):
+    files: <span class="cls">list</span>[<span class="cls">str</span>]            <span class="cmt"># 要处理的文件列表</span>
+    results: <span class="cls">Annotated</span>[<span class="cls">list</span>[<span class="cls">str</span>], add]  <span class="cmt"># 每个文件的结果（追加）</span>
+    summary: <span class="cls">str</span>                      <span class="cmt"># 必须声明！State 里没有的 key，节点返回了也会被静默丢弃</span>
+
+<span class="cmt"># Map 阶段：为每个文件创建一个并行任务</span>
+<span class="kw">def</span> <span class="fn">dispatch</span>(state: <span class="cls">BatchState</span>):
+    <span class="str">"""扇出：为每个文件发送一个并行任务"""</span>
+    <span class="kw">return</span> [
+        <span class="cls">Send</span>(<span class="str">"process_file"</span>, {<span class="str">"file"</span>: f})
+        <span class="kw">for</span> f <span class="kw">in</span> state[<span class="str">"files"</span>]
+    ]
+
+<span class="cmt"># 处理单个文件的节点</span>
+<span class="kw">def</span> <span class="fn">process_file</span>(state):
+    <span class="kw">return</span> {<span class="str">"results"</span>: [<span class="str">f"已处理: {state['file']}"</span>]}
+
+<span class="cmt"># Reduce 阶段：汇总所有结果</span>
+<span class="kw">def</span> <span class="fn">summarize</span>(state: <span class="cls">BatchState</span>):
+    <span class="kw">return</span> {<span class="str">"summary"</span>: <span class="str">f"共处理 {<span class="fn">len</span>(state['results'])} 个文件"</span>}
+
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">BatchState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"process_file"</span>, process_file)
+graph.<span class="fn">add_node</span>(<span class="str">"summarize"</span>, summarize)
+
+<span class="cmt"># 用条件边 + Send 实现动态扇出</span>
+graph.<span class="fn">add_conditional_edges</span>(<span class="cls">START</span>, dispatch)
+graph.<span class="fn">add_edge</span>(<span class="str">"process_file"</span>, <span class="str">"summarize"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"summarize"</span>, <span class="cls">END</span>)</code></pre>
+</div>
+</div>
+
+<!-- 6.3 自定义 State Reducer -->
+<div id="s-adv-3">
+<h3>6.3 自定义 State Reducer</h3>
+
+<p>Reducer 决定了节点返回值如何合并到 State 中。内置的 <code>add</code> 只是冰山一角，你可以写自己的 Reducer。</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">Annotated</span>
+
+<span class="cmt"># 自定义 Reducer：合并两个字典（而非覆盖）</span>
+<span class="kw">def</span> <span class="fn">merge_dicts</span>(old: <span class="cls">dict</span>, new: <span class="cls">dict</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""合并字典，新值覆盖旧值中同名 key"""</span>
+    <span class="kw">return</span> {<span class="op">**</span>old, <span class="op">**</span>new}
+
+<span class="cmt"># 自定义 Reducer：保留最新 N 条记录</span>
+<span class="kw">def</span> <span class="fn">keep_last_n</span>(n: <span class="cls">int</span>):
+    <span class="str">"""返回一个 Reducer，只保留最近 n 条记录"""</span>
+    <span class="kw">def</span> <span class="fn">reducer</span>(old: <span class="cls">list</span>, new: <span class="cls">list</span>) <span class="op">-></span> <span class="cls">list</span>:
+        combined <span class="op">=</span> old <span class="op">+</span> new
+        <span class="kw">return</span> combined[<span class="op">-</span>n:]
+    <span class="kw">return</span> reducer
+
+<span class="kw">class</span> <span class="cls">SmartState</span>(<span class="cls">TypedDict</span>):
+    <span class="cmt"># 默认：后写入覆盖前值</span>
+    code: <span class="cls">str</span>
+
+    <span class="cmt"># 追加模式：新列表追加到旧列表</span>
+    logs: <span class="cls">Annotated</span>[<span class="cls">list</span>[<span class="cls">str</span>], add]
+
+    <span class="cmt"># 字典合并：新字典合并到旧字典</span>
+    metadata: <span class="cls">Annotated</span>[<span class="cls">dict</span>, merge_dicts]
+
+    <span class="cmt"># 滑动窗口：只保留最近 10 条消息</span>
+    messages: <span class="cls">Annotated</span>[<span class="cls">list</span>[<span class="cls">str</span>], keep_last_n(<span class="num">10</span>)]</code></pre>
+</div>
+
+<div class="callout callout-tip">
+  <strong>实际用途：</strong>在构建聊天 Agent 时，<code>keep_last_n</code> Reducer 非常有用 —— 你不想把所有历史消息都塞进 LLM 的上下文窗口，只保留最近 10 轮对话就够了。
+</div>
+</div>
+
+<!-- 6.4 错误处理 -->
+<div id="s-adv-4">
+<h3>6.4 错误处理 &amp; 重试</h3>
+
+<p>生产环境中，LLM 调用可能失败（网络超时、rate limit、API 错误）。你需要优雅地处理这些情况。</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># 方法一：节点内 try-except</span>
+<span class="kw">def</span> <span class="fn">safe_generate</span>(state: <span class="cls">State</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="kw">try</span>:
+        result <span class="op">=</span> llm.<span class="fn">invoke</span>(<span class="str">"生成代码..."</span>)
+        <span class="kw">return</span> {<span class="str">"code"</span>: result.content, <span class="str">"error"</span>: <span class="kw">None</span>}
+    <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> e:
+        <span class="kw">return</span> {<span class="str">"code"</span>: <span class="str">""</span>, <span class="str">"error"</span>: <span class="fn">str</span>(e)}
+
+<span class="cmt"># 方法二：Runnable 自带的重试。注意 langchain_core.runnables 里没有 Retry 这个类，</span>
+<span class="cmt"># 底层实现是 RunnableRetry，日常用 .with_retry() 这个便捷方法即可</span>
+reliable_llm <span class="op">=</span> llm.<span class="fn">with_retry</span>(
+    retry_if_exception_type<span class="op">=</span>(<span class="cls">Exception</span>,),
+    stop_after_attempt<span class="op">=</span>3,
+    wait_exponential_jitter<span class="op">=</span><span class="kw">True</span>,
+)
+
+<span class="cmt"># 方法二·补充：LangGraph 的节点级重试，比包装单个 LLM 覆盖面更广</span>
+<span class="kw">from</span> langgraph.types <span class="kw">import</span> <span class="cls">RetryPolicy</span>
+
+graph.<span class="fn">add_node</span>(<span class="str">"generate"</span>, generate_fn,
+               retry_policy<span class="op">=</span><span class="cls">RetryPolicy</span>(max_attempts<span class="op">=</span>3))
+<span class="cmt"># 重试用尽后异常会继续上抛；想改流向得在节点内捕获，再返回 Command(goto=...)</span>
+
+<span class="cmt"># 方法三：条件边兜底</span>
+<span class="kw">def</span> <span class="fn">check_error</span>(state: <span class="cls">State</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="kw">if</span> state.<span class="fn">get</span>(<span class="str">"error"</span>):
+        <span class="kw">return</span> <span class="str">"handle_error"</span>
+    <span class="kw">return</span> <span class="str">"continue"</span>
+
+graph.<span class="fn">add_conditional_edges</span>(<span class="str">"generate"</span>, check_error, {
+    <span class="str">"handle_error"</span>: <span class="str">"error_handler"</span>,
+    <span class="str">"continue"</span>: <span class="str">"review"</span>,
+})</code></pre>
+</div>
+</div>
+
+<!-- 6.5 流式输出 -->
+<div id="s-adv-5">
+<h3>6.5 流式输出详解</h3>
+
+<p>流式输出让你能<strong>逐节点</strong>看到执行进度，而不是等整个图跑完才看到结果。</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># stream_mode 有七种模式：</span>
+
+<span class="cmt"># "updates" — 每个节点完成后输出增量 State</span>
+<span class="kw">for</span> event <span class="kw">in</span> app.<span class="fn">stream</span>(input_state, stream_mode<span class="op">=</span><span class="str">"updates"</span>):
+    <span class="kw">for</span> node, output <span class="kw">in</span> event.<span class="fn">items</span>():
+        <span class="fn">print</span>(<span class="str">f"📍 [{node}] 完成"</span>)
+        <span class="fn">print</span>(<span class="str">f"   输出: {output}"</span>)
+
+<span class="cmt"># "values" — 每步输出完整 State</span>
+<span class="kw">for</span> state <span class="kw">in</span> app.<span class="fn">stream</span>(input_state, stream_mode<span class="op">=</span><span class="str">"values"</span>):
+    <span class="fn">print</span>(state[<span class="str">"code"</span>])  <span class="cmt"># 看到每一步的完整 code</span>
+
+<span class="kw">from</span> langchain_core.messages <span class="kw">import</span> <span class="cls">AIMessageChunk</span>
+<span class="cmt"># "messages" — 流式输出 LLM 的 token（打字机效果）</span>
+<span class="kw">for</span> msg, metadata <span class="kw">in</span> app.<span class="fn">stream</span>(input_state, stream_mode<span class="op">=</span><span class="str">"messages"</span>):
+    <span class="kw">if</span> <span class="fn">isinstance</span>(msg, <span class="cls">AIMessageChunk</span>):
+        <span class="fn">print</span>(msg.content, end<span class="op">=</span><span class="str">""</span>, flush<span class="op">=</span><span class="kw">True</span>)</code></pre>
+</div>
+</div>
+
+<!-- 6.6 部署 -->
+<div id="s-adv-6">
+<h3>6.6 LangGraph Platform 部署</h3>
+
+<p>开发完成后，你可以用 <strong>LangGraph Platform</strong> 把图部署为 API 服务。</p>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Bash</span>
+    
+  </div>
+  <pre><code><span class="cmt"># 本地开发服务器</span>
+pip install <span class="str">"langgraph-cli[inmem]"</span>
+langgraph dev --port 8123
+
+<span class="cmt"># 或使用 LangSmith Deployment（托管服务）</span>
+<span class="cmt"># 需要 LangChain API Key</span></code></pre>
+</div>
+
+<table>
+  <tr><th>部署方式</th><th>适合场景</th><th>特点</th></tr>
+  <tr><td><code>langgraph dev</code></td><td>本地开发/测试</td><td>一键启动，带 API + Studio UI</td></tr>
+<tr><td>LangSmith Deployment</td><td>生产环境</td><td>托管服务，自动扩缩容</td></tr>
+  <tr><td>自部署 Docker</td><td>私有化部署</td><td>完全控制，适合企业内网</td></tr>
+</table>
+
+<div class="callout callout-info">
+  <strong>推荐路径：</strong>开发阶段用 <code>langgraph dev</code> 本地调试，生产环境用 LangSmith Deployment 或 Docker 自部署。配合 LangSmith 做链路追踪和调试。
+</div>
+</div>
+</div>
+
+<!-- ==================== SECTION: 实战案例 ==================== -->
+<div class="section" id="s-cases">
+<h2>综合实战案例</h2>
+
+<p>三个真实场景的完整案例，覆盖 RAG、多模型协作、数据分析三大方向。每个案例都展示不同的 LangGraph 模式。</p>
+
+<!-- ====== Case 1: RAG ====== -->
+<div id="s-case-1">
+<h3>案例一：RAG 检索增强生成 Pipeline</h3>
+
+<div class="callout callout-analogy">
+  <strong>场景：</strong>你有一个公司的知识库（文档、PDF、网页），用户提问时，系统先检索相关文档片段，再用 LLM 基于这些片段生成回答，并附上来源引用。
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph TD
+    Q(["用户提问"]) --> ROUTE
+
+    subgraph RAG["RAG Pipeline"]
+        ROUTE["意图路由"] -->|知识库问题| RETRIEVE["文档检索"]
+        ROUTE -->|闲聊通用| DIRECT["直接回答"]
+        RETRIEVE --> GRADE["相关性评分"]
+        GRADE -->|相关| GENERATE["生成回答"]
+        GRADE -->|不相关| REWRITE["改写查询"]
+        REWRITE --> RETRIEVE
+        GENERATE --> VERIFY["回答验证"]
+        VERIFY -->|有依据| DONE(["输出回答+引用"])
+        VERIFY -->|无依据| GENERATE
+    end
+  </pre>
+  <div class="caption">图 11：RAG Pipeline 流程 —— 检索→评分→生成→验证的循环</div>
+</div>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># rag_pipeline.py</span>
+<span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">Annotated</span>, <span class="cls">TypedDict</span>
+<span class="kw">from</span> operator <span class="kw">import</span> add
+<span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> langchain_core.prompts <span class="kw">import</span> <span class="cls">ChatPromptTemplate</span>
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">START</span>, <span class="cls">END</span>
+
+llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-sonnet-5"</span>)
+
+<span class="cmt"># ===== State =====</span>
+<span class="kw">class</span> <span class="cls">RAGState</span>(<span class="cls">TypedDict</span>):
+    question: <span class="cls">str</span>                     <span class="cmt"># 用户原始问题</span>
+    rewritten_query: <span class="cls">str</span>              <span class="cmt"># 改写后的检索查询</span>
+    documents: <span class="cls">list</span>[<span class="cls">str</span>]             <span class="cmt"># 检索到的文档片段</span>
+    is_relevant: <span class="cls">bool</span>                 <span class="cmt"># 文档是否相关</span>
+    answer: <span class="cls">str</span>                       <span class="cmt"># 生成的回答</span>
+    sources: <span class="cls">list</span>[<span class="cls">str</span>]               <span class="cmt"># 引用来源</span>
+    has_evidence: <span class="cls">bool</span>                <span class="cmt"># 回答是否有文档依据</span>
+    attempt: <span class="cls">int</span>                      <span class="cmt"># 重试次数</span>
+
+<span class="cmt"># ===== 节点 =====</span>
+
+<span class="kw">def</span> <span class="fn">route_intent</span>(state: <span class="cls">RAGState</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="str">"""判断是知识库问题还是闲聊"""</span>
+    <span class="cmt"># 简化：用关键词判断，生产中用 LLM 分类</span>
+    keywords <span class="op">=</span> [<span class="str">"文档"</span>, <span class="str">"手册"</span>, <span class="str">"规定"</span>, <span class="str">"流程"</span>, <span class="str">"政策"</span>]
+    <span class="kw">if</span> <span class="fn">any</span>(kw <span class="kw">in</span> state[<span class="str">"question"</span>] <span class="kw">for</span> kw <span class="kw">in</span> keywords):
+        <span class="kw">return</span> <span class="str">"retrieve"</span>
+    <span class="kw">return</span> <span class="str">"direct"</span>
+
+<span class="kw">def</span> <span class="fn">retrieve_docs</span>(state: <span class="cls">RAGState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""从向量数据库检索相关文档"""</span>
+    query <span class="op">=</span> state.<span class="fn">get</span>(<span class="str">"rewritten_query"</span>) <span class="kw">or</span> state[<span class="str">"question"</span>]
+    <span class="cmt"># 实际项目中接入向量数据库</span>
+    <span class="cmt"># docs = vectorstore.similarity_search(query, k=3)</span>
+    docs <span class="op">=</span> [<span class="str">"文档片段1..."</span>, <span class="str">"文档片段2..."</span>, <span class="str">"文档片段3..."</span>]
+    <span class="kw">return</span> {<span class="str">"documents"</span>: docs, <span class="str">"attempt"</span>: state.<span class="fn">get</span>(<span class="str">"attempt"</span>, <span class="num">0</span>) <span class="op">+</span> <span class="num">1</span>}
+
+<span class="kw">def</span> <span class="fn">grade_relevance</span>(state: <span class="cls">RAGState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""判断检索到的文档是否与问题相关"""</span>
+    prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(<span class="str">"""
+    判断以下文档是否与问题相关。只回答 "相关" 或 "不相关"。
+
+    问题：{question}
+    文档：{documents}
+    """</span>)
+    result <span class="op">=</span> (prompt <span class="op">|</span> llm).<span class="fn">invoke</span>({
+        <span class="str">"question"</span>: state[<span class="str">"question"</span>],
+        <span class="str">"documents"</span>: <span class="str">"\n"</span>.<span class="fn">join</span>(state[<span class="str">"documents"</span>])
+    })
+    is_relevant <span class="op">=</span> <span class="str">"相关"</span> <span class="kw">in</span> result.content <span class="kw">and</span> <span class="str">"不相关"</span> <span class="kw">not in</span> result.content
+    <span class="kw">return</span> {<span class="str">"is_relevant"</span>: is_relevant}
+
+<span class="kw">def</span> <span class="fn">rewrite_query</span>(state: <span class="cls">RAGState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""改写查询以提高检索质量"""</span>
+    prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(<span class="str">"""
+    原始查询没有找到相关文档，请用不同的方式重新表述：
+    {question}
+    只输出改写后的查询，不要解释。
+    """</span>)
+    result <span class="op">=</span> (prompt <span class="op">|</span> llm).<span class="fn">invoke</span>({<span class="str">"question"</span>: state[<span class="str">"question"</span>]})
+    <span class="kw">return</span> {<span class="str">"rewritten_query"</span>: result.content}
+
+<span class="kw">def</span> <span class="fn">generate_answer</span>(state: <span class="cls">RAGState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""基于检索文档生成回答"""</span>
+    prompt <span class="op">=</span> <span class="cls">ChatPromptTemplate</span>.<span class="fn">from_template</span>(<span class="str">"""
+    基于以下文档回答问题。如果文档中没有相关信息，请说"无法根据现有文档回答"。
+
+    文档：
+    {documents}
+
+    问题：{question}
+
+    回答时请标注引用来源。
+    """</span>)
+    result <span class="op">=</span> (prompt <span class="op">|</span> llm).<span class="fn">invoke</span>({
+        <span class="str">"documents"</span>: <span class="str">"\n---\n"</span>.<span class="fn">join</span>(state[<span class="str">"documents"</span>]),
+        <span class="str">"question"</span>: state[<span class="str">"question"</span>]
+    })
+    has_evidence <span class="op">=</span> <span class="str">"无法"</span> <span class="kw">not in</span> result.content
+    <span class="kw">return</span> {
+        <span class="str">"answer"</span>: result.content,
+        <span class="str">"sources"</span>: [<span class="str">f"文档{i+1}"</span> <span class="kw">for</span> i <span class="kw">in</span> <span class="fn">range</span>(<span class="fn">len</span>(state[<span class="str">"documents"</span>]))],
+        <span class="str">"has_evidence"</span>: has_evidence
+    }
+
+<span class="kw">def</span> <span class="fn">direct_answer</span>(state: <span class="cls">RAGState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""闲聊问题直接回答"""</span>
+    result <span class="op">=</span> llm.<span class="fn">invoke</span>(state[<span class="str">"question"</span>])
+    <span class="kw">return</span> {<span class="str">"answer"</span>: result.content, <span class="str">"sources"</span>: [], <span class="str">"has_evidence"</span>: <span class="kw">True</span>}
+
+<span class="cmt"># ===== 路由函数 =====</span>
+<span class="kw">def</span> <span class="fn">check_relevance</span>(state: <span class="cls">RAGState</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="kw">if</span> state[<span class="str">"is_relevant"</span>]:
+        <span class="kw">return</span> <span class="str">"generate"</span>
+    <span class="kw">elif</span> state.<span class="fn">get</span>(<span class="str">"attempt"</span>, <span class="num">0</span>) <span class="op">>=</span> <span class="num">2</span>:
+        <span class="kw">return</span> <span class="str">"generate"</span>  <span class="cmt"># 超过重试次数，直接生成</span>
+    <span class="kw">return</span> <span class="str">"rewrite"</span>
+
+<span class="kw">def</span> <span class="fn">check_evidence</span>(state: <span class="cls">RAGState</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="kw">if</span> state[<span class="str">"has_evidence"</span>] <span class="kw">or</span> state.<span class="fn">get</span>(<span class="str">"attempt"</span>, <span class="num">0</span>) <span class="op">>=</span> <span class="num">3</span>:
+        <span class="kw">return</span> <span class="str">"end"</span>
+    <span class="kw">return</span> <span class="str">"retry"</span>
+
+<span class="cmt"># ===== 构建图 =====</span>
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">RAGState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"retrieve"</span>, retrieve_docs)
+graph.<span class="fn">add_node</span>(<span class="str">"grade"</span>, grade_relevance)
+graph.<span class="fn">add_node</span>(<span class="str">"rewrite"</span>, rewrite_query)
+graph.<span class="fn">add_node</span>(<span class="str">"generate"</span>, generate_answer)
+graph.<span class="fn">add_node</span>(<span class="str">"direct"</span>, direct_answer)
+
+graph.<span class="fn">add_conditional_edges</span>(<span class="cls">START</span>, route_intent,
+    {<span class="str">"retrieve"</span>: <span class="str">"retrieve"</span>, <span class="str">"direct"</span>: <span class="str">"direct"</span>})
+graph.<span class="fn">add_edge</span>(<span class="str">"retrieve"</span>, <span class="str">"grade"</span>)
+graph.<span class="fn">add_conditional_edges</span>(<span class="str">"grade"</span>, check_relevance,
+    {<span class="str">"generate"</span>: <span class="str">"generate"</span>, <span class="str">"rewrite"</span>: <span class="str">"rewrite"</span>})
+graph.<span class="fn">add_edge</span>(<span class="str">"rewrite"</span>, <span class="str">"retrieve"</span>)
+graph.<span class="fn">add_conditional_edges</span>(<span class="str">"generate"</span>, check_evidence,
+    {<span class="str">"end"</span>: <span class="cls">END</span>, <span class="str">"retry"</span>: <span class="str">"retrieve"</span>})
+graph.<span class="fn">add_edge</span>(<span class="str">"direct"</span>, <span class="cls">END</span>)
+
+app <span class="op">=</span> graph.<span class="fn">compile</span>()</code></pre>
+</div>
+
+<div class="callout callout-tip">
+  <strong>这个案例展示了：</strong>意图路由（条件边）、检索→评分→改写的循环（提高检索质量）、回答验证（确保有据可依）。这三者组合起来就是一个生产级 RAG 系统的核心骨架。
+</div>
+</div>
+
+<!-- ====== Case 2: 多模型协作 ====== -->
+<div id="s-case-2">
+<h3>案例二：多模型协作系统</h3>
+
+<div class="callout callout-analogy">
+  <strong>场景：</strong>不同任务分配给最擅长的模型 —— Claude Opus 5 负责深度推理和架构设计，Claude Sonnet 5 负责代码生成和审查，Claude Haiku 4.5 负责快速分类和提取。各取所长，协作完成复杂任务。
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph TD
+    Q(["用户需求"]) --> PLAN["Claude Opus 5 架构规划"]
+
+    PLAN --> CODE["Claude Sonnet 5 代码实现"]
+    PLAN --> DOC["Claude Sonnet 5 文档撰写"]
+
+    CODE --> REVIEW["Claude Haiku 4.5 代码审查"]
+    REVIEW -->|不通过| CODE
+
+    CODE --> DONE
+    DOC --> DONE["汇总输出"]
+    REVIEW -->|通过| DONE
+  </pre>
+  <div class="caption">图 12：多模型协作 —— Opus 规划，Sonnet 执行，各取所长</div>
+</div>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># multi_model.py</span>
+<span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">Annotated</span>, <span class="cls">TypedDict</span>
+<span class="kw">from</span> operator <span class="kw">import</span> add
+
+<span class="cmt"># ===== 三个模型，各司其职 =====</span>
+planner <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-opus-5"</span>)     <span class="cmt"># 最强推理</span>
+coder   <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-sonnet-5"</span>)   <span class="cmt"># 最佳编程</span>
+fast_llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-haiku-4-5-20251001"</span>)   <span class="cmt"># 最快速度</span>
+
+<span class="cmt"># ===== State =====</span>
+<span class="kw">class</span> <span class="cls">ProjectState</span>(<span class="cls">TypedDict</span>):
+    requirement: <span class="cls">str</span>
+    architecture: <span class="cls">str</span>          <span class="cmt"># Opus 输出的架构设计</span>
+    code: <span class="cls">str</span>                   <span class="cmt"># Sonnet 输出的代码</span>
+    docs: <span class="cls">str</span>                   <span class="cmt"># Sonnet 输出的文档</span>
+    review_result: <span class="cls">str</span>
+    is_approved: <span class="cls">bool</span>
+
+<span class="cmt"># ===== 节点：每个节点用最合适的模型 =====</span>
+
+<span class="kw">def</span> <span class="fn">plan_architecture</span>(state: <span class="cls">ProjectState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""Opus 5：负责深度架构规划"""</span>
+    result <span class="op">=</span> planner.<span class="fn">invoke</span>(<span class="str">f"""
+    请为以下需求设计详细的技术架构：
+    {state['requirement']}
+
+    输出：模块划分、数据流、接口设计。
+    """</span>)
+    <span class="kw">return</span> {<span class="str">"architecture"</span>: result.content}
+
+<span class="kw">def</span> <span class="fn">write_code</span>(state: <span class="cls">ProjectState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""Sonnet 5：负责代码实现"""</span>
+    result <span class="op">=</span> coder.<span class="fn">invoke</span>(<span class="str">f"""
+    根据以下架构设计编写 Python 代码：
+    {state['architecture']}
+    """</span>)
+    <span class="kw">return</span> {<span class="str">"code"</span>: result.content}
+
+<span class="kw">def</span> <span class="fn">write_docs</span>(state: <span class="cls">ProjectState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""Sonnet 5：负责文档撰写（与写代码并行）"""</span>
+    result <span class="op">=</span> coder.<span class="fn">invoke</span>(<span class="str">f"""
+    根据以下架构设计编写技术文档：
+    {state['architecture']}
+    """</span>)
+    <span class="kw">return</span> {<span class="str">"docs"</span>: result.content}
+
+<span class="cmt"># 审查节点：用最快的模型做把关，产出 State 里声明的 review_result / is_approved</span>
+<span class="kw">def</span> <span class="fn">review_code</span>(state: <span class="cls">ProjectState</span>) <span class="op">-&gt;</span> <span class="cls">dict</span>:
+    prompt <span class="op">=</span> <span class="str">f"审查这段代码，只回 PASS 或 FAIL 加一句理由：\n{state['code']}"</span>
+    verdict <span class="op">=</span> fast_llm.<span class="fn">invoke</span>(prompt).content
+    <span class="kw">return</span> {
+        <span class="str">"review_result"</span>: verdict,
+        <span class="str">"is_approved"</span>: verdict.<span class="fn">strip</span>().<span class="fn">startswith</span>(<span class="str">"PASS"</span>),
+    }
+
+<span class="cmt"># ===== 构建图 =====</span>
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">ProjectState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"plan"</span>, plan_architecture)
+graph.<span class="fn">add_node</span>(<span class="str">"code"</span>, write_code)
+graph.<span class="fn">add_node</span>(<span class="str">"docs"</span>, write_docs)
+graph.<span class="fn">add_node</span>(<span class="str">"review"</span>, review_code)
+
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"plan"</span>)
+<span class="cmt"># 规划后，写代码和写文档并行执行</span>
+graph.<span class="fn">add_edge</span>(<span class="str">"plan"</span>, <span class="str">"code"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"plan"</span>, <span class="str">"docs"</span>)
+<span class="cmt"># code 先过审查；不通过就打回去重写，与图 12 的回边一致</span>
+graph.<span class="fn">add_edge</span>(<span class="str">"code"</span>, <span class="str">"review"</span>)
+graph.<span class="fn">add_conditional_edges</span>(
+    <span class="str">"review"</span>,
+    <span class="kw">lambda</span> state: <span class="str">"done"</span> <span class="kw">if</span> state[<span class="str">"is_approved"</span>] <span class="kw">else</span> <span class="str">"retry"</span>,
+    {<span class="str">"done"</span>: <span class="cls">END</span>, <span class="str">"retry"</span>: <span class="str">"code"</span>},
+)
+graph.<span class="fn">add_edge</span>(<span class="str">"docs"</span>, <span class="cls">END</span>)
+
+app <span class="op">=</span> graph.<span class="fn">compile</span>()</code></pre>
+</div>
+
+<div class="callout callout-key">
+  <strong>核心思想：</strong>不要所有任务都用同一个模型。<strong>Opus 做规划</strong>（需要最强推理能力）、<strong>Sonnet 做实现</strong>（编程能力最强）、<strong>Haiku 做分类</strong>（速度最快成本最低）。这样既保证质量又控制成本。
+</div>
+</div>
+
+<!-- ====== Case 3: 数据分析 ====== -->
+<div id="s-case-3">
+<h3>案例三：数据分析流水线</h3>
+
+<div class="callout callout-analogy">
+  <strong>场景：</strong>用户提供原始数据（CSV/JSON），系统自动进行数据清洗、分析、生成可视化建议，中间支持人工审核关键步骤。最终输出分析报告。
+</div>
+
+<div class="diagram">
+  <pre class="mermaid">
+graph TD
+    D(["原始数据"]) --> CLEAN["数据清洗"]
+    CLEAN --> PROFILE["数据画像"]
+    PROFILE --> ANALYZE["统计分析"]
+    ANALYZE --> REVIEW{人工审核?}
+    REVIEW -->|继续| VISUAL["可视化建议"]
+    REVIEW -->|调整分析| ANALYZE
+    VISUAL --> REPORT["生成报告"]
+    REPORT --> END(["输出报告"])
+  </pre>
+  <div class="caption">图 13：数据分析流水线 —— 清洗→画像→分析→审核→报告</div>
+</div>
+
+<div class="code-block-wrapper">
+  <div class="code-header">
+    <span class="code-lang">Python</span>
+    
+  </div>
+  <pre><code><span class="cmt"># data_pipeline.py</span>
+<span class="kw">from</span> typing <span class="kw">import</span> <span class="cls">TypedDict</span>
+<span class="kw">from</span> langchain_anthropic <span class="kw">import</span> <span class="cls">ChatAnthropic</span>
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> <span class="cls">StateGraph</span>, <span class="cls">START</span>, <span class="cls">END</span>
+<span class="kw">from</span> langgraph.checkpoint.memory <span class="kw">import</span> <span class="cls">InMemorySaver</span>
+
+llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span class="op">=</span><span class="str">"claude-sonnet-5"</span>)
+
+<span class="cmt"># ===== State =====</span>
+<span class="kw">class</span> <span class="cls">AnalysisState</span>(<span class="cls">TypedDict</span>):
+    raw_data: <span class="cls">str</span>                <span class="cmt"># 原始数据（CSV/JSON 字符串）</span>
+    cleaned_data: <span class="cls">str</span>            <span class="cmt"># 清洗后的数据</span>
+    data_profile: <span class="cls">str</span>            <span class="cmt"># 数据画像描述</span>
+    analysis: <span class="cls">str</span>                <span class="cmt"># 分析结果</span>
+    human_feedback: <span class="cls">str</span>          <span class="cmt"># 人工审核意见</span>
+    visualization_plan: <span class="cls">str</span>     <span class="cmt"># 可视化方案</span>
+    report: <span class="cls">str</span>                  <span class="cmt"># 最终报告</span>
+    needs_revision: <span class="cls">bool</span>         <span class="cmt"># 是否需要修改</span>
+
+<span class="cmt"># ===== 节点 =====</span>
+
+<span class="kw">def</span> <span class="fn">clean_data</span>(state: <span class="cls">AnalysisState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""数据清洗：处理缺失值、异常值、格式统一"""</span>
+    result <span class="op">=</span> llm.<span class="fn">invoke</span>(<span class="str">f"""
+    请分析以下数据的清洗需求，并输出清洗后的数据：
+
+    原始数据：
+    {state['raw_data']}
+
+    请：
+    1. 处理缺失值（标记或填充）
+    2. 识别异常值
+    3. 统一数据格式
+    4. 输出清洗后的数据摘要
+    """</span>)
+    <span class="kw">return</span> {<span class="str">"cleaned_data"</span>: result.content}
+
+<span class="kw">def</span> <span class="fn">profile_data</span>(state: <span class="cls">AnalysisState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""数据画像：描述数据的基本特征"""</span>
+    result <span class="op">=</span> llm.<span class="fn">invoke</span>(<span class="str">f"""
+    对清洗后的数据进行画像分析：
+    {state['cleaned_data']}
+
+    输出：
+    1. 数据规模（行数、列数）
+    2. 各字段类型和分布
+    3. 关键统计量
+    4. 数据质量评估
+    """</span>)
+    <span class="kw">return</span> {<span class="str">"data_profile"</span>: result.content}
+
+<span class="kw">def</span> <span class="fn">analyze</span>(state: <span class="cls">AnalysisState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""统计分析：发现规律和趋势"""</span>
+    feedback <span class="op">=</span> state.<span class="fn">get</span>(<span class="str">"human_feedback"</span>, <span class="str">""</span>)
+    extra <span class="op">=</span> <span class="str">f"\n人工审核意见：{feedback}"</span> <span class="kw">if</span> feedback <span class="kw">else</span> <span class="str">""</span>
+
+    result <span class="op">=</span> llm.<span class="fn">invoke</span>(<span class="str">f"""
+    基于数据画像进行深入分析：
+    {state['data_profile']}
+    {extra}
+
+    输出：
+    1. 关键发现和趋势
+    2. 相关性分析
+    3. 异常模式识别
+    4. 可操作的建议
+    """</span>)
+    <span class="kw">return</span> {<span class="str">"analysis"</span>: result.content, <span class="str">"needs_revision"</span>: <span class="kw">False</span>}
+
+<span class="kw">def</span> <span class="fn">suggest_visualization</span>(state: <span class="cls">AnalysisState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""推荐可视化方案"""</span>
+    result <span class="op">=</span> llm.<span class="fn">invoke</span>(<span class="str">f"""
+    根据以下分析结果，推荐最佳可视化方案：
+    {state['analysis']}
+
+    为每个图表提供：类型、数据字段、Python matplotlib 代码。
+    """</span>)
+    <span class="kw">return</span> {<span class="str">"visualization_plan"</span>: result.content}
+
+<span class="kw">def</span> <span class="fn">generate_report</span>(state: <span class="cls">AnalysisState</span>) <span class="op">-></span> <span class="cls">dict</span>:
+    <span class="str">"""生成最终分析报告"""</span>
+    result <span class="op">=</span> llm.<span class="fn">invoke</span>(<span class="str">f"""
+    将以下内容整合为一份专业的数据分析报告：
+
+    数据画像：{state['data_profile']}
+    分析结果：{state['analysis']}
+    可视化方案：{state['visualization_plan']}
+
+    报告格式：执行摘要 → 数据概述 → 关键发现 → 建议 → 附录
+    """</span>)
+    <span class="kw">return</span> {<span class="str">"report"</span>: result.content}
+
+<span class="cmt"># ===== 路由 =====</span>
+<span class="kw">def</span> <span class="fn">check_revision</span>(state: <span class="cls">AnalysisState</span>) <span class="op">-></span> <span class="cls">str</span>:
+    <span class="kw">if</span> state.<span class="fn">get</span>(<span class="str">"needs_revision"</span>):
+        <span class="kw">return</span> <span class="str">"revise"</span>
+    <span class="kw">return</span> <span class="str">"continue"</span>
+
+<span class="cmt"># ===== 构建图 =====</span>
+graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class="cls">AnalysisState</span>)
+graph.<span class="fn">add_node</span>(<span class="str">"clean"</span>, clean_data)
+graph.<span class="fn">add_node</span>(<span class="str">"profile"</span>, profile_data)
+graph.<span class="fn">add_node</span>(<span class="str">"analyze"</span>, analyze)
+graph.<span class="fn">add_node</span>(<span class="str">"visualize"</span>, suggest_visualization)
+graph.<span class="fn">add_node</span>(<span class="str">"report"</span>, generate_report)
+
+graph.<span class="fn">add_edge</span>(<span class="cls">START</span>, <span class="str">"clean"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"clean"</span>, <span class="str">"profile"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"profile"</span>, <span class="str">"analyze"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"analyze"</span>, <span class="str">"visualize"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"visualize"</span>, <span class="str">"report"</span>)
+graph.<span class="fn">add_edge</span>(<span class="str">"report"</span>, <span class="cls">END</span>)
+
+<span class="cmt"># 编译，支持人工审核</span>
+checkpointer <span class="op">=</span> <span class="cls">InMemorySaver</span>()
+app <span class="op">=</span> graph.<span class="fn">compile</span>(
+    checkpointer<span class="op">=</span>checkpointer,
+    interrupt_after<span class="op">=</span>[<span class="str">"analyze"</span>]  <span class="cmt"># 分析后暂停，人工审核</span>
+)
+
+<span class="cmt"># ===== 使用 =====</span>
+config <span class="op">=</span> {<span class="str">"configurable"</span>: {<span class="str">"thread_id"</span>: <span class="str">"analysis-001"</span>}}
+
+<span class="cmt"># 第一次运行（在 analyze 后暂停）</span>
+result <span class="op">=</span> app.<span class="fn">invoke</span>(
+    {<span class="str">"raw_data"</span>: <span class="str">"你的 CSV/JSON 数据..."</span>},
+    config<span class="op">=</span>config
+)
+
+<span class="cmt"># 人工审核分析结果后，决定是否继续</span>
+<span class="cmt"># 如果需要调整：app.update_state(config, {"human_feedback": "请重点关注xxx"})</span>
+<span class="cmt"># 继续执行：app.invoke(None, config=config)</span></code></pre>
+</div>
+
+<div class="callout callout-tip">
+  <strong>这个案例展示了：</strong>Human-in-the-Loop 在实际业务中的应用 —— 数据分析是典型的「需要人工判断」场景。你可以审核分析结果，添加额外指令，再让系统继续生成报告。这就是 LangGraph 的价值：不是全自动，而是<strong>人机协作</strong>。
+</div>
+</div>
+</div>
+
+<!-- ==================== SECTION 7: 总结 ==================== -->
+<div class="section" id="lg-s7">
+<h2>总结 &amp; 学习路径</h2>
+
+<h3>核心概念速查</h3>
+
+<table>
+  <tr><th>概念</th><th>一句话</th><th>类比</th></tr>
+  <tr><td><code>State</code></td><td>共享的数据容器，所有节点读写它</td><td>📋 共享白板</td></tr>
+  <tr><td><code>Node</code></td><td>一个 Python 函数，读取 State，返回更新</td><td>👷 干活的工人</td></tr>
+  <tr><td><code>Edge</code></td><td>节点之间的连接，定义执行顺序</td><td>🔗 传话规则</td></tr>
+  <tr><td><code>Conditional Edge</code></td><td>根据 State 值动态选择下一步</td><td>🔀 路口指示牌</td></tr>
+  <tr><td><code>StateGraph</code></td><td>图的容器，编排所有节点和边</td><td>📋 项目经理</td></tr>
+  <tr><td><code>Checkpoint</code></td><td>持久化 State 快照，支持恢复和回溯</td><td>💾 游戏存档</td></tr>
+  <tr><td><code>interrupt</code></td><td>在指定节点暂停，等待人类介入</td><td>🚦 红灯暂停</td></tr>
+  <tr><td><code>Sub-Graph</code></td><td>子图作为节点，实现模块化</td><td>📦 乐高模块</td></tr>
+  <tr><td><code>Send</code></td><td>动态创建并行任务（Map-Reduce）</td><td>📨 分发信件</td></tr>
+  <tr><td><code>Reducer</code></td><td>控制 State 字段的合并方式</td><td>🔀 数据合并规则</td></tr>
+</table>
+
+<h3>推荐学习路径</h3>
+
+<div class="step"><div class="step-num">1</div><div class="step-content"><strong>跑通 CodeGen Pipeline</strong> — 把本教程的 4-Agent 代码跑起来，理解每个 Agent 的输入输出和 State 流转</div></div>
+<div class="step"><div class="step-num">2</div><div class="step-content"><strong>加 Human-in-the-Loop</strong> — 在审查后暂停，让人类决定是否继续，理解 interrupt + update_state</div></div>
+<div class="step"><div class="step-num">3</div><div class="step-content"><strong>实现并行审查</strong> — 用扇出/扇入模式实现安全/性能/风格三个维度并行审查</div></div>
+<div class="step"><div class="step-num">4</div><div class="step-content"><strong>构建 RAG Pipeline</strong> — 跑通案例一的 RAG 流程，接入你自己的向量数据库</div></div>
+<div class="step"><div class="step-num">5</div><div class="step-content"><strong>多模型协作</strong> — 用案例二的模式，为你的实际项目设计模型分工方案</div></div>
+<div class="step"><div class="step-num">6</div><div class="step-content"><strong>部署上线</strong> — 用 <code>langgraph dev</code> 本地调试，然后部署到 LangSmith Deployment 或 Docker</div></div>
+
+<div class="callout callout-info">
+  <strong>推荐资源：</strong>
+  <ul>
+    <li><span class="ext-ref" title="外部链接已移除">LangGraph 官方文档</span></li>
+    <li><span class="ext-ref" title="外部链接已移除">LangGraph GitHub 仓库</span></li>
+    <li><span class="ext-ref" title="外部链接已移除">LangChain Academy</span>（免费课程）</li>
+    <li><span class="ext-ref" title="外部链接已移除">LangSmith 文档</span>（链路追踪和调试）</li>
+  </ul>
+</div>
+
+<div class="footer">
+  <p>📚 LangGraph Sub-Agents 实战教程 | 基于 LangGraph 1.x + LangChain v1 构建</p>
+  <p>🎯 核心：State 是白板，Node 是工人，Edge 是传话规则，Graph 是项目经理</p>
+</div>
+</div>
+
+</div><!-- /.content -->
+
+      </div></div>
+      <div class="module" id="mod-llm" hidden><div class="llm-scope">

@@ -1,0 +1,218 @@
+
+/* === 新增章节共享排版（req #2）：克隆自 .llm-m-architecture，保证与既有章节一致 === */
+.llm-m-tp .module-wrapper *, .llm-m-tp .module-wrapper *::before, .llm-m-tp .module-wrapper *::after { box-sizing: border-box; margin: 0; padding: 0; }
+.llm-m-tp h1 { font-size: 1.875rem; text-align: left; margin: 0 0 0.75rem; font-weight: 700; letter-spacing: -0.025em; line-height: 1.3; }
+.llm-m-tp h1 + .subtitle { text-align: left; font-size: 1.1rem; margin-bottom: 2rem; line-height: 1.6; }
+.llm-m-tp h2 { font-size: 1.5rem; margin: 2.5rem 0 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--lc-border); display: block; font-weight: 700; letter-spacing: -0.015em; line-height: 1.4; }
+.llm-m-tp h3 { font-size: 1.2rem; margin: 2rem 0 0.5rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.4; }
+.llm-m-tp h4 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; font-weight: 600; }
+.llm-m-tp p { margin: 0.75rem 0; line-height: 1.75; }
+.llm-m-tp strong { font-weight: 600; }
+.llm-m-tp a { text-decoration: none; transition: color 0.15s ease; }
+.llm-m-tp a:hover { text-decoration: underline; }
+.llm-m-tp ul, .llm-m-tp ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+.llm-m-tp li { margin: 0.25rem 0; line-height: 1.75; }
+.llm-m-tp .hero { border-radius: 16px; padding: 2rem; margin: 2rem 0; text-align: left; border: 1px solid var(--lc-border); }
+.llm-m-tp .hero h4 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.llm-m-tp .section { border-radius: 16px; padding: 2rem 2.5rem; margin: 2rem 0; border: 1px solid var(--lc-border); transition: opacity 0.5s ease, transform 0.5s ease; }
+.llm-m-tp .section.visible { opacity: 1; }
+.llm-m-tp .callout { border-radius: 12px; padding: 1rem 1.25rem; margin: 1.25rem 0; position: relative; padding-left: 2.75rem; font-size: 0.93rem; border: 1px solid; }
+.llm-m-tp .callout::before { position: absolute; left: 0.85rem; top: 1rem; font-size: 1.1rem; }
+.llm-m-tp .callout-tip::before { content: '💡'; }
+.llm-m-tp .callout-warn::before { content: '⚠️'; }
+.llm-m-tp .callout-analogy::before { content: '🎯'; }
+.llm-m-tp .callout-key::before { content: '🔑'; }
+.llm-m-tp .callout-info::before { content: '📖'; }
+.llm-m-tp .callout-practice { border-width: 2px; }
+.llm-m-tp .callout-practice::before { content: '✏️'; }
+.llm-m-tp .practice-header { display: flex; align-items: center; gap: 0.5rem; font-size: 1rem; font-weight: 700; margin-bottom: 0.75rem; letter-spacing: -0.01em; }
+.llm-m-tp .practice-header .badge { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 9999px; letter-spacing: 0.03em; }
+.llm-m-tp .practice- .practice-body p { margin: 0.4rem 0; font-size: 0.93rem; }
+.llm-m-tp .practice-hint { margin-top: 0.75rem; padding: 0.6rem 0.9rem; border-radius: 8px; font-size: 0.85rem; border: 1px dashed #86efac; }
+.llm-m-tp .code-block-wrapper { position: relative; margin: 1rem 0; border-radius: 12px; overflow: visible; border: 1px solid #313244; }
+.llm-m-tp .code-header { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; border-bottom: 1px solid #313244; }
+.llm-m-tp .code-lang { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-family: 'JetBrains Mono', monospace; }
+.llm-m-tp .copy-btn { display: flex; align-items: center; gap: 0.4rem; border: 1px solid #45475a; border-radius: 6px; font-size: 0.75rem; padding: 0.25rem 0.65rem; cursor: pointer; transition: all 0.15s ease; font-family: inherit; }
+.llm-m-tp pre { border-radius: 0; padding: 1.15rem 1.25rem; overflow-x: auto; margin: 0; font-size: 0.87rem; line-height: 1.65; font-family: 'JetBrains Mono', monospace; }
+.llm-m-tp pre code { font-family: inherit; }
+.llm-m-tp p code, .llm-m-tp li code, .llm-m-tp td code { padding: 0.15rem 0.35rem; border-radius: 4px; font-size: 0.88em; font-family: 'JetBrains Mono', monospace; border: 1px solid var(--lc-border); }
+.llm-m-tp .cmt { font-style: italic; }
+.llm-m-tp table { width: 100%; border-collapse: collapse; margin: 1.25rem 0; font-size: 0.92rem; border-radius: 12px; overflow: visible; border: 1px solid var(--lc-border); }
+.llm-m-tp th { padding: 0.6rem 1rem; text-align: left; font-weight: 600; border-bottom: 1px solid var(--lc-border); }
+.llm-m-tp td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--lc-border-light); }
+.llm-m-tp tr:last-child td { border-bottom: none; }
+.llm-m-tp .diagram { border: 1px solid var(--lc-border); border-radius: 16px; padding: 1.5rem; margin: 1.5rem 0; text-align: center; overflow-x: auto; }
+.llm-m-tp .diagram .caption { font-size: 0.85rem; margin-top: 0.8rem; font-style: italic; }
+.llm-m-tp .step { display: flex; align-items: flex-start; gap: 1rem; margin: 0.75rem 0; padding: 0.85rem 1.15rem; border-radius: 12px; border: 1px solid var(--lc-border); }
+.llm-m-tp .step-num { width: 1.75rem; height: 1.75rem; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0; font-size: 0.8rem; }
+.llm-m-tp .step-content { flex: 1; }
+.llm-m-tp .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.25rem 0; }
+.llm-m-tp .compare-card { border-radius: 12px; padding: 1.25rem; border: 1px solid var(--lc-border); }
+.llm-m-tp .compare-card h4 { margin: 0 0 0.75rem; text-align: center; }
+.llm-m-tp .footer { text-align: center; font-size: 0.85rem; margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--lc-border); }
+@media (max-width: 600px) {
+  .llm-m-tp h1 { font-size: 1.5rem; }
+  .llm-m-tp .compare { grid-template-columns: 1fr; }
+  .llm-m-tp pre { font-size: 0.8rem; padding: 1rem; }
+  .llm-m-tp .section { padding: 1.25rem; border-radius: 12px; }
+  .llm-m-tp .hero { padding: 1.25rem; border-radius: 12px; }
+  .llm-m-tp .step { padding: 0.75rem 1rem; }
+}
+
+/* Global reader width preference (applies after section-local defaults). */
+.llm-scope .llm-mod { width: min(100%, var(--reader-width, 980px)) !important; max-width: var(--reader-width, 980px) !important; margin-left: auto !important; margin-right: auto !important; }
+@media (max-width: 820px) { .llm-scope .llm-mod { width: 100% !important; max-width: 100% !important; } }
+
+/* Happy-LLM 原文采用 DSH 的窄栏阅读节奏：限制正文行长，代码块自身保留横向滚动。 */
+.llm-scope .llm-m-happy-source {
+  max-width: 1120px; margin: 0 auto; padding: 8px 28px 30px;
+}
+.llm-scope .llm-m-happy-source .module-wrapper { max-width: 100%; min-width: 0; }
+@media (max-width: 820px) {
+  .llm-scope .llm-m-happy-source { padding: 6px 16px 24px; }
+}
+
+/* === 统一阅读排版：与「深入理解 AI Agent」正文基线保持一致 ===
+   各 section 保留自己的卡片、导航和主题色；这里统一内容文字与代码的
+   字体、字号、行高和代码块对比度，避免 50+ 个 section 各自漂移。 */
+.llm-scope {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+}
+.llm-scope .llm-mod:not(.llm-m-home) {
+  font-size: var(--fs);
+  line-height: 1.8;
+}
+.llm-scope .llm-mod:not(.llm-m-home) h1 {
+  font-size: 26px;
+  margin: 10px 0 18px;
+  line-height: 1.4;
+  letter-spacing: .2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.llm-scope .llm-mod:not(.llm-m-home) h2 {
+  font-size: 20px;
+  margin: 34px 0 12px;
+  padding-bottom: 8px;
+  line-height: 1.45;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.llm-scope .llm-mod:not(.llm-m-home) h3 {
+  font-size: 16.5px;
+  margin: 24px 0 8px;
+  line-height: 1.5;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.llm-scope .llm-mod:not(.llm-m-home) h4 {
+  font-size: 15px;
+  margin: 18px 0 6px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.llm-scope .llm-mod:not(.llm-m-home) p {
+  margin: .85em 0;
+  line-height: 1.8;
+}
+.llm-scope .llm-mod:not(.llm-m-home) li {
+  margin: .3em 0;
+  line-height: 1.75;
+}
+.llm-scope .llm-mod:not(.llm-m-home) ul,
+.llm-scope .llm-mod:not(.llm-m-home) ol {
+  margin: .7em 0;
+  padding-left: 26px;
+}
+.llm-scope .llm-mod:not(.llm-m-home) code,
+.llm-scope .llm-mod:not(.llm-m-home) pre,
+.llm-scope .llm-mod:not(.llm-m-home) .code-lang,
+.llm-scope .llm-mod:not(.llm-m-home) .copy-btn {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+.llm-scope .llm-mod:not(.llm-m-home) .code-block-wrapper {
+  margin: 16px 0;
+  border: 1px solid #313244;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #181825;
+}
+.llm-scope .llm-mod:not(.llm-m-home) .code-header {
+  min-height: 2.25rem;
+  padding: .45rem .75rem;
+  background: #181825;
+  border-bottom: 1px solid #313244;
+}
+.llm-scope .llm-mod:not(.llm-m-home) .code-lang {
+  color: #89b4fa;
+  font-size: 10.5px;
+  line-height: 1.2;
+  letter-spacing: 1px;
+}
+.llm-scope .llm-mod:not(.llm-m-home) .copy-btn {
+  min-height: 1.75rem;
+  padding: 3px 10px;
+  background: rgba(205,214,244,.10);
+  color: #a6adc8;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.2;
+}
+.llm-scope .llm-mod:not(.llm-m-home) pre:not(.mermaid) {
+  margin: 0;
+  padding: 14px 16px;
+  max-width: 100%;
+  overflow-x: auto;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
+}
+.llm-scope .llm-mod:not(.llm-m-home) pre:not(.mermaid) code {
+  font: inherit;
+  color: inherit;
+}
+.llm-scope .llm-mod:not(.llm-m-home) p code,
+.llm-scope .llm-mod:not(.llm-m-home) li code,
+.llm-scope .llm-mod:not(.llm-m-home) td code {
+  font-size: .88em;
+}
+
+/* 横幅较窄时保持代码块自身滚动，正文仍按书籍宽度换行。 */
+@media (max-width: 600px) {
+  .llm-scope .llm-mod:not(.llm-m-home) h1 { font-size: 21px; }
+  .llm-scope .llm-mod:not(.llm-m-home) h2 { font-size: 17.5px; }
+  .llm-scope .llm-mod:not(.llm-m-home) h3 { font-size: 16px; }
+  .llm-scope .llm-mod:not(.llm-m-home) h4 { font-size: 15px; }
+  .llm-scope .llm-mod:not(.llm-m-home) pre:not(.mermaid) {
+    padding: 10px;
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+  .llm-scope .llm-mod:not(.llm-m-home) table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+  }
+  .llm-scope .llm-mod:not(.llm-m-home) table > tbody,
+  .llm-scope .llm-mod:not(.llm-m-home) table > thead {
+    display: table;
+    width: max-content;
+    min-width: 100%;
+  }
+}
+
+/* banner 是章节入口，不跟随正文 h1 缩放。 */
+.llm-scope .llm-mod:not(.llm-m-home) .llm-hero h1 { font-size: 1.75rem; margin: 0 0 .55rem; line-height: 1.35; }
+.llm-scope .llm-mod:not(.llm-m-home) .hero-banner h1 { font-size: 2rem; margin-bottom: .75rem; }
+.llm-scope .welcome-hero h1 { overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 640px) {
+  .llm-scope .llm-mod:not(.llm-m-home) .llm-hero h1 { font-size: 1.45rem; }
+  .llm-scope .llm-mod:not(.llm-m-home) .hero-banner h1 { font-size: 1.5rem; }
+}

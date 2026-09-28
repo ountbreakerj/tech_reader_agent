@@ -1,0 +1,60 @@
+{
+  "key": "harness",
+  "route": "#/harness",
+  "scopeId": "mod-harness",
+  "title": "Harness 工程",
+  "subtitle": "从失败诊断到图工程，14 讲系统构建可靠 Agent",
+  "styles": ["harness.css"],
+  "content": [
+    {"id": "h-lec-00", "sectionId": "sec-h-lec-00", "file": "lectures/lec-00/content.html"},
+    {"id": "h-lec-01", "sectionId": "sec-h-lec-01", "file": "lectures/lec-01/content.html"},
+    {"id": "h-lec-02", "sectionId": "sec-h-lec-02", "file": "lectures/lec-02/content.html"},
+    {"id": "h-lec-03", "sectionId": "sec-h-lec-03", "file": "lectures/lec-03/content.html"},
+    {"id": "h-lec-04", "sectionId": "sec-h-lec-04", "file": "lectures/lec-04/content.html"},
+    {"id": "h-lec-05", "sectionId": "sec-h-lec-05", "file": "lectures/lec-05/content.html"},
+    {"id": "h-lec-06", "sectionId": "sec-h-lec-06", "file": "lectures/lec-06/content.html"},
+    {"id": "h-lec-07", "sectionId": "sec-h-lec-07", "file": "lectures/lec-07/content.html"},
+    {"id": "h-lec-08", "sectionId": "sec-h-lec-08", "file": "lectures/lec-08/content.html"},
+    {"id": "h-lec-09", "sectionId": "sec-h-lec-09", "file": "lectures/lec-09/content.html"},
+    {"id": "h-lec-10", "sectionId": "sec-h-lec-10", "file": "lectures/lec-10/content.html"},
+    {"id": "h-lec-11", "sectionId": "sec-h-lec-11", "file": "lectures/lec-11/content.html"},
+    {"id": "h-lec-12", "sectionId": "sec-h-lec-12", "file": "lectures/lec-12/content.html"},
+    {"id": "h-lec-13", "sectionId": "sec-h-lec-13", "file": "lectures/lec-13/content.html"},
+    {"id": "h-lec-14", "sectionId": "sec-h-lec-14", "file": "lectures/lec-14/content.html"},
+    {"id": "h-lec-15", "sectionId": "sec-h-lec-15", "file": "lectures/lec-15/content.html"},
+    {"id": "h-lec-16", "sectionId": "sec-h-lec-16", "file": "lectures/lec-16/content.html"},
+    {"id": "h-lec-17", "sectionId": "sec-h-lec-17", "file": "lectures/lec-17/content.html"}
+  ],
+  "toc": [
+    {"id": "h-lec-00", "t": "课程概览"},
+    {"g": 1, "t": "基础：为什么会失败", "fold": true, "c": [
+      {"id": "h-lec-01", "t": "01 · 模型能力强，不等于执行可靠"},
+      {"id": "h-lec-02", "t": "02 · Harness 到底是什么"},
+      {"id": "h-lec-03", "t": "03 · 让仓库成为事实来源"}
+    ]},
+    {"g": 1, "t": "指令、状态与初始化", "fold": true, "c": [
+      {"id": "h-lec-04", "t": "04 · 拆分指令文件"},
+      {"id": "h-lec-05", "t": "05 · 跨会话上下文连续"},
+      {"id": "h-lec-06", "t": "06 · 初始化必须独立"}
+    ]},
+    {"g": 1, "t": "任务边界与功能原语", "fold": true, "c": [
+      {"id": "h-lec-07", "t": "07 · 划清任务边界（WIP=1）"},
+      {"id": "h-lec-08", "t": "08 · 功能清单作为 harness 原语"},
+      {"id": "h-lec-09", "t": "09 · 防止提前宣告完成"}
+    ]},
+    {"g": 1, "t": "验证与可观测性", "fold": true, "c": [
+      {"id": "h-lec-10", "t": "10 · 跑通完整流程才算验证"},
+      {"id": "h-lec-11", "t": "11 · 可观测性属于 harness"},
+      {"id": "h-lec-12", "t": "12 · 每次会话留下干净状态"}
+    ]},
+    {"g": 1, "t": "高级架构", "fold": true, "c": [
+      {"id": "h-lec-13", "t": "13 · Loop 工程"},
+      {"id": "h-lec-14", "t": "14 · Graph 工程"}
+    ]},
+    {"g": 1, "t": "产品化案例深析", "fold": true, "c": [
+      {"id": "h-lec-15", "t": "15 · Claude Code Harness 拆解"},
+      {"id": "h-lec-16", "t": "16 · Codex Harness 拆解"},
+      {"id": "h-lec-17", "t": "17 · 延伸阅读"}
+    ]}
+  ]
+}

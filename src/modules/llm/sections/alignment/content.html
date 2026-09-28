@@ -1,0 +1,415 @@
+<section class="llm-mod llm-m-alignment" id="llm-alignment"><div class="module-wrapper">
+<nav class="nav">
+  <span class="brand">LLM Training</span>
+  <a href="#/llm?section=llm-classic-arch">经典架构</a>
+  <a href="#/llm?section=llm-distributed">分布式训练</a>
+  <a href="#/llm?section=llm-alignment" class="active">对齐训练</a>
+  <a href="#/llm?section=llm-modern-arch">前沿架构</a>
+  <a href="#/llm?section=llm-eval-advanced">评估体系</a>
+</nav>
+
+<header>
+  <h1>对齐训练：RLHF 与 DPO</h1>
+  <p>从 SFT 到 PPO、DPO、GRPO——让大模型学会"说人话"</p>
+</header>
+
+<div class="container">
+
+<!-- ==================== 概述 ==================== -->
+<div class="section">
+  <h2>1. 对齐训练概述</h2>
+  <p>经过预训练和 SFT（Supervised Fine-Tuning）后的模型虽然能完成指令，但仍可能产生有害内容、编造事实或拒绝合理请求。对齐训练的目标是让模型的行为符合人类的价值观和偏好。</p>
+
+  <div class="step">
+    <div class="step-title">为什么 SFT 不够？</div>
+    <p>SFT 教会模型"如何回答"，但没有教模型"哪种回答更好"。对齐训练通过引入人类偏好信号，优化模型在多个候选回答之间做出更好的选择。</p>
+  </div>
+
+  <table>
+    <tr><th>阶段</th><th>方法</th><th>训练信号</th><th>目标</th></tr>
+    <tr><td>1. 预训练</td><td>Next Token Prediction</td><td>海量文本</td><td>语言建模能力</td></tr>
+    <tr><td>2. SFT</td><td>指令微调</td><td>高质量指令-回答对</td><td>指令遵循能力</td></tr>
+    <tr><td>3. 对齐</td><td>RLHF / DPO / GRPO</td><td>人类偏好（排名/评分）</td><td>有用、安全、诚实</td></tr>
+  </table>
+
+  <div class="callout-info">Anthropic 的研究发现，RLHF 训练后的 Claude 模型在"有帮助"和"无害"之间找到了更好的平衡点——既能拒绝真正有害的请求，又不会过度拒绝合理的问题。</div>
+</div>
+
+<!-- ==================== RLHF 流程 ==================== -->
+<div class="section">
+  <h2>2. RLHF 完整流程</h2>
+  <p>RLHF（Reinforcement Learning from Human Feedback）包含三个阶段：SFT 训练、Reward Model 训练、PPO 强化学习优化。</p>
+
+  <div class="step">
+    <div class="step-title">阶段一：SFT（已在前置课程中介绍）</div>
+    <p>在高质量指令数据上微调预训练模型，得到 SFT 模型，作为后续 RL 训练的起点。</p>
+  </div>
+
+  <div class="step">
+    <div class="step-title">阶段二：训练 Reward Model</div>
+    <p>收集人类偏好数据：对同一个 prompt 的多个回答进行排序（如 A > B > C）。<br>
+    用排序数据训练 Reward Model，使其对"好回答"打高分，"差回答"打低分。</p>
+  </div>
+
+  <div class="step">
+    <div class="step-title">阶段三：PPO 强化学习</div>
+    <p>将 SFT 模型作为策略模型，Reward Model 的打分作为奖励信号，用 PPO 算法优化策略。<br>
+    加入 KL 散度惩罚，防止策略偏离 SFT 模型太远（避免奖励黑客攻击）。</p>
+  </div>
+
+  <div class="formula">
+    PPO 目标函数：<br>
+    max E[R(x, y) - beta * KL(pi(y|x) || pi_ref(y|x))]<br>
+    R = Reward Model 打分, pi = 策略模型, pi_ref = SFT 参考模型
+  </div>
+
+  <h3>Stage 2: Reward Model 训练代码（TRL）</h3>
+<pre><code><span class="kw">from</span> trl <span class="kw">import</span> RewardTrainer, RewardConfig
+<span class="kw">from</span> transformers <span class="kw">import</span> AutoModelForSequenceClassification, AutoTokenizer
+
+<span class="cmt"># 加载基础模型，添加标量奖励头</span>
+model = AutoModelForSequenceClassification.from_pretrained(
+    <span class="str">"meta-llama/Llama-3.1-8B"</span>,
+    num_labels=<span class="num">1</span>,  <span class="cmt"># 标量奖励</span>
+    torch_dtype=torch.bfloat16,
+)
+tokenizer = AutoTokenizer.from_pretrained(<span class="str">"meta-llama/Llama-3.1-8B"</span>)
+
+<span class="cmt"># 偏好数据格式：每条包含 prompt + chosen + rejected</span>
+<span class="cmt"># {"prompt": "解释量子力学", "chosen": "好的回答...", "rejected": "差的回答..."}</span>
+
+training_args = RewardConfig(
+    output_dir=<span class="str">"./reward_model"</span>,
+    per_device_train_batch_size=<span class="num">4</span>,
+    learning_rate=<span class="num">1e-5</span>,
+    num_train_epochs=<span class="num">3</span>,
+    bf16=<span class="kw">True</span>,
+    logging_steps=<span class="num">10</span>,
+    save_strategy=<span class="str">"epoch"</span>,
+    max_length=<span class="num">2048</span>,
+)
+
+trainer = RewardTrainer(
+    model=model,
+    args=training_args,
+    processing_class=tokenizer,
+    train_dataset=preference_dataset,
+)
+trainer.train()</code></pre>
+
+  <h3>Stage 3: PPO 训练代码（TRL experimental）</h3>
+<p>TRL 新版将 PPO 放在 <code>trl.experimental.ppo</code>，接口遵循 Transformers Trainer 风格：配置继承 <code>TrainingArguments</code>，奖励模型和值模型在构造训练器时传入，训练由 <code>trainer.train()</code> 驱动。PPO 仍属实验功能；生产项目可优先评估 DPO 或 GRPO。</p>
+<pre><code><span class="kw">from</span> trl.experimental.ppo <span class="kw">import</span> PPOTrainer, PPOConfig
+<span class="kw">from</span> transformers <span class="kw">import</span> AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+
+tokenizer = AutoTokenizer.<span class="fn">from_pretrained</span>(<span class="str">"sft_model_path"</span>)
+policy_model = AutoModelForCausalLM.<span class="fn">from_pretrained</span>(<span class="str">"sft_model_path"</span>)
+ref_model = AutoModelForCausalLM.<span class="fn">from_pretrained</span>(<span class="str">"sft_model_path"</span>)
+reward_model = AutoModelForSequenceClassification.<span class="fn">from_pretrained</span>(<span class="str">"./reward_model"</span>)
+value_model = AutoModelForSequenceClassification.<span class="fn">from_pretrained</span>(<span class="str">"./value_model"</span>)
+
+ppo_config = PPOConfig(
+    output_dir=<span class="str">"./ppo_output"</span>,
+    learning_rate=<span class="num">1.4e-5</span>,
+    per_device_train_batch_size=<span class="num">8</span>,
+    num_train_epochs=<span class="num">1</span>,
+    gradient_accumulation_steps=<span class="num">8</span>,
+)
+
+ppo_trainer = PPOTrainer(
+    args=ppo_config,
+    model=policy_model,
+    ref_model=ref_model,
+    reward_model=reward_model,
+    value_model=value_model,
+    processing_class=tokenizer,
+    train_dataset=prompt_dataset,
+)
+ppo_trainer.<span class="fn">train</span>()</code></pre>
+
+  <div class="callout-warn">PPO 训练的工程复杂度很高：需要同时维护 4 个模型（策略模型、参考模型、Reward Model、Value 模型），显存需求约为普通 SFT 的 4 倍。这也是 DPO 等方法兴起的重要原因。</div>
+</div>
+
+<!-- ==================== DPO ==================== -->
+<div class="section">
+  <h2>3. DPO（Direct Preference Optimization）</h2>
+  <p>DPO 的核心洞察：可以直接从偏好数据中推导出最优策略，<strong>无需训练 Reward Model，无需 RL 循环</strong>。它将 RLHF 的目标重写为一个简单的分类损失。</p>
+
+  <div class="formula">
+    DPO 损失函数：<br>
+    L = -E[log sigma(beta * (log pi(y_w|x)/pi_ref(y_w|x) - log pi(y_l|x)/pi_ref(y_l|x)))]<br>
+    y_w = 偏好回答 (chosen), y_l = 非偏好回答 (rejected)
+  </div>
+
+  <h3>DPO 训练代码（TRL）</h3>
+<pre><code><span class="kw">from</span> trl <span class="kw">import</span> DPOTrainer, DPOConfig
+<span class="kw">from</span> transformers <span class="kw">import</span> AutoModelForCausalLM
+
+<span class="cmt"># 加载 SFT 模型（同时作为策略模型和参考模型）</span>
+model = AutoModelForCausalLM.from_pretrained(
+    <span class="str">"sft_model_path"</span>,
+    torch_dtype=torch.bfloat16,
+)
+ref_model = AutoModelForCausalLM.from_pretrained(
+    <span class="str">"sft_model_path"</span>,
+    torch_dtype=torch.bfloat16,
+)
+
+dpo_config = DPOConfig(
+    output_dir=<span class="str">"./dpo_model"</span>,
+    per_device_train_batch_size=<span class="num">4</span>,
+    learning_rate=<span class="num">5e-7</span>,        <span class="cmt"># DPO 学习率要小，通常 1e-7 ~ 5e-6</span>
+    num_train_epochs=<span class="num">3</span>,
+    beta=<span class="num">0.1</span>,                  <span class="cmt"># KL 约束强度，控制偏离程度</span>
+    loss_type=<span class="str">"sigmoid"</span>,       <span class="cmt"># 标准 DPO loss</span>
+    bf16=<span class="kw">True</span>,
+    max_length=<span class="num">2048</span>,
+    max_prompt_length=<span class="num">1024</span>,
+    logging_steps=<span class="num">10</span>,
+    save_strategy=<span class="str">"steps"</span>,
+    save_steps=<span class="num">500</span>,
+)
+
+<span class="cmt"># 偏好数据格式</span>
+<span class="cmt"># {"prompt": "...", "chosen": "...", "rejected": "..."}</span>
+
+trainer = DPOTrainer(
+    model=model,
+    ref_model=ref_model,
+    args=dpo_config,
+    train_dataset=preference_dataset,
+    processing_class=tokenizer,
+)
+trainer.train()</code></pre>
+
+  <div class="callout-tip">DPO 的 beta 参数非常关键：beta 越大，模型越保守（越接近 SFT 模型）；beta 越小，模型越激进（可能过拟合偏好数据）。推荐从 0.1 开始尝试。</div>
+</div>
+
+<!-- ==================== ORPO ==================== -->
+<div class="section">
+  <h2>4. ORPO（Odds Ratio Preference Optimization）</h2>
+  <p>ORPO 进一步简化了对齐训练——它<strong>不需要参考模型</strong>，在 SFT 的交叉熵损失基础上直接加入偏好优化目标，一步完成 SFT + 对齐。</p>
+
+  <div class="formula">
+    ORPO 捩失 = SFT 损失(chosen) + lambda * OR 损失<br>
+    OR = log(sigma(log_odds(y_w) - log_odds(y_l)))<br>
+    log_odds(y) = log P(y|x) / (1 - P(y|x))
+  </div>
+
+<pre><code><span class="kw">from</span> trl <span class="kw">import</span> ORPOTrainer, ORPOConfig
+
+orpo_config = ORPOConfig(
+    output_dir=<span class="str">"./orpo_model"</span>,
+    per_device_train_batch_size=<span class="num">4</span>,
+    learning_rate=<span class="num">8e-6</span>,
+    beta=<span class="num">0.1</span>,            <span class="cmt"># OR 损失权重</span>
+    num_train_epochs=<span class="num">3</span>,
+    bf16=<span class="kw">True</span>,
+    max_length=<span class="num">2048</span>,
+)
+
+<span class="cmt"># ORPO 不需要 ref_model 参数！</span>
+trainer = ORPOTrainer(
+    model=model,            <span class="cmt"># 只需一个模型</span>
+    args=orpo_config,
+    train_dataset=preference_dataset,
+    processing_class=tokenizer,
+)
+trainer.train()</code></pre>
+
+  <div class="callout-info">ORPO 的优势：显存只需 DPO 的约 60%（无需加载参考模型），训练流程更简单。实验表明 ORPO 在 AlpacaEval 等基准上能达到与 DPO 相当甚至更好的效果。</div>
+</div>
+
+<!-- ==================== KTO ==================== -->
+<div class="section">
+  <h2>5. KTO（Kahneman-Tversky Optimization）</h2>
+  <p>KTO 受前景理论启发：人类对损失的敏感度高于收益。它只需要 <strong>正/负标签</strong>（而非配对的 chosen/rejected），大大降低了数据收集成本。</p>
+
+  <div class="step">
+    <div class="step-title">KTO vs DPO 数据需求对比</div>
+    <p><strong>DPO</strong>：需要配对数据 (prompt, chosen, rejected)——同一个 prompt 必须有好和差两个回答<br>
+    <strong>KTO</strong>：只需要 (prompt, response, label)——label 是好(1)或差(0)，不需要配对</p>
+  </div>
+
+<pre><code><span class="kw">from</span> trl <span class="kw">import</span> KTOTrainer, KTOConfig
+
+kto_config = KTOConfig(
+    output_dir=<span class="str">"./kto_model"</span>,
+    per_device_train_batch_size=<span class="num">4</span>,
+    learning_rate=<span class="num">5e-7</span>,
+    num_train_epochs=<span class="num">3</span>,
+    bf16=<span class="kw">True</span>,
+    max_length=<span class="num">2048</span>,
+    beta=<span class="num">0.1</span>,
+    desirable_weight=<span class="num">1.0</span>,    <span class="cmt"># 正样本损失权重</span>
+    undesirable_weight=<span class="num">1.0</span>,  <span class="cmt"># 负样本损失权重</span>
+)
+
+<span class="cmt"># KTO 数据格式：不需要配对</span>
+<span class="cmt"># {"prompt": "...", "completion": "...", "label": true/false}</span>
+
+trainer = KTOTrainer(
+    model=model,
+    ref_model=ref_model,
+    args=kto_config,
+    train_dataset=kto_dataset,  <span class="cmt"># 只需 prompt + completion + bool label</span>
+    processing_class=tokenizer,
+)
+trainer.train()</code></pre>
+
+  <div class="callout-tip">KTO 特别适合从真实用户反馈中学习——你可以直接从用户的点赞/点踩数据中构建训练集，不需要人工标注配对的偏好数据。</div>
+</div>
+
+<!-- ==================== GRPO ==================== -->
+<div class="section">
+  <h2>6. GRPO（Group Relative Policy Optimization）</h2>
+  <p>GRPO 由 DeepSeek 团队提出，在 DeepSeek-R1 训练中大放异彩。它的核心创新是：<strong>用同一 prompt 的多个采样的相对排名作为奖励信号，无需独立的 Value 模型</strong>。</p>
+
+  <div class="step">
+    <div class="step-title">GRPO 工作流程</div>
+    <p>1. 对每个 prompt，采样 G 个回答（如 G=16）<br>
+    2. 用 Reward Model 或规则奖励对每个回答打分<br>
+    3. 在组内做标准化：advantage = (reward - mean) / std<br>
+    4. 用 PPO 风格的 clipped objective 更新策略，但用组内相对 advantage 替代 GAE</p>
+  </div>
+
+  <div class="formula">
+    GRPO 目标：<br>
+    L = E[min(r_t * A_t, clip(r_t, 1-eps, 1+eps) * A_t)] - beta * KL<br>
+    r_t = pi(y|x) / pi_old(y|x), A_t = (R_i - mean(R)) / std(R)
+  </div>
+
+<pre><code><span class="kw">import</span> torch.nn.functional <span class="kw">as</span> F
+
+<span class="kw">def</span> <span class="fn">grpo_loss</span>(model, ref_model, prompts, tokenizer, reward_fn,
+             n_samples=<span class="num">16</span>, beta=<span class="num">0.04</span>, eps=<span class="num">0.2</span>):
+    <span class="str">"""GRPO 核心算法实现"""</span>
+    <span class="cmt"># 1. 对每个 prompt 采样 G 个回答</span>
+    all_responses = []
+    <span class="kw">for</span> prompt <span class="kw">in</span> prompts:
+        responses = model.generate(
+            prompt, num_return_sequences=n_samples,
+            temperature=<span class="num">0.7</span>, do_sample=<span class="kw">True</span>,
+            max_new_tokens=<span class="num">512</span>,
+        )
+        all_responses.append(responses)
+
+    <span class="cmt"># 2. 计算每个回答的奖励</span>
+    rewards = reward_fn(all_responses)  <span class="cmt"># (B, G)</span>
+
+    <span class="cmt"># 3. 组内标准化 advantage</span>
+    advantages = (rewards - rewards.mean(dim=<span class="num">1</span>, keepdim=<span class="kw">True</span>)) \
+               / (rewards.std(dim=<span class="num">1</span>, keepdim=<span class="kw">True</span>) + <span class="num">1e-8</span>)
+
+    <span class="cmt"># 4. 计算策略比率和 KL 惩罚</span>
+    log_probs = model.log_prob(all_responses)
+    ref_log_probs = ref_model.log_prob(all_responses).detach()
+    log_ratio = log_probs - ref_log_probs  <span class="cmt"># 对数策略比率</span>
+
+    <span class="cmt"># 5. PPO 风格 clipped loss</span>
+    ratio = torch.exp(log_probs - log_probs.detach())  <span class="cmt"># 新策略 / 旧策略</span>
+    surr1 = ratio * advantages
+    surr2 = torch.clamp(ratio, <span class="num">1</span> - eps, <span class="num">1</span> + eps) * advantages
+    policy_loss = -torch.min(surr1, surr2).mean()
+
+    <span class="cmt"># 6. KL 散度惩罚</span>
+    kl_loss = beta * log_ratio.mean()
+
+    <span class="kw">return</span> policy_loss + kl_loss</code></pre>
+
+  <div class="callout-info">DeepSeek-R1 使用 GRPO 训练时，reward 信号主要来自规则奖励（如数学题答案正确性、代码测试通过率），而非神经网络 Reward Model。这使得训练更加稳定和可扩展。</div>
+</div>
+
+<!-- ==================== 各方法对比 ==================== -->
+<div class="section">
+  <h2>7. 对齐方法全面对比</h2>
+  <table>
+    <tr><th>方法</th><th>是否需要 Reward Model</th><th>是否需要参考模型</th><th>数据格式</th><th>训练复杂度</th><th>显存需求</th></tr>
+    <tr><td>RLHF (PPO)</td><td>是</td><td>是</td><td>偏好排序</td><td>高（4 个模型）</td><td>极高</td></tr>
+    <tr><td>DPO</td><td>否</td><td>是</td><td>chosen/rejected 对</td><td>低（2 个模型）</td><td>中</td></tr>
+    <tr><td>ORPO</td><td>否</td><td>否</td><td>chosen/rejected 对</td><td>低（1 个模型）</td><td>低</td></tr>
+    <tr><td>KTO</td><td>否</td><td>是</td><td>正/负标签</td><td>低（2 个模型）</td><td>中</td></tr>
+    <tr><td>GRPO</td><td>可选（规则奖励）</td><td>是</td><td>prompt + 奖励函数</td><td>中（2 个模型 + 采样）</td><td>中高</td></tr>
+  </table>
+
+  <div class="callout-tip">2026 年的实践建议：数据充足且需要最高质量时用 PPO/DPO；数据有限或想简化流程用 ORPO/KTO；有明确规则奖励（数学、代码）时优先考虑 GRPO。DeepSeek V4-Pro 即采用 GRPO + 规则奖励训练策略。</div>
+</div>
+
+<!-- ==================== 实战：SFT -> DPO ==================== -->
+<div class="section">
+  <h2>8. 实战：完整的 SFT -> DPO 流程</h2>
+  <p>以下展示使用 TRL 1.7.0（截至 2026-08）完成从 SFT 到 DPO 的完整对齐流程。</p>
+
+  <h3>Step 1: SFT 训练</h3>
+<pre><code><span class="kw">from</span> trl <span class="kw">import</span> SFTTrainer, SFTConfig
+<span class="kw">from</span> transformers <span class="kw">import</span> AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained(
+    <span class="str">"meta-llama/Llama-3.1-8B"</span>, torch_dtype=torch.bfloat16,
+)
+tokenizer = AutoTokenizer.from_pretrained(<span class="str">"meta-llama/Llama-3.1-8B"</span>)
+tokenizer.pad_token = tokenizer.eos_token
+
+sft_config = SFTConfig(
+    output_dir=<span class="str">"./sft_model"</span>,
+    per_device_train_batch_size=<span class="num">4</span>,
+    gradient_accumulation_steps=<span class="num">4</span>,
+    learning_rate=<span class="num">2e-5</span>,
+    num_train_epochs=<span class="num">3</span>,
+    bf16=<span class="kw">True</span>,
+    max_seq_length=<span class="num">2048</span>,
+    logging_steps=<span class="num">10</span>,
+    save_strategy=<span class="str">"epoch"</span>,
+    dataset_text_field=<span class="str">"text"</span>,
+)
+
+trainer = SFTTrainer(
+    model=model, args=sft_config,
+    train_dataset=sft_dataset, processing_class=tokenizer,
+)
+trainer.train()
+trainer.save_model(<span class="str">"./sft_model"</span>)</code></pre>
+
+  <h3>Step 2: DPO 对齐</h3>
+<pre><code><span class="cmt"># 加载 SFT 模型</span>
+sft_model = AutoModelForCausalLM.from_pretrained(
+    <span class="str">"./sft_model"</span>, torch_dtype=torch.bfloat16,
+)
+ref_model = AutoModelForCausalLM.from_pretrained(
+    <span class="str">"./sft_model"</span>, torch_dtype=torch.bfloat16,
+)
+
+dpo_config = DPOConfig(
+    output_dir=<span class="str">"./aligned_model"</span>,
+    per_device_train_batch_size=<span class="num">2</span>,
+    gradient_accumulation_steps=<span class="num">8</span>,
+    learning_rate=<span class="num">5e-7</span>,
+    num_train_epochs=<span class="num">2</span>,
+    beta=<span class="num">0.1</span>,
+    bf16=<span class="kw">True</span>,
+    max_length=<span class="num">2048</span>,
+    logging_steps=<span class="num">10</span>,
+    save_strategy=<span class="str">"epoch"</span>,
+)
+
+<span class="cmt"># 偏好数据示例</span>
+<span class="cmt"># dataset 格式: {"prompt": "...", "chosen": "...", "rejected": "..."}</span>
+
+trainer = DPOTrainer(
+    model=sft_model, ref_model=ref_model,
+    args=dpo_config,
+    train_dataset=preference_dataset,
+    processing_class=tokenizer,
+)
+trainer.train()
+trainer.save_model(<span class="str">"./aligned_model"</span>)</code></pre>
+
+  <div class="callout-warn">DPO 训练中的常见陷阱：学习率过大会导致模型退化；beta 过小会导致 reward hacking（模型找到 shortcut 提高 chosen 概率但质量没提升）；偏好数据质量比数量更重要，通常几万条高质量数据就够了。</div>
+</div>
+
+</div>
+
+<footer>
+  <p>LLM Training Tutorial - 对齐训练 &copy; 2026 | 当前版本（截至 2026-08）: TRL 1.7.0, DeepSpeed 0.19.2</p>
+</footer>
+</div></section>

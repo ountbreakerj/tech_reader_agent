@@ -1,0 +1,360 @@
+<section class="llm-mod llm-m-classic-arch" id="llm-classic-arch"><div class="module-wrapper">
+<nav class="nav">
+  <span class="brand">LLM Training</span>
+  <a href="#/llm?section=llm-classic-arch" class="active">经典架构</a>
+  <a href="#/llm?section=llm-distributed">分布式训练</a>
+  <a href="#/llm?section=llm-alignment">对齐训练</a>
+  <a href="#/llm?section=llm-modern-arch">前沿架构</a>
+  <a href="#/llm?section=llm-eval-advanced">评估体系</a>
+</nav>
+
+<header>
+  <h1>经典模型架构详解</h1>
+  <p>从 Transformer 原始论文到 LLaMA 系列，手写每个架构的 PyTorch 教学代码</p>
+</header>
+
+<div class="container">
+
+<!-- ==================== Transformer ==================== -->
+<div class="section">
+  <h2>1. Transformer 原始架构 <span class="badge">Vaswani 2017</span></h2>
+  <p>Transformer 是所有现代 LLM 的基石，其核心创新是用 <strong>Self-Attention</strong> 完全替代 RNN/CNN，实现全局依赖建模。</p>
+
+  <div class="step">
+    <div class="step-title">核心组件</div>
+    <p><strong>Multi-Head Self-Attention</strong>：将 Q/K/V 分成多个头并行计算注意力，拼接后线性投影。<br>
+    <strong>Position-wise FFN</strong>：两层全连接网络，中间用 ReLU 激活，维度先扩大 4 倍再缩回。<br>
+    <strong>Add &amp; Norm</strong>：残差连接 + Layer Normalization。</p>
+  </div>
+
+  <h3>Multi-Head Self-Attention 实现</h3>
+<pre><code><span class="kw">import</span> torch
+<span class="kw">import</span> torch.nn <span class="kw">as</span> nn
+<span class="kw">import</span> math
+
+<span class="kw">class</span> <span class="cls">MultiHeadAttention</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, d_model, n_heads):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.n_heads = n_heads
+        <span class="dec">self</span>.d_k = d_model // n_heads
+        <span class="dec">self</span>.W_q = nn.Linear(d_model, d_model)
+        <span class="dec">self</span>.W_k = nn.Linear(d_model, d_model)
+        <span class="dec">self</span>.W_v = nn.Linear(d_model, d_model)
+        <span class="dec">self</span>.W_o = nn.Linear(d_model, d_model)
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x, mask=<span class="kw">None</span>):
+        B, L, D = x.shape
+        <span class="cmt"># 线性投影并拆分为多头: (B, L, D) -> (B, H, L, d_k)</span>
+        Q = <span class="dec">self</span>.W_q(x).view(B, L, <span class="dec">self</span>.n_heads, <span class="dec">self</span>.d_k).transpose(<span class="num">1</span>, <span class="num">2</span>)
+        K = <span class="dec">self</span>.W_k(x).view(B, L, <span class="dec">self</span>.n_heads, <span class="dec">self</span>.d_k).transpose(<span class="num">1</span>, <span class="num">2</span>)
+        V = <span class="dec">self</span>.W_v(x).view(B, L, <span class="dec">self</span>.n_heads, <span class="dec">self</span>.d_k).transpose(<span class="num">1</span>, <span class="num">2</span>)
+        <span class="cmt"># 缩放点积注意力</span>
+        scores = (Q @ K.transpose(-<span class="num">2</span>, -<span class="num">1</span>)) / math.sqrt(<span class="dec">self</span>.d_k)
+        <span class="kw">if</span> mask <span class="kw">is not</span> <span class="kw">None</span>:
+            scores = scores.masked_fill(mask == <span class="num">0</span>, <span class="num">-1e9</span>)
+        attn = torch.softmax(scores, dim=-<span class="num">1</span>)
+        out = (attn @ V).transpose(<span class="num">1</span>, <span class="num">2</span>).contiguous().view(B, L, D)
+        <span class="kw">return</span> <span class="dec">self</span>.W_o(out)</code></pre>
+
+  <h3>Transformer Encoder Layer</h3>
+<pre><code><span class="kw">class</span> <span class="cls">TransformerEncoderLayer</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, d_model=<span class="num">512</span>, n_heads=<span class="num">8</span>, d_ff=<span class="num">2048</span>, dropout=<span class="num">0.1</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.attn = <span class="cls">MultiHeadAttention</span>(d_model, n_heads)
+        <span class="dec">self</span>.norm1 = nn.LayerNorm(d_model)
+        <span class="dec">self</span>.norm2 = nn.LayerNorm(d_model)
+        <span class="dec">self</span>.ffn = nn.Sequential(
+            nn.Linear(d_model, d_ff), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(d_ff, d_model), nn.Dropout(dropout),
+        )
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x, mask=<span class="kw">None</span>):
+        <span class="cmt"># Self-Attention + Residual + LayerNorm</span>
+        attn_out = <span class="dec">self</span>.attn(x, mask)
+        x = <span class="dec">self</span>.norm1(x + attn_out)
+        <span class="cmt"># FFN + Residual + LayerNorm</span>
+        ffn_out = <span class="dec">self</span>.ffn(x)
+        x = <span class="dec">self</span>.norm2(x + ffn_out)
+        <span class="kw">return</span> x</code></pre>
+
+  <div class="callout-tip">原始 Transformer 使用 Post-LN（先残差再归一化），GPT 系列使用 Pre-LN（先归一化再残差），后者训练更稳定。</div>
+</div>
+
+<!-- ==================== BERT ==================== -->
+<div class="section">
+  <h2>2. BERT <span class="badge">Encoder-Only</span></h2>
+  <p>BERT（Bidirectional Encoder Representations from Transformers）是 Encoder-Only 架构的代表，通过 <strong>MLM</strong>（Masked Language Model）和 <strong>NSP</strong>（Next Sentence Prediction）进行双向预训练。</p>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>架构</td><td>Transformer Encoder（双向注意力）</td></tr>
+    <tr><td>预训练任务</td><td>MLM（随机遮盖 15% 的 token）+ NSP</td></tr>
+    <tr><td>位置编码</td><td>可学习的绝对位置编码</td></tr>
+    <tr><td>典型应用</td><td>文本分类、NER、问答、句子相似度</td></tr>
+  </table>
+
+  <h3>BERT 模型简化实现</h3>
+<pre><code><span class="kw">class</span> <span class="cls">BERTEmbedding</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, vocab_size, d_model=<span class="num">768</span>, max_len=<span class="num">512</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.tok_emb = nn.Embedding(vocab_size, d_model)
+        <span class="dec">self</span>.pos_emb = nn.Embedding(max_len, d_model)  <span class="cmt"># 可学习位置编码</span>
+        <span class="dec">self</span>.seg_emb = nn.Embedding(<span class="num">2</span>, d_model)       <span class="cmt"># 句子 A/B 段编码</span>
+        <span class="dec">self</span>.norm = nn.LayerNorm(d_model)
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, input_ids, segment_ids):
+        L = input_ids.size(<span class="num">1</span>)
+        pos = torch.arange(L, device=input_ids.device).unsqueeze(<span class="num">0</span>)
+        <span class="kw">return</span> <span class="dec">self</span>.norm(<span class="dec">self</span>.tok_emb(input_ids)
+                       + <span class="dec">self</span>.pos_emb(pos)
+                       + <span class="dec">self</span>.seg_emb(segment_ids))
+
+<span class="kw">class</span> <span class="cls">BertModel</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, vocab_size=<span class="num">30522</span>, d_model=<span class="num">768</span>,
+                 n_heads=<span class="num">12</span>, n_layers=<span class="num">12</span>, d_ff=<span class="num">3072</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.embedding = <span class="cls">BERTEmbedding</span>(vocab_size, d_model)
+        <span class="dec">self</span>.layers = nn.ModuleList([
+            <span class="cls">TransformerEncoderLayer</span>(d_model, n_heads, d_ff)
+            <span class="kw">for</span> _ <span class="kw">in</span> range(n_layers)
+        ])
+        <span class="cmt"># MLM 头：预测被遮盖的 token</span>
+        <span class="dec">self</span>.mlm_head = nn.Sequential(
+            nn.Linear(d_model, d_model), nn.GELU(),
+            nn.LayerNorm(d_model), nn.Linear(d_model, vocab_size),
+        )
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, input_ids, segment_ids, mask=<span class="kw">None</span>):
+        x = <span class="dec">self</span>.embedding(input_ids, segment_ids)
+        <span class="kw">for</span> layer <span class="kw">in</span> <span class="dec">self</span>.layers:
+            x = layer(x, mask)
+        logits = <span class="dec">self</span>.mlm_head(x)
+        <span class="kw">return</span> logits  <span class="cmt"># (B, L, vocab_size)</span></code></pre>
+
+  <div class="callout-info">BERT 的 MLM 任务会随机替换 15% 的 token：其中 80% 替换为 [MASK]，10% 替换为随机 token，10% 保持不变，以缓解预训练与微调之间的分布差异。</div>
+</div>
+
+<!-- ==================== GPT-2 ==================== -->
+<div class="section">
+  <h2>3. GPT-2 <span class="badge">Decoder-Only</span></h2>
+  <p>GPT 系列采用 <strong>Causal（因果）注意力掩码</strong>，每个 token 只能看到自己及之前的 token，通过自回归方式逐 token 生成文本。</p>
+
+  <div class="step">
+    <div class="step-title">Decoder-Only 核心差异</div>
+    <p>1. 使用 <strong>Causal Mask</strong>（下三角矩阵）确保自回归特性<br>
+    2. Pre-LN 结构（LayerNorm 在 Attention/FFN 之前）<br>
+    3. 训练目标：给定前缀预测下一个 token（Next Token Prediction）</p>
+  </div>
+
+  <h3>GPT-2 Block 实现</h3>
+<pre><code><span class="kw">class</span> <span class="cls">CausalSelfAttention</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, d_model, n_heads, max_len=<span class="num">1024</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.n_heads = n_heads
+        <span class="dec">self</span>.d_k = d_model // n_heads
+        <span class="dec">self</span>.c_attn = nn.Linear(d_model, <span class="num">3</span> * d_model)  <span class="cmt"># Q/K/V 合并</span>
+        <span class="dec">self</span>.c_proj = nn.Linear(d_model, d_model)
+        <span class="cmt"># 因果掩码：下三角矩阵</span>
+        <span class="dec">self</span>.register_buffer(<span class="str">"mask"</span>,
+            torch.tril(torch.ones(max_len, max_len)).view(<span class="num">1</span>, <span class="num">1</span>, max_len, max_len))
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x):
+        B, L, D = x.shape
+        qkv = <span class="dec">self</span>.c_attn(x).chunk(<span class="num">3</span>, dim=-<span class="num">1</span>)
+        Q, K, V = [t.view(B, L, <span class="dec">self</span>.n_heads, <span class="dec">self</span>.d_k).transpose(<span class="num">1</span>, <span class="num">2</span>) <span class="kw">for</span> t <span class="kw">in</span> qkv]
+        scores = (Q @ K.transpose(-<span class="num">2</span>, -<span class="num">1</span>)) / math.sqrt(<span class="dec">self</span>.d_k)
+        scores = scores.masked_fill(<span class="dec">self</span>.mask[:, :, :L, :L] == <span class="num">0</span>, <span class="num">-1e9</span>)
+        attn = torch.softmax(scores, dim=-<span class="num">1</span>)
+        out = (attn @ V).transpose(<span class="num">1</span>, <span class="num">2</span>).contiguous().view(B, L, D)
+        <span class="kw">return</span> <span class="dec">self</span>.c_proj(out)
+
+<span class="kw">class</span> <span class="cls">GPT2Block</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, d_model=<span class="num">768</span>, n_heads=<span class="num">12</span>, d_ff=<span class="num">3072</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.ln1 = nn.LayerNorm(d_model)   <span class="cmt"># Pre-LN</span>
+        <span class="dec">self</span>.attn = <span class="cls">CausalSelfAttention</span>(d_model, n_heads)
+        <span class="dec">self</span>.ln2 = nn.LayerNorm(d_model)
+        <span class="dec">self</span>.mlp = nn.Sequential(
+            nn.Linear(d_model, d_ff), nn.GELU(),  <span class="cmt"># GPT-2 用 GELU</span>
+            nn.Linear(d_ff, d_model),
+        )
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x):
+        x = x + <span class="dec">self</span>.attn(<span class="dec">self</span>.ln1(x))  <span class="cmt"># Pre-LN + Residual</span>
+        x = x + <span class="dec">self</span>.mlp(<span class="dec">self</span>.ln2(x))
+        <span class="kw">return</span> x</code></pre>
+
+  <div class="callout-warn">GPT-2 的 token embedding 和最终 lm_head 权重是<strong>共享的</strong>（weight tying），这可以大幅减少参数量。BERT 的 MLM 头则通常不共享权重。</div>
+</div>
+
+<!-- ==================== T5 ==================== -->
+<div class="section">
+  <h2>4. T5 <span class="badge">Encoder-Decoder</span></h2>
+  <p>T5（Text-to-Text Transfer Transformer）将所有 NLP 任务统一为 <strong>text-to-text</strong> 格式：输入是文本，输出也是文本。例如分类任务输出 "positive" 或 "negative" 字符串。</p>
+
+  <table>
+    <tr><th>任务</th><th>T5 输入格式</th><th>T5 输出格式</th></tr>
+    <tr><td>翻译</td><td>"translate English to German: Hello"</td><td>"Hallo"</td></tr>
+    <tr><td>摘要</td><td>"summarize: &lt;长文本&gt;"</td><td>"&lt;摘要&gt;"</td></tr>
+    <tr><td>分类</td><td>"sst2 sentence: This is great"</td><td>"positive"</td></tr>
+  </table>
+
+  <h3>T5 Block（含 Encoder-Decoder Attention）</h3>
+<pre><code><span class="kw">class</span> <span class="cls">T5Block</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, d_model=<span class="num">768</span>, n_heads=<span class="num">12</span>, is_decoder=<span class="kw">False</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.is_decoder = is_decoder
+        <span class="dec">self</span>.self_attn = <span class="cls">MultiHeadAttention</span>(d_model, n_heads)
+        <span class="dec">self</span>.norm1 = nn.LayerNorm(d_model)
+        <span class="kw">if</span> is_decoder:
+            <span class="cmt"># Decoder 额外的 Cross-Attention（关注 Encoder 输出）</span>
+            <span class="dec">self</span>.cross_attn = <span class="cls">MultiHeadAttention</span>(d_model, n_heads)
+            <span class="dec">self</span>.norm_cross = nn.LayerNorm(d_model)
+        <span class="dec">self</span>.ffn = nn.Sequential(
+            nn.Linear(d_model, d_model * <span class="num">4</span>), nn.ReLU(),
+            nn.Linear(d_model * <span class="num">4</span>, d_model),
+        )
+        <span class="dec">self</span>.norm2 = nn.LayerNorm(d_model)
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x, enc_out=<span class="kw">None</span>, self_mask=<span class="kw">None</span>):
+        <span class="cmt"># 自注意力（Decoder 使用因果掩码）</span>
+        x = x + <span class="dec">self</span>.self_attn(<span class="dec">self</span>.norm1(x), self_mask)
+        <span class="kw">if</span> <span class="dec">self</span>.is_decoder <span class="kw">and</span> enc_out <span class="kw">is not</span> <span class="kw">None</span>:
+            <span class="cmt"># 交叉注意力：Q 来自 Decoder，K/V 来自 Encoder</span>
+            x = x + <span class="dec">self</span>.cross_attn(
+                <span class="dec">self</span>.norm_cross(x), enc_out <span class="cmt"># 需要修改 MHA 支持 kv 输入</span>
+            )
+        x = x + <span class="dec">self</span>.ffn(<span class="dec">self</span>.norm2(x))
+        <span class="kw">return</span> x</code></pre>
+
+  <div class="callout-info">T5 使用 <strong>相对位置编码</strong>（Relative Position Bias），在注意力分数中加入可学习的偏置项，泛化到更长序列的能力优于绝对位置编码。</div>
+</div>
+
+<!-- ==================== LLaMA ==================== -->
+<div class="section">
+  <h2>5. LLaMA 系列 <span class="badge">现代 Decoder-Only</span></h2>
+  <p>LLaMA（Large Language Model Meta AI）系列引入了多项关键改进：RMSNorm、SwiGLU 激活和 RoPE 旋转位置编码，成为当前最主流的架构范式。</p>
+
+  <table>
+    <tr><th>组件</th><th>LLaMA 创新</th><th>相比 Transformer 原版</th></tr>
+    <tr><td>归一化</td><td>RMSNorm（Pre-Norm）</td><td>LayerNorm（Post-Norm）</td></tr>
+    <tr><td>激活函数</td><td>SwiGLU</td><td>ReLU / GELU</td></tr>
+    <tr><td>位置编码</td><td>RoPE（旋转位置编码）</td><td>绝对/相对位置编码</td></tr>
+    <tr><td>注意力</td><td>GQA（Llama 2/3）</td><td>MHA</td></tr>
+  </table>
+
+  <h3>RMSNorm 实现</h3>
+<pre><code><span class="kw">class</span> <span class="cls">RMSNorm</span>(nn.Module):
+    <span class="str">"""Root Mean Square Layer Normalization（无需均值中心化）"""</span>
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, d_model, eps=<span class="num">1e-6</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.weight = nn.Parameter(torch.ones(d_model))
+        <span class="dec">self</span>.eps = eps
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x):
+        <span class="cmt"># RMS = sqrt(mean(x^2))，比 LayerNorm 少一次均值计算</span>
+        rms = torch.sqrt(x.pow(<span class="num">2</span>).mean(-<span class="num">1</span>, keepdim=<span class="kw">True</span>) + <span class="dec">self</span>.eps)
+        <span class="kw">return</span> (x / rms) * <span class="dec">self</span>.weight</code></pre>
+
+  <h3>SwiGLU 激活函数</h3>
+<pre><code><span class="kw">class</span> <span class="cls">SwiGLU</span>(nn.Module):
+    <span class="str">"""SwiGLU: Swish(xW1) * xW3，门控线性单元"""</span>
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, d_model, d_ff):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.w1 = nn.Linear(d_model, d_ff, bias=<span class="kw">False</span>)  <span class="cmt"># Gate</span>
+        <span class="dec">self</span>.w3 = nn.Linear(d_model, d_ff, bias=<span class="kw">False</span>)  <span class="cmt"># Up</span>
+        <span class="dec">self</span>.w2 = nn.Linear(d_ff, d_model, bias=<span class="kw">False</span>)  <span class="cmt"># Down</span>
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x):
+        <span class="cmt"># Swish = x * sigmoid(x)，即 F.silu</span>
+        <span class="kw">return</span> <span class="dec">self</span>.w2(F.silu(<span class="dec">self</span>.w1(x)) * <span class="dec">self</span>.w3(x))</code></pre>
+
+  <h3>RoPE 旋转位置编码（简化实现）</h3>
+<pre><code><span class="kw">def</span> <span class="fn">apply_rope</span>(q, k, freqs_cis):
+    <span class="str">"""将位置信息通过复数旋转注入 Q 和 K"""</span>
+    <span class="cmt"># 将最后一维视为复数对: (re, im)</span>
+    q_complex = torch.view_as_complex(q.float().view(*q.shape[:-<span class="num">1</span>], -<span class="num">1</span>, <span class="num">2</span>))
+    k_complex = torch.view_as_complex(k.float().view(*k.shape[:-<span class="num">1</span>], -<span class="num">1</span>, <span class="num">2</span>))
+    <span class="cmt"># 复数乘法 = 旋转</span>
+    q_out = torch.view_as_real(q_complex * freqs_cis).flatten(-<span class="num">2</span>)
+    k_out = torch.view_as_real(k_complex * freqs_cis).flatten(-<span class="num">2</span>)
+    <span class="kw">return</span> q_out.type_as(q), k_out.type_as(k)
+
+<span class="kw">def</span> <span class="fn">precompute_freqs_cis</span>(dim, max_len, theta=<span class="num">10000.0</span>):
+    <span class="cmt"># 频率: theta_i = 1 / (10000^(2i/d))</span>
+    freqs = <span class="num">1.0</span> / (theta ** (torch.arange(<span class="num">0</span>, dim, <span class="num">2</span>).float() / dim))
+    t = torch.arange(max_len)
+    freqs = torch.outer(t, freqs)  <span class="cmt"># (max_len, dim//2)</span>
+    <span class="kw">return</span> torch.polar(torch.ones_like(freqs), freqs)  <span class="cmt"># e^(i*theta)</span></code></pre>
+
+  <h3>完整 LLaMA Block</h3>
+<pre><code><span class="kw">import</span> torch.nn.functional <span class="kw">as</span> F
+
+<span class="kw">class</span> <span class="cls">LLaMABlock</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, d_model=<span class="num">4096</span>, n_heads=<span class="num">32</span>, d_ff=<span class="num">11008</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.attn_norm = <span class="cls">RMSNorm</span>(d_model)
+        <span class="dec">self</span>.attn = <span class="cls">CausalSelfAttention</span>(d_model, n_heads)
+        <span class="dec">self</span>.ffn_norm = <span class="cls">RMSNorm</span>(d_model)
+        <span class="dec">self</span>.ffn = <span class="cls">SwiGLU</span>(d_model, d_ff)
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x, freqs_cis=<span class="kw">None</span>):
+        <span class="cmt"># Pre-RMSNorm + Causal Attention + Residual</span>
+        h = x + <span class="dec">self</span>.attn(<span class="dec">self</span>.attn_norm(x))
+        <span class="cmt"># Pre-RMSNorm + SwiGLU FFN + Residual</span>
+        out = h + <span class="dec">self</span>.ffn(<span class="dec">self</span>.ffn_norm(h))
+        <span class="kw">return</span> out</code></pre>
+
+  <div class="callout-tip">SwiGLU 的 d_ff 通常设为 (2/3) * 4 * d_model（而不是原版的 4 倍），因为有 3 个线性层，保持总参数量相当。LLaMA 7B 的 d_ff=11008 就是这个比例。</div>
+</div>
+
+<!-- ==================== 对比总结 ==================== -->
+<div class="section">
+  <h2>6. 架构对比总结</h2>
+  <table>
+    <tr><th>模型</th><th>类型</th><th>位置编码</th><th>归一化</th><th>激活</th><th>注意力</th></tr>
+    <tr><td>Transformer</td><td>Enc-Dec</td><td>Sinusoidal</td><td>Post-LN</td><td>ReLU</td><td>MHA</td></tr>
+    <tr><td>BERT</td><td>Enc-Only</td><td>Learned</td><td>Post-LN</td><td>GELU</td><td>MHA</td></tr>
+    <tr><td>GPT-2</td><td>Dec-Only</td><td>Learned</td><td>Pre-LN</td><td>GELU</td><td>MHA</td></tr>
+    <tr><td>T5</td><td>Enc-Dec</td><td>Relative Bias</td><td>Pre-LN</td><td>ReLU</td><td>MHA</td></tr>
+    <tr><td>LLaMA</td><td>Dec-Only</td><td>RoPE</td><td>RMSNorm</td><td>SwiGLU</td><td>MHA/GQA</td></tr>
+    <tr><td>DeepSeek V4</td><td>Dec-Only</td><td>RoPE</td><td>RMSNorm</td><td>SwiGLU</td><td>CSA/HCA</td></tr>
+  </table>
+
+  <div class="callout-info">从 Transformer 到 LLaMA 的演进趋势：Post-LN -> Pre-LN -> RMSNorm；ReLU -> GELU -> SwiGLU；绝对位置编码 -> RoPE。这些改进共同提升了训练稳定性和模型性能。</div>
+
+  <h3>快速搭建一个 LLaMA 风格模型</h3>
+<pre><code><span class="kw">class</span> <span class="cls">MiniLLaMA</span>(nn.Module):
+    <span class="str">"""教学用小型 LLaMA 模型"""</span>
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, vocab_size=<span class="num">32000</span>, d_model=<span class="num">512</span>,
+                 n_heads=<span class="num">8</span>, n_layers=<span class="num">6</span>, d_ff=<span class="num">1365</span>, max_len=<span class="num">2048</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.tok_emb = nn.Embedding(vocab_size, d_model)
+        <span class="dec">self</span>.layers = nn.ModuleList([
+            <span class="cls">LLaMABlock</span>(d_model, n_heads, d_ff) <span class="kw">for</span> _ <span class="kw">in</span> range(n_layers)
+        ])
+        <span class="dec">self</span>.norm = <span class="cls">RMSNorm</span>(d_model)
+        <span class="dec">self</span>.lm_head = nn.Linear(d_model, vocab_size, bias=<span class="kw">False</span>)
+        <span class="cmt"># 权重共享</span>
+        <span class="dec">self</span>.lm_head.weight = <span class="dec">self</span>.tok_emb.weight
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, input_ids):
+        x = <span class="dec">self</span>.tok_emb(input_ids)
+        <span class="kw">for</span> layer <span class="kw">in</span> <span class="dec">self</span>.layers:
+            x = layer(x)
+        x = <span class="dec">self</span>.norm(x)
+        <span class="kw">return</span> <span class="dec">self</span>.lm_head(x)
+
+<span class="cmt"># 使用示例</span>
+model = <span class="cls">MiniLLaMA</span>(vocab_size=<span class="num">32000</span>, d_model=<span class="num">512</span>, n_layers=<span class="num">6</span>)
+x = torch.randint(<span class="num">0</span>, <span class="num">32000</span>, (<span class="num">2</span>, <span class="num">128</span>))  <span class="cmt"># batch=2, seq_len=128</span>
+logits = model(x)  <span class="cmt"># (2, 128, 32000)</span>
+print(<span class="str">f"参数量: </span>{sum(p.numel() <span class="kw">for</span> p <span class="kw">in</span> model.parameters()) / <span class="num">1e6</span>:<span class="str">.1f</span>}<span class="str">M"</span>)</code></pre>
+</div>
+
+</div>
+
+<footer>
+  <p>LLM Training Tutorial - 经典模型架构详解 &copy; 2026 | 当前版本: PyTorch 2.12.1, Transformers 5.12.1</p>
+</footer>
+</div></section>

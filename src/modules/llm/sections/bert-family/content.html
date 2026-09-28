@@ -1,0 +1,456 @@
+<section class="llm-mod llm-m-bert-family" id="llm-bert-family"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>🤖 模块0：预训练模型与HuggingFace</h1>
+  <p>站在巨人的肩膀上做NLP</p>
+</div><div class="section" id="llm-bert-family-s1">
+    <h2>BERT模型详解</h2>
+    
+    <h3>1.1 BERT整体架构</h3>
+    <p>BERT（Bidirectional Encoder Representations from Transformers）是Google于2018年提出的预训练语言模型。
+    它的核心思想是：<strong>通过大规模无标注文本的自监督学习，获取通用的语言表示</strong>，然后在下游任务上微调即可取得优异效果。</p>
+
+    <p>BERT的架构由三个核心模块组成：</p>
+    <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>Embedding层</strong><br><strong>Token Embedding</strong>（词嵌入）+ <strong>Segment Embedding</strong>（区分句子A/B）+ <strong>Position Embedding</strong>（位置编码）。三种嵌入相加后输入Transformer层。</div>
+  </div><div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>Transformer Encoder层</strong><br>多层（BERT-Base: 12层，BERT-Large: 24层）Transformer Encoder堆叠。每一层包含<strong>多头自注意力（Multi-Head Self-Attention）</strong>和<strong>前馈网络（FFN）</strong>，配合残差连接和Layer Normalization。</div>
+  </div><div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>微调头（Fine-tuning Head）</strong><br>在BERT顶层添加任务特定的输出层：分类任务用[CLS]接全连接层，序列标注任务用每个token接分类层，问答任务用起止位置预测。</div>
+  </div>
+    <h3>1.2 预训练任务一：掩码语言模型（MLM）</h3>
+    <p>MLM是BERT最核心的预训练任务。具体做法是：</p>
+    <ul>
+      <li>随机选取输入中<strong>15%</strong>的token进行处理</li>
+      <li>其中<strong>80%</strong>替换为<code>[MASK]</code>标记</li>
+      <li><strong>10%</strong>替换为随机token</li>
+      <li><strong>10%</strong>保持不变</li>
+    </ul>
+    <p>模型的目标是根据上下文预测被处理的原始token。</p>
+    <div class="callout callout-tip">
+    <p>80/10/10策略的精妙之处：如果总是用[MASK]替换，模型在微调时永远不会看到[MASK]标记，导致预训练与微调之间存在分布差异（mismatch）。混入随机token和保持原token可以缓解这个问题。</p>
+  </div>
+    <h3>1.3 预训练任务二：下一句预测（NSP）</h3>
+    <p>NSP任务训练模型判断两个句子是否为连续关系：</p>
+    <ul>
+      <li><strong>正样本（IsNext）</strong>：从语料中选取真实连续的句子对</li>
+      <li><strong>负样本（NotNext）</strong>：随机拼接两个不相关的句子</li>
+    </ul>
+    <p>输入格式为<code>[CLS] 句子A [SEP] 句子B [SEP]</code>，模型使用[CLS]位置的输出进行二分类。</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code># BERT 输入格式示例
+from transformers import BertTokenizer
+
+tokenizer = BertTokenizer.from_pretrained("bert-base-chinese")
+encoding = tokenizer(
+    "自然语言处理是人工智能的核心方向。",
+    "BERT的出现彻底改变了NLP领域的研究范式。",
+    padding="max_length",
+    max_length=64,
+    truncation=True,
+    return_tensors="pt"
+)
+print(encoding["input_ids"])      # token ids: [CLS] 句子A [SEP] 句子B [SEP]
+print(encoding["token_type_ids"]) # 0 0 0 ... 1 1 1 ... (区分A/B句子)
+print(encoding["attention_mask"]) # 1 1 1 ... 0 0 0 ... (区分真实/pad)</code></pre>
+  </div>
+  </div><div class="section" id="llm-bert-family-s2">
+    <h2>BERT变体家族</h2>
+    
+    <p>BERT发布后，研究者们从不同角度对其进行了改进和优化，形成了一个庞大的BERT变体家族。</p>
+
+    <h3>2.1 ALBERT —— 参数压缩</h3>
+    <p>ALBERT（A Lite BERT）通过两项关键技术大幅减少参数量：</p>
+    <ul>
+      <li><strong>因式分解嵌入参数化（Factorized Embedding Parameterization）</strong>：将大的词嵌入矩阵分解为两个小矩阵（V×H → V×E + E×H），参数量从 O(V×H) 降至 O(V×E + E×H)</li>
+      <li><strong>跨层参数共享（Cross-layer Parameter Sharing）</strong>：所有Transformer层共享同一组参数，12层仅需存储1层的权重</li>
+    </ul>
+    <div class="callout callout-info">
+    <p>ALBERT虽然参数量远小于BERT，但由于所有层共享参数，实际推理速度并没有成比例提升。它的价值更多体现在模型体积的压缩上，便于部署到资源受限的环境。</p>
+  </div>
+    <h3>2.2 RoBERTa —— 训练策略优化</h3>
+    <p>RoBERTa（Robustly Optimized BERT Approach）由Facebook提出，核心改进在于训练方式：</p>
+    <ul>
+      <li><strong>动态掩码（Dynamic Masking）</strong>：每个epoch重新生成掩码模式，而非BERT的静态掩码</li>
+      <li><strong>移除NSP任务</strong>：实验表明NSP对下游任务帮助有限，去掉后效果更好</li>
+      <li><strong>更大批次和更多数据</strong>：使用160GB文本（vs BERT的16GB），训练更久</li>
+      <li><strong>Byte-Pair Encoding（BPE）</strong>：使用更大的子词词表（50,265 vs 30,000）</li>
+    </ul>
+    
+    <h3>2.3 MacBERT —— 中文优化</h3>
+    <p>MacBERT（MLM as Correction BERT）针对中文场景做了专门优化：</p>
+    <ul>
+      <li><strong>整词掩码（Whole Word Masking）</strong>：以完整中文词为单位进行掩码，而非字级别</li>
+      <li><strong>同义词替换</strong>：被选中的词用同义词替代而非[MASK]，进一步缩小预训练与微调的差距</li>
+      <li><strong>使用N-gram作为掩码单元</strong>：支持1-gram到4-gram的掩码</li>
+    </ul>
+    
+    <h3>2.4 DistilBERT —— 知识蒸馏</h3>
+    <p>DistilBERT通过<strong>知识蒸馏（Knowledge Distillation）</strong>技术将BERT压缩为更小的模型：</p>
+    <ul>
+      <li>保留BERT 97%的语言理解能力</li>
+      <li>模型体积缩小<strong>40%</strong>，推理速度提升<strong>60%</strong></li>
+      <li>使用6层Transformer（vs BERT的12层），同时用教师模型的soft label指导训练</li>
+    </ul>
+    
+    <h3>2.5 BERT变体对比</h3>
+    <table>
+    <tr><th>模型</th><th>核心改进</th><th>参数量</th><th>特点</th></tr>
+    <tr><td>BERT</td><td>MLM + NSP 预训练</td><td>110M / 340M</td><td>开创性工作，双向编码</td></tr>
+<tr><td>ALBERT</td><td>参数共享 + 嵌入分解</td><td>12M / 18M</td><td>参数量大幅压缩</td></tr>
+<tr><td>RoBERTa</td><td>动态掩码 + 去NSP</td><td>125M / 355M</td><td>训练更充分，效果更好</td></tr>
+<tr><td>MacBERT</td><td>同义词替换 + 整词掩码</td><td>102M</td><td>中文任务表现优秀</td></tr>
+<tr><td>DistilBERT</td><td>知识蒸馏</td><td>66M</td><td>轻量高效，适合部署</td></tr>
+<tr><td>ELECTRA</td><td>替换Token检测</td><td>110M</td><td>训练效率更高，数据利用率好</td></tr>
+
+  </table>
+  </div><div class="section" id="llm-bert-family-s3">
+    <h2>HuggingFace Transformers入门</h2>
+    
+    <p>HuggingFace Transformers库是当前NLP领域最重要的开源工具之一，提供了数千种预训练模型的统一接口。
+    它提供了<strong>三个层次的API</strong>，适应不同复杂度的需求：</p>
+    
+    <h3>3.1 第一层：Pipeline（最简单）</h3>
+    <p>Pipeline封装了从预处理到推理的全部流程，一行代码即可完成NLP任务。</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from transformers import pipeline
+
+# 情感分析
+classifier = pipeline("sentiment-analysis")
+result = classifier("今天天气真好，心情非常愉快！")
+print(result)
+# [{'label': 'POSITIVE', 'score': 0.9998}]
+
+# 文本生成
+generator = pipeline("text-generation", model="gpt2")
+output = generator("Artificial intelligence is", max_length=50)
+print(output[0]["generated_text"])
+
+# 问答
+qa = pipeline("question-answering")
+answer = qa(
+    question="BERT是哪个公司提出的？",
+    context="BERT是由Google在2018年提出的预训练语言模型。"
+)
+print(answer)
+# {'answer': 'Google', 'score': 0.99, 'start': 6, 'end': 12}</code></pre>
+  </div>
+    <h3>3.2 第二层：AutoModel / AutoTokenizer（灵活）</h3>
+    <p>Auto类根据模型名称自动加载对应的模型和分词器，适合需要自定义处理流程的场景。</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from transformers import AutoTokenizer, AutoModel
+import torch
+
+# 自动加载
+tokenizer = AutoTokenizer.from_pretrained("bert-base-chinese")
+model = AutoModel.from_pretrained("bert-base-chinese")
+
+# 手动编码流程
+inputs = tokenizer("预训练模型改变了NLP", return_tensors="pt")
+with torch.no_grad():
+    outputs = model(**inputs)
+
+# last_hidden_state: (batch_size, seq_len, hidden_size)
+print(outputs.last_hidden_state.shape)  # torch.Size([1, 9, 768])
+
+# 取[CLS]向量作为句子表示
+cls_embedding = outputs.last_hidden_state[:, 0, :]
+print(cls_embedding.shape)  # torch.Size([1, 768])</code></pre>
+  </div>
+    <h3>3.3 第三层：具体模型类（最精细）</h3>
+    <p>直接使用特定任务的模型类（如<code>BertForSequenceClassification</code>），可以获得最精细的控制。</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from transformers import BertForSequenceClassification, BertTokenizer
+
+# 直接加载带分类头的模型
+model = BertForSequenceClassification.from_pretrained(
+    "bert-base-chinese",
+    num_labels=2  # 二分类任务
+)
+tokenizer = BertTokenizer.from_pretrained("bert-base-chinese")
+
+inputs = tokenizer("这部电影太精彩了", return_tensors="pt")
+outputs = model(**inputs)
+
+# logits: (batch_size, num_labels)
+print(outputs.logits.shape)  # torch.Size([1, 2])
+prediction = torch.argmax(outputs.logits, dim=-1)
+print(f"预测类别: {prediction.item()}")  # 0 或 1</code></pre>
+  </div><div class="callout callout-key">
+    <p><strong>选择建议：</strong>快速验证用 Pipeline；自定义流程用 AutoModel；需要精确控制模型结构或微调用具体模型类。实际项目中，大多数时候用第二层和第三层。</p>
+  </div>
+  </div><div class="section" id="llm-bert-family-s4">
+    <h2>预训练模型使用</h2>
+    
+    <h3>4.1 from_pretrained 机制</h3>
+    <p><code>from_pretrained()</code>是HuggingFace最核心的方法，它完成两件事：</p>
+    <ul>
+      <li><strong>下载模型权重</strong>：首次运行时从HuggingFace Hub下载，后续使用缓存</li>
+      <li><strong>构建模型架构</strong>：根据配置文件自动构建对应的模型结构并加载权重</li>
+    </ul>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from transformers import AutoModel, AutoTokenizer
+
+# 模型会缓存到 ~/.cache/huggingface/hub/
+model = AutoModel.from_pretrained("bert-base-chinese")
+tokenizer = AutoTokenizer.from_pretrained("bert-base-chinese")
+
+# 查看模型配置
+print(model.config)
+# BertConfig {
+#   "hidden_size": 768,
+#   "num_hidden_layers": 12,
+#   "num_attention_heads": 12,
+#   "intermediate_size": 3072,
+#   "vocab_size": 21128,
+#   ...
+# }</code></pre>
+  </div>
+    <h3>4.2 Tokenizer详解</h3>
+    <p>Tokenizer负责将自然语言文本转换为模型可以理解的数字序列。</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from transformers import BertTokenizer
+
+tokenizer = BertTokenizer.from_pretrained("bert-base-chinese")
+
+# 基本编码
+text = "我喜欢自然语言处理"
+tokens = tokenizer.tokenize(text)
+print(tokens)
+# ['我', '喜', '欢', '自', '然', '语', '言', '处', '理']
+
+# 转换为ID
+ids = tokenizer.convert_tokens_to_ids(tokens)
+print(ids)  # [2769, 1599, 3614, 5632, 4197, 6427, 6230, 1912, 4415]
+
+# 完整编码（推荐方式）
+encoding = tokenizer(
+    text,
+    padding="max_length",    # 填充到最大长度
+    max_length=20,           # 最大序列长度
+    truncation=True,         # 超长则截断
+    return_tensors="pt"      # 返回PyTorch张量
+)
+print(encoding.keys())
+# dict_keys(['input_ids', 'token_type_ids', 'attention_mask'])
+
+# 解码回文本
+decoded = tokenizer.decode(encoding["input_ids"][0], skip_special_tokens=True)
+print(decoded)  # 我喜欢自然语言处理</code></pre>
+  </div>
+    <h3>4.3 批量编码</h3>
+    <p>实际使用中，通常需要对一批文本进行编码。Tokenizer天然支持批量处理：</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>texts = [
+    "今天天气不错",
+    "机器学习是人工智能的核心技术",
+    "HuggingFace让NLP变得简单"
+]
+
+# 批量编码 —— 自动padding到同一批次中最长的序列
+batch = tokenizer(
+    texts,
+    padding=True,       # 动态填充（而非固定max_length）
+    truncation=True,
+    max_length=32,
+    return_tensors="pt"
+)
+
+print(batch["input_ids"].shape)  # torch.Size([3, 9])
+# 三条文本被填充到相同长度 9
+
+# 送入模型
+import torch
+from transformers import AutoModel
+
+model = AutoModel.from_pretrained("bert-base-chinese")
+with torch.no_grad():
+    outputs = model(**batch)
+
+# 获取每个句子的[CLS]表示
+sentence_embeddings = outputs.last_hidden_state[:, 0, :]
+print(sentence_embeddings.shape)  # torch.Size([3, 768])</code></pre>
+  </div><div class="callout callout-tip">
+    <p><strong>padding=True（动态填充）</strong>优于 padding='max_length'。前者只填充到当前批次中最长序列的长度，后者则一律填充到设定的最大长度，浪费计算资源。</p>
+  </div>
+  </div><div class="section" id="llm-bert-family-s5">
+    <h2>BERT文本分类实战</h2>
+    
+    <p>下面我们用完整的代码演示如何使用BERT进行中文文本分类任务。整个流程包括数据加载、分词、模型加载、训练和评估。</p>
+    <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>加载数据</strong><br>使用HuggingFace Datasets加载数据集，或自定义数据集。</div>
+  </div><div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>分词处理</strong><br>用Tokenizer对文本进行编码，生成模型输入格式。</div>
+  </div><div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>加载模型</strong><br>使用BertForSequenceClassification加载带分类头的预训练模型。</div>
+  </div><div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>训练</strong><br>使用Trainer API定义训练参数并启动训练。</div>
+  </div><div class="step">
+    <div class="step-num">5</div>
+    <div class="step-content"><strong>评估</strong><br>在测试集上评估模型性能。</div>
+  </div>
+    <h3>完整代码</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch
+from transformers import (
+    BertTokenizer,
+    BertForSequenceClassification,
+    Trainer,
+    TrainingArguments,
+)
+from datasets import Dataset
+import numpy as np
+
+# ========== Step 1: 准备数据 ==========
+train_texts = [
+    "这家餐厅的菜非常好吃，服务也很周到",
+    "电影剧情很无聊，浪费了两个小时",
+    "今天的天气真不错，适合出去散步",
+    "手机质量太差了，用了一周就坏了",
+    "老师讲得很清楚，学到了很多知识",
+    "快递太慢了，等了整整一周才到",
+]
+train_labels = [1, 0, 1, 0, 1, 0]  # 1=正面, 0=负面
+
+# 创建HuggingFace Dataset
+train_dataset = Dataset.from_dict({
+    "text": train_texts,
+    "label": train_labels,
+})
+
+# ========== Step 2: 分词处理 ==========
+tokenizer = BertTokenizer.from_pretrained("bert-base-chinese")
+
+def tokenize_function(examples):
+    return tokenizer(
+        examples["text"],
+        padding="max_length",
+        max_length=64,
+        truncation=True,
+    )
+
+tokenized_dataset = train_dataset.map(tokenize_function, batched=True)
+tokenized_dataset = tokenized_dataset.train_test_split(test_size=0.2)
+
+# ========== Step 3: 加载模型 ==========
+model = BertForSequenceClassification.from_pretrained(
+    "bert-base-chinese",
+    num_labels=2,
+)
+
+# ========== Step 4: 训练 ==========
+training_args = TrainingArguments(
+    output_dir="./results",
+    num_train_epochs=3,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    learning_rate=2e-5,
+    weight_decay=0.01,
+    eval_strategy="epoch",
+    save_strategy="epoch",
+    load_best_model_at_end=True,
+    logging_steps=10,
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized_dataset["train"],
+    eval_dataset=tokenized_dataset["test"],
+)
+
+trainer.train()
+
+# ========== Step 5: 评估 ==========
+results = trainer.evaluate()
+print(f"评估结果: {results}")
+
+# ========== 推理 ==========
+def predict(text):
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=64)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    pred = torch.argmax(outputs.logits, dim=-1).item()
+    return "正面" if pred == 1 else "负面"
+
+print(predict("这个产品真的很棒！"))  # 正面
+print(predict("太糟糕了，再也不买了"))  # 负面</code></pre>
+  </div><div class="callout callout-info">
+    <p><strong>学习率2e-5</strong>是BERT微调的经典起始值。太大会破坏预训练权重（灾难性遗忘），太小则收敛过慢。通常在1e-5到5e-5之间尝试。</p>
+  </div><div class="callout callout-warn">
+    <p>训练时建议使用<strong>GPU</strong>。在Google Colab中选择GPU运行时，或本地配置CUDA。CPU上训练一个epoch可能需要数十分钟，而GPU仅需几秒到几分钟。</p>
+  </div>
+  </div><div class="section" id="llm-bert-family-s6">
+    <h2>现代预训练模型</h2>
+    
+    <p>BERT的发布开启了预训练模型的新纪元。此后的几年里，大语言模型经历了飞速的发展和演变。</p>
+
+    <h3>6.1 发展时间线</h3>
+    <div class="step">
+    <div class="step-num">2018</div>
+    <div class="step-content"><strong>BERT / GPT-1</strong><br>双向编码器 vs 自回归生成器，两条路线并行发展。BERT在理解任务上大放异彩，GPT展示了生成式预训练的潜力。</div>
+  </div><div class="step">
+    <div class="step-num">2019</div>
+    <div class="step-content"><strong>GPT-2 / T5</strong><br>GPT-2展示了大规模语言模型的文本生成能力（1.5B参数），T5将所有NLP任务统一为文本到文本格式。</div>
+  </div><div class="step">
+    <div class="step-num">2020</div>
+    <div class="step-content"><strong>GPT-3</strong><br>175B参数，In-Context Learning能力首次涌现，无需微调即可完成多种任务，开启了大模型时代。</div>
+  </div><div class="step">
+    <div class="step-num">2022</div>
+    <div class="step-content"><strong>ChatGPT</strong><br>基于GPT-3.5，通过RLHF（人类反馈强化学习）对齐，实现了惊人的对话能力，引爆全球AI热潮。</div>
+  </div><div class="step">
+    <div class="step-num">2023</div>
+    <div class="step-content"><strong>LLaMA / 通义千问</strong><br>Meta开源LLaMA，推动了开源大模型生态；阿里推出通义千问（Qwen），中文能力突出。</div>
+  </div><div class="step">
+    <div class="step-num">2024-2026</div>
+    <div class="step-content"><strong>百花齐放</strong><br>GPT-4o、Claude、Gemini、DeepSeek、Qwen3等模型不断涌现，多模态、长上下文、推理能力持续突破。</div>
+  </div>
+    <h3>6.2 关键趋势</h3>
+    <table>
+    <tr><th>趋势</th><th>说明</th><th>代表</th></tr>
+    <tr><td>规模扩展</td><td>模型参数从亿级到万亿级，涌现出强大能力</td><td>GPT-4, Claude</td></tr>
+<tr><td>开源生态</td><td>开源模型缩小与闭源差距，促进社区发展</td><td>LLaMA, Qwen, DeepSeek</td></tr>
+<tr><td>多模态融合</td><td>文本、图像、音频、视频统一处理</td><td>GPT-4o, Gemini</td></tr>
+<tr><td>推理增强</td><td>通过Chain-of-Thought等技术增强推理能力</td><td>o1, DeepSeek-R1</td></tr>
+<tr><td>高效训练</td><td>MoE架构、量化技术降低训练和部署成本</td><td>Mixtral, Qwen-MoE</td></tr>
+
+  </table>
+    <h3>6.3 BERT vs GPT：两条路线</h3>
+    <div class="compare">
+    <div class="compare-card left"><h4>BERT系列（编码器）</h4><ul><li>双向注意力，同时看左右上下文</li><li>适合理解类任务（分类、NER、问答）</li><li>通过微调适配下游任务</li><li>参数量较小（百M~十亿级）</li><li>代表：BERT, RoBERTa, DeBERTa</li></ul></div>
+    <div class="compare-card right"><h4>GPT系列（解码器）</h4><ul><li>单向注意力，只看左侧上下文</li><li>适合生成类任务（对话、写作、代码）</li><li>通过Prompt/In-Context Learning</li><li>参数量巨大（十亿~万亿级）</li><li>代表：GPT-4, Claude, LLaMA, Qwen</li></ul></div>
+  </div><div class="callout callout-key">
+    <p>当前的趋势是<strong>解码器架构主导</strong>。GPT系列的自回归生成范式被证明在足够大的规模下可以涌现出理解能力，而且天然支持多任务和人机交互。但BERT系列在需要精确理解的场景（如搜索、分类）中仍有重要价值。</p>
+  </div>
+  </div>
+</div></section>

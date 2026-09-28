@@ -1,0 +1,133 @@
+<section class="llm-mod llm-m-tp llm-m-ts-tools" id="llm-ts-tools"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#b45309;--hero-b:#7c3aed;">
+  <h1>🛠️ 工具与运行时技术栈详解</h1>
+  <p>第 4·5·6 章技术点的完整展开：工具 Schema 设计、MCP、沙箱执行、Computer Use</p>
+</div>
+
+<div class="section" id="llm-ts-tools-s1">
+  <h2>工具 Schema 设计：工具描述即 API 文档</h2>
+  <p>工具的 JSON Schema 不是给开发者写的注释，而是给模型看的 API 文档。模型根据这份文档决定何时调用、传什么参数。写得差的 description 直接导致调用错误、参数乱填、该用工具时不用。</p>
+  <h3>好工具 vs 差工具</h3>
+  <table>
+    <thead><tr><th>维度</th><th>差</th><th>好</th></tr></thead>
+    <tbody>
+      <tr><td>description</td><td>「搜索信息」</td><td>「当用户需要关于最近事件、实时数据或训练数据截止后的信息时调用。不要用于查找文档中已有的内容。」</td></tr>
+      <tr><td>参数命名</td><td><code>q</code></td><td><code>user_query</code></td></tr>
+      <tr><td>取值约束</td><td>type: string（什么都能传）</td><td>enum: ["web", "image", "news"]</td></tr>
+      <tr><td>返回值说明</td><td>无</td><td>description 里说明「返回 JSON 数组，每项含 title、url、snippet」</td></tr>
+    </tbody>
+  </table>
+  <p><strong>参数传递的保真性</strong>：让模型「复述」长内容（代码、文档段落、中文标点）会掉字、改字。设计上应用引用或句柄传递：工具返回一个 resource_id，下一步工具用这个 id 操作，而不是把整段内容塞进参数。这对代码文件操作尤其重要——让模型直接输出要写入的文件内容，往往比让它在工具调用参数里组装一大段 JSON 里的字符串更可靠。</p>
+</div>
+
+<div class="section" id="llm-ts-tools-s2">
+  <h2>MCP：Model Context Protocol</h2>
+  <p>MCP 解决的是工具接入的 N×M 问题：每个 AI 应用需要对接 N 个工具，每个工具需要适配 M 个 AI 产品，结果是 N×M 的适配工作。MCP 把它变成 N+M：每个工具只需实现一个 MCP Server，每个 AI 只需实现一个 MCP Client。</p>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    subgraph "MCP Client AI 应用"
+        C1[Claude Code]
+        C2[Cursor]
+        C3[自定义 Agent]
+    end
+    subgraph "MCP Server 工具提供方"
+        S1[文件系统]
+        S2[数据库]
+        S3[搜索引擎]
+        S4[代码执行]
+    end
+    C1 & C2 & C3 --> Protocol[MCP 协议]
+    Protocol --> S1 & S2 & S3 & S4
+</pre></div>
+  <h3>三类能力</h3>
+  <ul>
+    <li><strong>Tools</strong>：可调用的函数，模型主动触发（如 search、run_code）。</li>
+    <li><strong>Resources</strong>：可读取的数据源，按需拉取内容（如文件内容、数据库记录）。</li>
+    <li><strong>Prompts</strong>：服务端提供的提示词模板，客户端可按名称调用填充。</li>
+  </ul>
+  <h3>Transport 与安全</h3>
+  <p>本地工具用 <strong>stdio transport</strong>（子进程通信，无网络开销）；远程工具用 <strong>HTTP + SSE</strong>。权限边界是 MCP 的核心安全问题：MCP Server 以什么权限运行？能访问什么文件系统路径？接入前必须明确这些边界，否则一个被攻击的工具（间接注入）可以让模型通过 MCP 做任意操作。</p>
+</div>
+
+<div class="section" id="llm-ts-tools-s3">
+  <h2>文件编辑工具的三种范式</h2>
+  <p>Coding Agent 最核心的工具之一是文件编辑。三种常见设计各有不同的失败模式：</p>
+  <ul>
+    <li><strong>全量重写</strong>：输出文件的完整新内容。简单可靠，但模型容易在复制过程中改变不该改的地方（特别是大文件），且 token 消耗高。</li>
+    <li><strong>Unified diff</strong>：输出 <code>@@ -N,M +N,M @@</code> 格式的补丁。模型生成 diff 的出错率很高（行号算错、上下文行不匹配），工程可用性差，不推荐。</li>
+    <li><strong>str_replace（精确字符串替换）</strong>：给出 old_string 和 new_string，工具找到唯一匹配后替换。要求 old_string 在文件中唯一存在；如果不唯一，工具应返回错误并告诉模型有几处匹配，让模型扩大上下文重试。这是目前最实用的设计——模型不需要理解整个文件，只需要正确描述要修改的局部。</li>
+  </ul>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    A[全量重写<br/>简单 高 token] --> B[str_replace<br/>精确 低 token<br/>需唯一匹配]
+    A --> C[Unified diff<br/>模型出错率高<br/>不推荐]
+    B --> D[匹配不唯一<br/>返回有几处<br/>让模型扩大上下文]
+</pre></div>
+</div>
+
+<div class="section" id="llm-ts-tools-s4">
+  <h2>代码搜索与沙箱执行</h2>
+  <h3>代码搜索工具</h3>
+  <p>搜索结果必须截断：grep 一行 200KB 的代码不是帮助，是直接撑爆上下文。策略：只返回匹配行 ±3 行上下文；每次最多返回 20–30 个结果；超出提示「找到 N 处，只显示前 20，请用更精确的模式重试」。</p>
+  <p>语义搜索（代码 embedding）适合「找功能相似的函数」，文本搜索（ripgrep）适合「找这个符号名在哪里用了」。两者分工明确，不要互相替代。</p>
+  <h3>沙箱执行</h3>
+  <p>让模型运行任意代码，默认必须在隔离环境中执行。隔离级别对比：</p>
+  <table>
+    <thead><tr><th>方案</th><th>隔离强度</th><th>性能开销</th><th>适用场景</th></tr></thead>
+    <tbody>
+      <tr><td>容器（Docker）</td><td>中</td><td>低</td><td>大多数 Coding Agent 场景</td></tr>
+      <tr><td>VM（QEMU / Firecracker）</td><td>高</td><td>中</td><td>执行不可信代码，如用户提交的代码</td></tr>
+      <tr><td>gVisor</td><td>高（用户态内核）</td><td>中高</td><td>高安全需求但需要 Linux syscall 兼容</td></tr>
+    </tbody>
+  </table>
+  <p>沙箱必须同时限制：文件系统（只读挂载或白名单路径）、网络（默认断网，必要时才开放白名单域名）、资源（CPU 时间、内存、子进程数上限）、超时（防止无限循环）。</p>
+</div>
+
+<div class="section" id="llm-ts-tools-s5">
+  <h2>权限与人类确认闸门</h2>
+  <p>不是所有操作都需要确认，过度确认导致「确认疲劳」——用户习惯性点确认，就等于没有确认。原则：按操作的不可逆程度分级。</p>
+  <ul>
+    <li><strong>自动放行</strong>：只读操作（读文件、搜索、列目录）、临时文件写入、在沙箱内的执行。</li>
+    <li><strong>提示但不等待</strong>：新建文件、安装依赖（说明正在做什么，继续执行）。</li>
+    <li><strong>等待确认</strong>：修改现有文件（展示 diff）、运行影响系统的命令（显示完整命令）。</li>
+    <li><strong>强确认（展示影响范围）</strong>：删除文件或目录、修改生产配置、执行外部 API 调用（可能产生费用或副作用）。</li>
+  </ul>
+  <p>批量授权（「之后的 X 操作全部自动批准」）是减少疲劳的合理设计，但要在会话级而不是全局级，且要在批准时明确告知范围。</p>
+</div>
+
+<div class="section" id="llm-ts-tools-s6">
+  <h2>Computer Use 与 GUI Agent</h2>
+  <p>Computer Use 让模型通过截图感知、通过鼠标键盘操作来控制 GUI 应用——不需要 API，直接操作界面。</p>
+  <h3>动作空间设计</h3>
+  <ul>
+    <li><strong>坐标点击</strong>：模型输出屏幕坐标，最通用但分辨率和缩放敏感，坐标漂移是常见失败。</li>
+    <li><strong>元素选择</strong>：通过无障碍树（Accessibility Tree）选择元素，稳定性好但需要应用暴露 a11y 树，并非所有应用都支持。</li>
+    <li><strong>混合模式</strong>：先尝试无障碍树，失败再回退到坐标，是实践中最稳定的方案。</li>
+  </ul>
+  <h3>成本与限制</h3>
+  <p>截图是 Computer Use 的主要 token 消耗来源。一张 1280×720 截图约 1000–1500 tokens（依编码方式），若每步都截图，长任务成本会很高。策略：只在需要验证状态时截图；部分操作（输入文本、滚动）可以在不截图的情况下执行。</p>
+  <p>视觉定位（grounding）是最难的部分：模型需要从截图中准确找到目标元素的位置，在密集 UI、小按钮、动态内容上出错率高。实践中需要明确的错误恢复策略：定位失败时重试截图 + 放大目标区域，而不是盲目重复同样的动作。</p>
+</div>
+
+<div class="section" id="llm-ts-tools-s7">
+  <h2>语音链路与 VLA</h2>
+  <h3>语音对话链路</h3>
+  <div class="diagram"><pre class="mermaid">
+graph LR
+    Mic[麦克风输入] --> VAD[端点检测 VAD<br/>识别说话结束]
+    VAD --> ASR[语音识别 ASR<br/>语音转文字]
+    ASR --> LLM[LLM 推理]
+    LLM --> TTS[语音合成 TTS<br/>文字转语音]
+    TTS --> Speaker[播放]
+    subgraph "延迟构成"
+        ASR --> L1[ASR 延迟 100-500ms]
+        LLM --> L2[TTFT 200-800ms]
+        TTS --> L3[TTS 50-200ms]
+    end
+</pre></div>
+  <p>级联流水线（ASR → LLM → TTS）的总延迟通常在 500–1500ms，对自然对话偏高。全双工模式允许说话中途打断，需要流式 ASR + 流式 LLM + 实时 TTS，以及打断检测（VAD + 意图判断）。</p>
+  <h3>VLA：视觉-语言-动作模型</h3>
+  <p>VLA 接受视觉（摄像头/渲染画面）+ 语言（任务描述）输入，输出机器人控制指令（关节角度、末端执行器位姿）。控制频率约 5–50Hz（远低于传统机器人控制器的 1kHz），因此通常分层：VLA 做高层规划（每隔 0.2–1 秒），低层控制器做轨迹插值和力控。</p>
+  <p>仿真到真实的差距（sim-to-real gap）是 VLA 最大的工程挑战：仿真里训练好的策略在真实物体、真实光线、真实摩擦系数下往往失效。主要缓解手段：领域随机化（训练时随机化物理参数）和 real-to-sim（用真实数据对仿真校准）。</p>
+</div>
+</div></section>

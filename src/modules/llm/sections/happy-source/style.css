@@ -1,0 +1,105 @@
+.llm-scope .llm-m-happy-source .module-wrapper { min-width: 0; max-width: 100%; }
+.llm-scope .llm-m-happy-source .module-wrapper,
+.llm-scope .llm-m-happy-source .happy-source-file { overflow-wrap: anywhere; }
+.llm-scope .llm-m-happy-source { font-size: var(--fs); line-height: 1.75; }
+.llm-scope .llm-m-happy-source .source-meta { margin-top: .8rem; color: var(--lc-text-muted); font-size: .82rem; }
+.llm-scope .llm-m-happy-source .happy-source-file { margin: 2rem 0; }
+.llm-scope .llm-m-happy-source .source-file-label { display: inline-flex; margin: .25rem 0 1rem; padding: .35rem .7rem; border-radius: 999px; background: var(--lc-gray-bg); border: 1px solid var(--lc-border); color: var(--lc-text-muted); font-size: .78rem; font-family: 'JetBrains Mono', monospace; }
+.llm-scope .llm-m-happy-source h2 { margin: 34px 0 12px; padding-bottom: 8px; font-size: 20px; line-height: 1.45; border-bottom: 1px solid var(--lc-border); font-weight: 700; letter-spacing: .01em; }
+.llm-scope .llm-m-happy-source h3 { margin: 24px 0 8px; font-size: 16.5px; line-height: 1.5; font-weight: 600; }
+.llm-scope .llm-m-happy-source h4 { margin: 18px 0 6px; font-size: 15px; line-height: 1.5; font-weight: 600; }
+.llm-scope .llm-m-happy-source p { margin: .8rem 0; line-height: 1.8; }
+.llm-scope .llm-m-happy-source li { margin: .3rem 0; line-height: 1.75; }
+.llm-scope .llm-m-happy-source ul,
+.llm-scope .llm-m-happy-source ol { padding-left: 1.5rem; margin: .65rem 0; }
+.llm-scope .llm-m-happy-source .code-block-wrapper {
+  position: relative; margin: 16px 0; border: 1px solid #313244;
+  border-radius: 10px; overflow: hidden; background: #181825;
+}
+.llm-scope .llm-m-happy-source .code-header {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  min-height: 2.25rem; padding: .45rem .75rem;
+  border-bottom: 1px solid #313244; background: #181825;
+}
+.llm-scope .llm-m-happy-source .code-lang {
+  color: var(--accent); font-size: .72rem; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+.llm-scope .llm-m-happy-source .copy-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 1.75rem; padding: .2rem .65rem; border: 1px solid #45475a;
+  border-radius: 6px; background: rgba(205,214,244,.1); color: #a6adc8;
+  font: inherit; font-size: 11.5px; line-height: 1.2; cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.llm-scope .llm-m-happy-source .copy-btn:hover,
+.llm-scope .llm-m-happy-source .copy-btn:focus-visible {
+  color: var(--text); border-color: var(--accent); background: var(--chip);
+}
+.llm-scope .llm-m-happy-source pre {
+  margin: 0; padding: .9rem 1rem; overflow-x: auto; max-width: 100%;
+  background: #1e1e2e; color: #cdd6f4;
+  font-size: 13px; line-height: 1.6; tab-size: 2;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  white-space: pre;
+}
+.llm-scope .llm-m-happy-source pre code { font: inherit; color: inherit; }
+.llm-scope .llm-m-happy-source p code,
+.llm-scope .llm-m-happy-source li code,
+.llm-scope .llm-m-happy-source td code {
+  padding: 1px 5px; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--bg-code); color: var(--inl-text); font-size: .88em;
+}
+.llm-scope .llm-m-happy-source .math-display,
+.llm-scope .llm-m-happy-source .math-display-inline {
+  margin: 16px 0; padding: 12px 18px; text-align: center; overflow-x: auto;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+  color: var(--text-strong); font-family: "Cambria Math", "STIX Two Math", Georgia, "Times New Roman", serif;
+  font-size: 1.02em; line-height: 1.75; white-space: normal;
+}
+.llm-scope .llm-m-happy-source .math-display-inline { display: block; }
+.llm-scope .llm-m-happy-source .math-display br,
+.llm-scope .llm-m-happy-source .math-display-inline br { display: block; content: ''; margin-top: .35em; }
+.llm-scope .llm-m-happy-source .math-display sup,
+.llm-scope .llm-m-happy-source .math-display sub,
+.llm-scope .llm-m-happy-source .math-display-inline sup,
+.llm-scope .llm-m-happy-source .math-display-inline sub { font-size: .72em; line-height: 0; }
+.llm-scope .llm-m-happy-source .mtext { font-style: normal; font-family: inherit; }
+.llm-scope .llm-m-happy-source .mtext.bf { font-weight: 700; }
+.llm-scope .llm-m-happy-source .mcal { font-style: italic; }
+.llm-scope .llm-m-happy-source .math-space { display: inline-block; width: .35em; }
+.llm-scope .llm-m-happy-source .math-environment { display: inline-flex; align-items: center; vertical-align: middle; }
+.llm-scope .llm-m-happy-source .math-delim { font-size: 1.7em; line-height: 1; }
+.llm-scope .llm-m-happy-source table.math-matrix { display: inline-table; width: auto; margin: 0 .2em; border: 0; border-collapse: collapse; font-size: 1em; background: transparent; }
+.llm-scope .llm-m-happy-source table.math-matrix td { padding: .05em .38em; border: 0; background: transparent; white-space: nowrap; }
+.llm-scope .llm-m-happy-source .math-cases table.math-matrix td:first-child { padding-right: .7em; }
+.llm-scope .llm-m-happy-source .math-overline { text-decoration: overline; }
+.llm-scope .llm-m-happy-source .math-underline { text-decoration: underline; }
+.llm-scope .llm-m-happy-source .math-brace { display: inline-block; border-bottom: 1px solid currentColor; padding: 0 .1em .08em; }
+.llm-scope .llm-m-happy-source .math-boxed { display: inline-block; padding: 0 .2em; border: 1px solid currentColor; border-radius: 2px; }
+.llm-scope .llm-m-happy-source .msqrt { display: inline-flex; align-items: flex-start; }
+.llm-scope .llm-m-happy-source .msqrt-arg { display: inline-block; border-top: 1px solid currentColor; padding: 0 .12em; }
+.llm-scope .llm-m-happy-source .mfrac { display: inline-block; vertical-align: middle; min-width: 1.2em; text-align: center; line-height: 1.15; margin: 0 .1em; }
+.llm-scope .llm-m-happy-source .mfrac .mnum { display: block; padding: 0 .22em .08em; border-bottom: 1px solid currentColor; }
+.llm-scope .llm-m-happy-source .mfrac .mden { display: block; padding: .08em .22em 0; }
+.llm-scope .llm-m-happy-source .happy-figure { margin: 1.25rem auto; text-align: center; max-width: 100%; }
+.llm-scope .llm-m-happy-source .happy-figure img { display: block; max-width: 100%; height: auto; margin: 0 auto; border-radius: 10px; border: 1px solid var(--lc-border); }
+.llm-scope .llm-m-happy-source .happy-figure figcaption { margin-top: .45rem; color: var(--lc-text-muted); font-size: .8rem; }
+.llm-scope .llm-m-happy-source blockquote { margin: 1rem 0; padding: .75rem 1rem; border-left: 4px solid var(--lc-primary); background: var(--lc-gray-bg); color: var(--lc-text-secondary); }
+.llm-scope .llm-m-happy-source hr { border: 0; border-top: 1px solid var(--lc-border); margin: 2rem 0; }
+.llm-scope .llm-m-happy-source .happy-gallery-details { margin-top: 1.5rem; border: 1px solid var(--lc-border); border-radius: 14px; padding: .9rem 1.1rem; background: var(--lc-bg); }
+.llm-scope .llm-m-happy-source .happy-gallery-details summary { cursor: pointer; color: var(--lc-primary); font-weight: 650; }
+.llm-scope .llm-m-happy-source .happy-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; margin-top: 1rem; }
+.llm-scope .llm-m-happy-source .happy-gallery-item { min-width: 0; margin: 0; padding: .55rem; border: 1px solid var(--lc-border); border-radius: 10px; background: var(--lc-gray-bg); }
+.llm-scope .llm-m-happy-source .happy-gallery-item img { display: block; width: 100%; height: 130px; object-fit: contain; border-radius: 6px; background: var(--lc-bg); }
+.llm-scope .llm-m-happy-source .happy-gallery-item figcaption { margin-top: .4rem; color: var(--lc-text-muted); font-size: .68rem; line-height: 1.35; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .llm-scope .llm-m-happy-source h2 { font-size: 1.25rem; }
+  .llm-scope .llm-m-happy-source h3 { font-size: 1.05rem; }
+  .llm-scope .llm-m-happy-source pre { padding: 10px; font-size: 11.5px; line-height: 1.5; }
+  .llm-scope .llm-m-happy-source .math-display,
+  .llm-scope .llm-m-happy-source .math-display-inline { padding: 10px 12px; font-size: .98em; text-align: left; }
+  .llm-scope .llm-m-happy-source .happy-gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+  .llm-scope .llm-m-happy-source .happy-gallery-item img { height: 100px; }
+}

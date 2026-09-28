@@ -1,0 +1,190 @@
+<section class="llm-mod llm-m-rnn-evolution" id="llm-rnn-evolution"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>🔄 模块0：序列模型演进</h1>
+  <p>从RNN到LSTM，理解序列建模的前世今生</p>
+</div><div class="section" id="llm-rnn-evolution-s1">
+    <h2>传统RNN</h2>
+    
+    <p>自然语言天然是序列数据——词语的顺序至关重要。RNN（循环神经网络）是第一个专门为序列建模设计的神经网络。</p>
+
+    <h3>RNN核心思想</h3>
+    <p>RNN在每个时间步接收当前输入和上一步的隐藏状态，输出新的隐藏状态：</p>
+    <p><code>h_t = tanh(W_hh · h_{t-1} + W_xh · x_t + b)</code></p>
+
+    <h3>RNN架构类型</h3>
+    <table>
+    <tr><th>类型</th><th>输入/输出</th><th>示例应用</th></tr>
+    <tr><td>N vs 1</td><td>序列输入 → 单一输出</td><td>文本分类、情感分析</td></tr>
+<tr><td>1 vs N</td><td>单一输入 → 序列输出</td><td>图像描述生成</td></tr>
+<tr><td>N vs N</td><td>序列输入 → 等长序列输出</td><td>词性标注、NER</td></tr>
+<tr><td>N vs M (Seq2Seq)</td><td>不等长序列 → 不等长序列</td><td>机器翻译、文本摘要</td></tr>
+
+  </table>
+
+    <h3>PyTorch RNN使用</h3>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch
+import torch.nn as nn
+
+# PyTorch RNN 使用示例
+rnn = nn.RNN(
+    input_size=128,     # 输入特征维度
+    hidden_size=256,    # 隐藏状态维度
+    num_layers=2,       # RNN层数
+    batch_first=True,
+)
+
+# 输入: [batch_size, seq_length, input_size]
+x = torch.randn(32, 50, 128)  # batch=32, 序列长50
+output, hidden = rnn(x)
+
+print(f"输出形状: {output.shape}")   # [32, 50, 256]
+print(f"隐藏状态: {hidden.shape}")   # [2, 32, 256]</code></pre>
+  </div>
+  </div><div class="section" id="llm-rnn-evolution-s2">
+    <h2>梯度消失与爆炸</h2>
+    
+    <p>RNN最大的问题是<strong>梯度消失/爆炸</strong>，导致无法学习长距离依赖关系。</p>
+
+    <h3>问题根源</h3>
+    <p>反向传播时，梯度需要沿时间步连乘：</p>
+    <p><code>∂L/∂h_0 = ∏(∂h_t/∂h_{t-1}) · ∂L/∂h_T</code></p>
+    <ul>
+        <li>如果 <code>|∂h_t/∂h_{t-1}| < 1</code>：连乘后梯度趋近于0（<strong>梯度消失</strong>）</li>
+        <li>如果 <code>|∂h_t/∂h_{t-1}| > 1</code>：连乘后梯度趋近于无穷（<strong>梯度爆炸</strong>）</li>
+    </ul>
+
+    <h3>解决方案</h3>
+    <table>
+    <tr><th>问题</th><th>解决方案</th><th>原理</th></tr>
+    <tr><td>梯度爆炸</td><td>梯度裁剪（Gradient Clipping）</td><td>当梯度范数超过阈值时进行缩放</td></tr>
+<tr><td>梯度消失</td><td>LSTM / GRU 门控机制</td><td>通过门控选择性保留/遗忘信息</td></tr>
+<tr><td>梯度消失</td><td>残差连接（Residual Connection）</td><td>跳跃连接让梯度直接传播</td></tr>
+
+  </table>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch.nn as nn
+
+# 梯度裁剪示例
+model = nn.RNN(128, 256, num_layers=2, batch_first=True)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+# 训练循环中
+loss.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # 梯度裁剪
+optimizer.step()</code></pre>
+  </div>
+  </div><div class="section" id="llm-rnn-evolution-s3">
+    <h2>LSTM详解</h2>
+    
+    <p>LSTM（Long Short-Term Memory）通过<strong>三个门控机制</strong>解决了梯度消失问题，能够学习长距离依赖。</p>
+
+    <h3>三个门控</h3>
+    <table>
+    <tr><th>门</th><th>公式</th><th>作用</th></tr>
+    <tr><td>遗忘门 f</td><td>f = σ(W_f · [h_{t-1}, x_t] + b_f)</td><td>决定丢弃细胞状态中的哪些信息</td></tr>
+<tr><td>输入门 i</td><td>i = σ(W_i · [h_{t-1}, x_t] + b_i)</td><td>决定将哪些新信息写入细胞状态</td></tr>
+<tr><td>输出门 o</td><td>o = σ(W_o · [h_{t-1}, x_t] + b_o)</td><td>决定细胞状态的哪些部分输出</td></tr>
+
+  </table>
+    <h3>LSTM vs RNN</h3>
+    <p>LSTM引入了<strong>细胞状态（Cell State）</strong>作为信息的"高速公路"，梯度可以沿细胞状态无阻碍地传播。</p>
+
+    <h3>Bi-LSTM</h3>
+    <p>双向LSTM同时从左到右和从右到左读取序列，捕捉双向上下文信息：</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch
+import torch.nn as nn
+
+# LSTM
+lstm = nn.LSTM(input_size=128, hidden_size=256,
+               num_layers=2, batch_first=True, bidirectional=True)
+
+x = torch.randn(32, 50, 128)
+output, (hidden, cell) = lstm(x)
+
+print(f"Bi-LSTM输出: {output.shape}")  # [32, 50, 512] (256*2方向)
+print(f"隐藏状态: {hidden.shape}")     # [4, 32, 256] (2层*2方向)</code></pre>
+  </div>
+  </div><div class="section" id="llm-rnn-evolution-s4">
+    <h2>GRU简介</h2>
+    
+    <p>GRU（Gated Recurrent Unit）是LSTM的简化版本，只有两个门，参数量更少。</p>
+
+    <h3>LSTM vs GRU</h3>
+    <table>
+    <tr><th>特性</th><th>LSTM</th><th>GRU</th></tr>
+    <tr><td>门控数量</td><td>3个（遗忘/输入/输出）</td><td>2个（更新/重置）</td></tr>
+<tr><td>参数量</td><td>较多</td><td>较少（约LSTM的75%）</td></tr>
+<tr><td>训练速度</td><td>较慢</td><td>较快</td></tr>
+<tr><td>效果</td><td>长序列更好</td><td>短序列相当</td></tr>
+<tr><td>使用建议</td><td>序列很长、数据充足</td><td>数据有限、需要快速训练</td></tr>
+
+  </table>
+    <div class="callout callout-tip">
+    <p>💡 <strong>选型建议：</strong>在现代NLP中，LSTM/GRU已被Transformer大幅取代。但在时序预测、边缘设备推理等场景，GRU仍然是不错的选择。</p>
+  </div>
+  </div><div class="section" id="llm-rnn-evolution-s5">
+    <h2>从RNN到Transformer</h2>
+    
+    <p>尽管LSTM/GRU解决了梯度消失，但RNN架构有固有缺陷，最终被Transformer取代。</p>
+
+    <h3>RNN的固有缺陷</h3>
+    <table>
+    <tr><th>缺陷</th><th>说明</th><th>Transformer如何解决</th></tr>
+    <tr><td>无法并行</td><td>必须按顺序逐步计算，训练慢</td><td>自注意力可并行计算所有位置</td></tr>
+<tr><td>长距离依赖弱</td><td>信息经过多步传递会衰减</td><td>任意两个位置直接交互，路径长度O(1)</td></tr>
+<tr><td>信息瓶颈</td><td>Seq2Seq将整个输入压缩为固定向量</td><td>注意力机制直接访问所有输入位置</td></tr>
+
+  </table>
+    <div class="callout callout-key">
+    <p>🔑 <strong>关键转折点：</strong>2017年Google发表"Attention Is All You Need"，提出完全基于注意力机制的Transformer架构，摒弃了RNN的循环结构，开启了大模型时代。</p>
+  </div>
+  </div><div class="section" id="llm-rnn-evolution-s6">
+    <h2>实践：LSTM文本分类</h2>
+    
+    <p>用PyTorch实现一个基于Bi-LSTM的情感分析分类器。</p>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>import torch
+import torch.nn as nn
+
+class LSTMClassifier(nn.Module):
+    """基于LSTM的文本分类器"""
+    def __init__(self, vocab_size, embed_dim, hidden_dim, num_classes):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.lstm = nn.LSTM(embed_dim, hidden_dim, num_layers=2,
+                           batch_first=True, bidirectional=True, dropout=0.3)
+        self.fc = nn.Linear(hidden_dim * 2, num_classes)  # *2 for bidirectional
+
+    def forward(self, x):
+        emb = self.embedding(x)            # [B, L, E]
+        output, (hidden, _) = self.lstm(emb)  # hidden: [4, B, H]
+        # 取最后一层的两个方向拼接
+        hidden = torch.cat([hidden[-2], hidden[-1]], dim=1)  # [B, 2*H]
+        return self.fc(hidden)              # [B, num_classes]
+
+# 使用示例
+model = LSTMClassifier(vocab_size=30000, embed_dim=128,
+                       hidden_dim=256, num_classes=2)
+x = torch.randint(0, 30000, (32, 50))  # [batch=32, seq_len=50]
+logits = model(x)
+print(f"分类输出: {logits.shape}")  # [32, 2]</code></pre>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 这个LSTM分类器在小数据集上效果不错，但随着数据量增加，BERT微调会显著超越它。</p>
+  </div>
+  </div>
+</div></section>

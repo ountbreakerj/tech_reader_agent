@@ -1,0 +1,94 @@
+
+.llm-m-rnn-evolution .module-wrapper *, .llm-m-rnn-evolution .module-wrapper *::before, .llm-m-rnn-evolution .module-wrapper *::after { box-sizing: border-box; margin: 0; padding: 0; }
+.llm-m-rnn-evolution h1 { font-size: 1.875rem; text-align: left; margin: 0 0 0.75rem;  font-weight: 700; letter-spacing: -0.025em; line-height: 1.3; }
+.llm-m-rnn-evolution h1 + .subtitle { text-align: left;  font-size: 1.1rem; margin-bottom: 2rem; line-height: 1.6; }
+.llm-m-rnn-evolution h2 { font-size: 1.5rem;  margin: 2.5rem 0 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--lc-border); display: block; font-weight: 700; letter-spacing: -0.015em; line-height: 1.4; }
+.llm-m-rnn-evolution h3 { font-size: 1.2rem;  margin: 2rem 0 0.5rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.4; }
+.llm-m-rnn-evolution h4 { font-size: 1.05rem;  margin: 1.5rem 0 0.5rem; font-weight: 600; }
+.llm-m-rnn-evolution p { margin: 0.75rem 0;  line-height: 1.75; }
+.llm-m-rnn-evolution strong { font-weight: 600; }
+.llm-m-rnn-evolution a { text-decoration: none; transition: color 0.15s ease; }
+.llm-m-rnn-evolution a:hover { text-decoration: underline; }
+.llm-m-rnn-evolution ul, .llm-m-rnn-evolution ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+.llm-m-rnn-evolution li { margin: 0.25rem 0;  line-height: 1.75; }
+.llm-m-rnn-evolution .hero { border-radius: 16px; padding: 2rem;
+        margin: 2rem 0; text-align: left;
+        border: 1px solid var(--lc-border); }
+.llm-m-rnn-evolution .hero h4 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.llm-m-rnn-evolution .section { border-radius: 16px; padding: 2rem 2.5rem;
+        margin: 2rem 0;  border: 1px solid var(--lc-border);
+        transition: opacity 0.5s ease, transform 0.5s ease; }
+.llm-m-rnn-evolution .section.visible { opacity: 1; }
+.llm-m-rnn-evolution .callout { border-radius: 12px; padding: 1rem 1.25rem; margin: 1.25rem 0;
+        position: relative; padding-left: 2.75rem; font-size: 0.93rem;
+        border: 1px solid; }
+.llm-m-rnn-evolution .callout::before { position: absolute; left: 0.85rem; top: 1rem; font-size: 1.1rem; }
+.llm-m-rnn-evolution .callout-tip::before { content: '💡'; }
+.llm-m-rnn-evolution .callout-warn::before { content: '⚠️'; }
+.llm-m-rnn-evolution .callout-analogy::before { content: '🔗'; }
+.llm-m-rnn-evolution .callout-key::before { content: '🔑'; }
+.llm-m-rnn-evolution .callout-info::before { content: '📌'; }
+.llm-m-rnn-evolution .callout-practice { border-width: 2px; }
+.llm-m-rnn-evolution .callout-practice::before { content: '📝'; }
+.llm-m-rnn-evolution .practice-header { display: flex; align-items: center; gap: 0.5rem;
+        font-size: 1rem; font-weight: 700;
+        margin-bottom: 0.75rem; letter-spacing: -0.01em; }
+.llm-m-rnn-evolution .practice-header .badge { display: inline-flex; align-items: center; gap: 0.25rem;
+        font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.5rem;
+        border-radius: 9999px; letter-spacing: 0.03em; }
+.llm-m-rnn-evolution .practice- .practice-body p { margin: 0.4rem 0; font-size: 0.93rem; }
+.llm-m-rnn-evolution .practice-hint { margin-top: 0.75rem; padding: 0.6rem 0.9rem;
+         border-radius: 8px;
+        font-size: 0.85rem;  border: 1px dashed #86efac; }
+.llm-m-rnn-evolution .code-block-wrapper { position: relative; margin: 1rem 0; border-radius: 12px;
+        overflow: visible; border: 1px solid #313244; }
+.llm-m-rnn-evolution .code-header { display: flex; align-items: center; justify-content: space-between;
+          padding: 0.5rem 1rem; border-bottom: 1px solid #313244; }
+.llm-m-rnn-evolution .code-lang { font-size: 0.75rem;  font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.06em;
+        font-family: 'JetBrains Mono', monospace; }
+.llm-m-rnn-evolution .copy-btn { display: flex; align-items: center; gap: 0.4rem;
+        border: 1px solid #45475a; border-radius: 6px;
+        font-size: 0.75rem; padding: 0.25rem 0.65rem;
+        cursor: pointer; transition: all 0.15s ease; font-family: inherit; }
+.llm-m-rnn-evolution pre { border-radius: 0;
+        padding: 1.15rem 1.25rem; overflow-x: auto; margin: 0;
+        font-size: 0.87rem; line-height: 1.65;
+        font-family: 'JetBrains Mono', monospace; }
+.llm-m-rnn-evolution pre code { font-family: inherit; }
+.llm-m-rnn-evolution p code, .llm-m-rnn-evolution li code, .llm-m-rnn-evolution td code { padding: 0.15rem 0.35rem; border-radius: 4px;
+        font-size: 0.88em;  font-family: 'JetBrains Mono', monospace;
+        border: 1px solid var(--lc-border); }
+.llm-m-rnn-evolution .cmt { font-style: italic; }
+.llm-m-rnn-evolution table { width: 100%; border-collapse: collapse; margin: 1.25rem 0;
+        font-size: 0.92rem; border-radius: 12px; overflow: visible;
+        border: 1px solid var(--lc-border); }
+.llm-m-rnn-evolution th { padding: 0.6rem 1rem;
+        text-align: left; font-weight: 600; border-bottom: 1px solid var(--lc-border); }
+.llm-m-rnn-evolution td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--lc-border-light); }
+.llm-m-rnn-evolution tr:last-child td { border-bottom: none; }
+.llm-m-rnn-evolution .diagram { border: 1px solid var(--lc-border); border-radius: 16px;
+        padding: 1.5rem; margin: 1.5rem 0; text-align: center; overflow-x: auto; }
+.llm-m-rnn-evolution .diagram .caption { font-size: 0.85rem;  margin-top: 0.8rem; font-style: italic; }
+.llm-m-rnn-evolution .step { display: flex; align-items: flex-start; gap: 1rem;
+        margin: 0.75rem 0; padding: 0.85rem 1.15rem;
+         border-radius: 12px;
+        border: 1px solid var(--lc-border); }
+.llm-m-rnn-evolution .step-num { width: 1.75rem; height: 1.75rem; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-weight: 700; flex-shrink: 0; font-size: 0.8rem; }
+.llm-m-rnn-evolution .step-content { flex: 1; }
+.llm-m-rnn-evolution .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.25rem 0; }
+.llm-m-rnn-evolution .compare-card { border-radius: 12px; padding: 1.25rem;
+        border: 1px solid var(--lc-border); }
+.llm-m-rnn-evolution .compare-card h4 { margin: 0 0 0.75rem; text-align: center; }
+.llm-m-rnn-evolution .footer { text-align: center;  font-size: 0.85rem;
+        margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--lc-border); }
+@media (max-width: 600px) {
+.llm-m-rnn-evolution h1 { font-size: 1.5rem; }
+.llm-m-rnn-evolution .compare { grid-template-columns: 1fr; }
+.llm-m-rnn-evolution pre { font-size: 0.8rem; padding: 1rem; }
+.llm-m-rnn-evolution .section { padding: 1.25rem; border-radius: 12px; }
+.llm-m-rnn-evolution .hero { padding: 1.25rem; border-radius: 12px; }
+.llm-m-rnn-evolution .step { padding: 0.75rem 1rem; }
+}

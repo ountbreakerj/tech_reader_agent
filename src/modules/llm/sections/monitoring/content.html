@@ -1,0 +1,423 @@
+<section class="llm-mod llm-m-monitoring" id="llm-monitoring"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#dc2626;">
+  <h1>📈 训练效果监控</h1>
+  <p>实时监控训练过程，诊断问题并优化</p>
+</div>
+
+<div class="section" id="llm-monitoring-s1">
+  <h2>损失曲线监控</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>损失曲线就像是心电图——正常情况下应该是平稳下降然后趋于平稳。如果剧烈震荡、突然上升或长期不动，都说明训练出了问题。
+  </div>
+
+  <h3>训练曲线解读</h3>
+
+  <table>
+    <tr><th>曲线形态</th><th>含义</th><th>解决方案</th></tr>
+    <tr><td>✅ 稳定下降</td><td>训练正常</td><td>继续训练</td></tr>
+    <tr><td>⚠️ 剧烈震荡</td><td>学习率太大</td><td>减小学习率</td></tr>
+    <tr><td>📉 长期不动</td><td>学习率太小</td><td>增大学习率</td></tr>
+    <tr><td>📈 训练损失↓ 验证损失↑</td><td>过拟合</td><td>Early Stopping、正则化</td></tr>
+  </table>
+
+  <h3>PyTorch训练监控代码</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> torch
+<span class="kw">from</span> torch.utils.tensorboard <span class="kw">import</span> SummaryWriter
+
+<span class="cmt"># 初始化TensorBoard</span>
+writer = SummaryWriter(<span class="str">'runs/experiment_1'</span>)
+
+<span class="cmt"># 训练循环</span>
+<span class="kw">for</span> epoch <span class="kw">in</span> <span class="fn">range</span>(num_epochs):
+    model.train()
+    train_loss = <span class="num">0</span>
+
+    <span class="kw">for</span> batch <span class="kw">in</span> train_loader:
+        optimizer.zero_grad()
+        outputs = model(batch[<span class="str">"input_ids"</span>])
+        loss = criterion(outputs, batch[<span class="str">"labels"</span>])
+        loss.backward()
+        optimizer.step()
+        train_loss += loss.item()
+
+    <span class="cmt"># 记录训练指标</span>
+    avg_train_loss = train_loss / <span class="fn">len</span>(train_loader)
+    writer.add_scalar(<span class="str">'Loss/train'</span>, avg_train_loss, epoch)
+
+    <span class="cmt"># 验证</span>
+    model.eval()
+    val_loss, correct = <span class="num">0</span>, <span class="num">0</span>
+    <span class="kw">with</span> torch.no_grad():
+        <span class="kw">for</span> batch <span class="kw">in</span> val_loader:
+            outputs = model(batch[<span class="str">"input_ids"</span>])
+            val_loss += criterion(outputs, batch[<span class="str">"labels"</span>]).item()
+            preds = outputs.argmax(dim=-<span class="num">1</span>)
+            correct += (preds == batch[<span class="str">"labels"</span>]).sum().item()
+
+    avg_val_loss = val_loss / <span class="fn">len</span>(val_loader)
+    accuracy = correct / <span class="fn">len</span>(val_dataset)
+
+    <span class="cmt"># 记录验证指标</span>
+    writer.add_scalar(<span class="str">'Loss/val'</span>, avg_val_loss, epoch)
+    writer.add_scalar(<span class="str">'Accuracy/val'</span>, accuracy, epoch)
+
+    <span class="fn">print</span>(<span class="str">f"Epoch <span class="var">{epoch+1}</span>: train_loss=<span class="var">{avg_train_loss:.4f}</span>, val_loss=<span class="var">{avg_val_loss:.4f}</span>, acc=<span class="var">{accuracy:.4f}</span>"</span>)
+
+writer.close()</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-monitoring-s2">
+  <h2>过拟合诊断与解决</h2>
+
+  <h3>过拟合信号</h3>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 过拟合警告信号：</strong>
+    <ul>
+      <li>训练损失持续下降，但验证损失开始上升</li>
+      <li>验证准确率在达到峰值后开始下降</li>
+      <li>模型在训练集上表现完美，但在新数据上表现很差</li>
+    </ul>
+  </div>
+
+  <h3>解决方案</h3>
+
+  <table>
+    <tr><th>方法</th><th>原理</th><th>代码实现</th></tr>
+    <tr><td><strong>Early Stopping</strong></td><td>验证损失不再下降时停止</td><td>监控验证损失，耐心等待</td></tr>
+    <tr><td><strong>Dropout</strong></td><td>随机丢弃神经元</td><td><code>nn.Dropout(0.1)</code></td></tr>
+    <tr><td><strong>数据增强</strong></td><td>增加训练数据多样性</td><td>回译、同义词替换等</td></tr>
+    <tr><td><strong>权重衰减</strong></td><td>L2正则化</td><td><code>weight_decay=0.01</code></td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">class</span> <span class="cls">EarlyStopping</span>:
+    <span class="str">"""Early Stopping实现"""</span>
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, patience=<span class="num">5</span>, min_delta=<span class="num">0</span>):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = <span class="num">0</span>
+        self.best_loss = <span class="fn">None</span>
+        self.early_stop = <span class="kw">False</span>
+
+    <span class="kw">def</span> <span class="fn">__call__</span>(self, val_loss):
+        <span class="kw">if</span> self.best_loss <span class="kw">is None</span>:
+            self.best_loss = val_loss
+        <span class="kw">elif</span> val_loss > self.best_loss - self.min_delta:
+            self.counter += <span class="num">1</span>
+            <span class="kw">if</span> self.counter >= self.patience:
+                self.early_stop = <span class="kw">True</span>
+        <span class="kw">else</span>:
+            self.best_loss = val_loss
+            self.counter = <span class="num">0</span>
+
+<span class="cmt"># 使用Early Stopping</span>
+early_stopping = EarlyStopping(patience=<span class="num">5</span>)
+
+<span class="kw">for</span> epoch <span class="kw">in</span> <span class="fn">range</span>(<span class="num">100</span>):
+    train_loss = train_one_epoch(model, train_loader)
+    val_loss = evaluate(model, val_loader)
+
+    early_stopping(val_loss)
+    <span class="kw">if</span> early_stopping.early_stop:
+        <span class="fn">print</span>(<span class="str">f"Early stopping at epoch <span class="var">{epoch}</span>"</span>)
+        <span class="kw">break</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-monitoring-s3b">
+  <h2>梯度范数监控</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>梯度范数就像血压——正常范围内说明训练健康，突然飙升说明有问题（梯度爆炸），持续过低说明模型学不动了（梯度消失）。
+  </div>
+
+  <h3>为什么监控梯度范数</h3>
+
+  <table>
+    <tr><th>梯度范数状态</th><th>含义</th><th>解决方案</th></tr>
+    <tr><td>✅ 稳定在合理范围</td><td>训练正常</td><td>无需调整</td></tr>
+    <tr><td>⚠️ 突然飙升（spike）</td><td>梯度爆炸</td><td>降低学习率、梯度裁剪</td></tr>
+    <tr><td>📉 接近0</td><td>梯度消失</td><td>检查模型架构、学习率</td></tr>
+    <tr><td>📈 持续增大</td><td>训练不稳定</td><td>降低学习率、增warmup</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> torch
+
+<span class="cmt"># 梯度裁剪（防止梯度爆炸的必备手段）</span>
+<span class="cmt"># 在loss.backward()之后、optimizer.step()之前调用</span>
+
+loss.backward()
+
+<span class="cmt"># 计算梯度范数（用于监控）</span>
+grad_norm = torch.nn.utils.clip_grad_norm_(
+    model.parameters(),
+    max_norm=<span class="num">1.0</span>  <span class="cmt"># 最大梯度范数阈值</span>
+)
+
+<span class="cmt"># 记录梯度范数到监控工具</span>
+wandb.log({<span class="str">"grad_norm"</span>: grad_norm.item()})
+<span class="cmt"># 或 TensorBoard</span>
+writer.add_scalar(<span class="str">'Gradient/norm'</span>, grad_norm.item(), global_step)
+
+optimizer.step()</code></pre>
+  </div>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 梯度裁剪值选择：</strong>max_norm=1.0是常用默认值。LLM训练中常见范围为0.5-5.0。如果梯度范数频繁触及裁剪阈值，说明学习率可能过大。
+  </div>
+</div>
+
+<div class="section" id="llm-monitoring-s3c">
+  <h2>吞吐量与效率监控</h2>
+
+  <h3>关键效率指标</h3>
+
+  <table>
+    <tr><th>指标</th><th>含义</th><th>典型值</th></tr>
+    <tr><td><strong>tokens/second</strong></td><td>每秒处理的token数</td><td>取决于GPU和模型大小</td></tr>
+    <tr><td><strong>GPU利用率</strong></td><td>GPU计算资源使用百分比</td><td>目标 > 90%</td></tr>
+    <tr><td><strong>MFU</strong></td><td>Model FLOPs Utilization</td><td>目标 40%-60%</td></tr>
+    <tr><td><strong>显存占用</strong></td><td>GPU显存使用量</td><td>越接近上限越好</td></tr>
+  </table>
+
+  <div class="callout callout-info">
+    <strong>📖 MFU（Model FLOPs Utilization）：</strong>衡量实际训练速度与GPU理论峰值算力的比值。MFU = 实际FLOPs / 峰值FLOPs。这是衡量训练效率的黄金指标。PaLM论文报告的MFU约46%，现代优化后可达50%-60%。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">import</span> time
+<span class="kw">import</span> torch
+
+<span class="cmt"># 吞吐量监控</span>
+<span class="kw">def</span> <span class="fn">measure_throughput</span>(model, dataloader, device, num_steps=<span class="num">100</span>):
+    model.train()
+    total_tokens = <span class="num">0</span>
+    start_time = time.time()
+
+    <span class="kw">for</span> i, batch <span class="kw">in</span> <span class="fn">enumerate</span>(dataloader):
+        <span class="kw">if</span> i >= num_steps:
+            <span class="kw">break</span>
+        input_ids = batch[<span class="str">"input_ids"</span>].to(device)
+        <span class="cmt"># 统计token数（不含padding）</span>
+        total_tokens += input_ids.numel()
+
+        outputs = model(input_ids, labels=input_ids)
+        loss = outputs.loss
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+    elapsed = time.time() - start_time
+    tokens_per_sec = total_tokens / elapsed
+    <span class="fn">print</span>(<span class="str">f"吞吐量: <span class="var">{tokens_per_sec:,.0f}</span> tokens/sec"</span>)
+    <span class="kw">return</span> tokens_per_sec
+
+<span class="cmt"># GPU利用率监控（命令行）</span>
+<span class="cmt"># watch -n 1 nvidia-smi</span>
+<span class="cmt"># 或在代码中：</span>
+gpu_util = torch.cuda.utilization()
+<span class="fn">print</span>(<span class="str">f"GPU利用率: <span class="var">{gpu_util}</span>%"</span>)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-monitoring-s3d">
+  <h2>训练损失突刺（Loss Spike）处理</h2>
+
+  <div class="callout callout-warn">
+    <strong>⚠️ 真实训练中的常见问题：</strong>在长时间的大模型训练中，损失曲线偶尔会出现突然飙升（loss spike），这是非常常见的现象。如何处理loss spike是LLM训练工程师的核心技能之一。
+  </div>
+
+  <h3>Loss Spike的常见原因</h3>
+
+  <ul>
+    <li><strong>数据异常</strong>：某个batch包含异常数据（如极长序列、损坏数据）</li>
+    <li><strong>学习率过大</strong>：训练后期学习率未充分衰减</li>
+    <li><strong>数值不稳定</strong>：FP16训练中的溢出</li>
+    <li><strong>梯度爆炸</strong>：某些层的梯度突然变大</li>
+  </ul>
+
+  <h3>恢复策略</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># 策略1：跳过异常batch（最简单）</span>
+loss = outputs.loss
+<span class="kw">if</span> loss.item() > loss_threshold:  <span class="cmt"># 如阈值设为正常loss的5-10倍</span>
+    optimizer.zero_grad()
+    <span class="kw">continue</span>  <span class="cmt"># 跳过这个batch</span>
+
+<span class="cmt"># 策略2：从checkpoint回滚</span>
+<span class="cmt"># 定期保存checkpoint（如每1000步）</span>
+<span class="cmt"># 发现loss spike后，回滚到最近的正常checkpoint</span>
+<span class="cmt"># 降低学习率后继续训练</span>
+
+<span class="cmt"># 策略3：梯度裁剪 + 学习率衰减</span>
+<span class="cmt"># 检测到loss spike时临时降低学习率</span>
+<span class="kw">if</span> loss.item() > loss_threshold:
+    <span class="kw">for</span> pg <span class="kw">in</span> optimizer.param_groups:
+        pg[<span class="str">'lr'</span>] *= <span class="num">0.5</span>  <span class="cmt"># 学习率减半</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 业界经验：</strong>GPT-4的训练报告中提到，整个训练过程出现了约20次loss spike。Meta的LLaMA训练中也观察到类似现象。关键是：保存足够频繁的checkpoint，以及有自动检测和回滚机制。
+  </div>
+</div>
+
+<div class="section" id="llm-monitoring-s3e">
+  <h2>实验追踪工具</h2>
+
+  <h3>TensorBoard</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Bash</span></div>
+    <pre><code><span class="cmt"># 安装TensorBoard</span>
+pip install tensorboard
+
+<span class="cmt"># 启动TensorBoard</span>
+tensorboard --logdir=runs
+
+<span class="cmt"># 在浏览器中访问 http://localhost:6006</span></code></pre>
+  </div>
+
+  <h3>Weights & Biases (WandB)</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">import</span> wandb
+
+<span class="cmt"># 初始化WandB</span>
+wandb.init(project=<span class="str">"llm-training"</span>, name=<span class="str">"experiment-1"</span>)
+
+<span class="cmt"># 记录指标</span>
+<span class="kw">for</span> epoch <span class="kw">in</span> <span class="fn">range</span>(num_epochs):
+    <span class="cmt"># ... 训练代码 ...</span>
+    wandb.log({
+        <span class="str">"train_loss"</span>: avg_train_loss,
+        <span class="str">"val_loss"</span>: avg_val_loss,
+        <span class="str">"accuracy"</span>: accuracy,
+        <span class="str">"learning_rate"</span>: scheduler.get_last_lr()[<span class="num">0</span>]
+    })
+
+wandb.finish()</code></pre>
+  </div>
+
+  <h3>MLflow（开源替代方案）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">import</span> mlflow
+
+<span class="cmt"># MLflow：完全开源的实验追踪平台</span>
+<span class="cmt"># 优势：可自建服务器，数据完全掌控在自己手中</span>
+
+mlflow.set_experiment(<span class="str">"llm-training"</span>)
+
+<span class="kw">with</span> mlflow.start_run(run_name=<span class="str">"experiment-1"</span>):
+    <span class="cmt"># 记录超参数</span>
+    mlflow.log_params({
+        <span class="str">"learning_rate"</span>: <span class="num">2e-4</span>,
+        <span class="str">"batch_size"</span>: <span class="num">8</span>,
+        <span class="str">"epochs"</span>: <span class="num">3</span>,
+        <span class="str">"lora_rank"</span>: <span class="num">16</span>,
+    })
+
+    <span class="kw">for</span> epoch <span class="kw">in</span> <span class="fn">range</span>(num_epochs):
+        <span class="cmt"># ... 训练代码 ...</span>
+        mlflow.log_metrics({
+            <span class="str">"train_loss"</span>: avg_train_loss,
+            <span class="str">"val_loss"</span>: avg_val_loss,
+            <span class="str">"accuracy"</span>: accuracy,
+        }, step=epoch)
+
+    <span class="cmt"># 保存模型</span>
+    mlflow.pytorch.log_model(model, <span class="str">"model"</span>)
+
+<span class="cmt"># 启动MLflow UI：mlflow ui</span>
+<span class="cmt"># 访问 http://localhost:5000</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 工具选择建议：</strong>
+    <ul>
+      <li><strong>TensorBoard</strong>：轻量，适合个人实验，PyTorch内置支持</li>
+      <li><strong>WandB</strong>：功能最丰富，支持协作，免费额度足够个人使用</li>
+      <li><strong>MLflow</strong>：完全开源，可自建服务器，适合企业内部部署，数据不外流</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" id="llm-monitoring-s3f">
+  <h2>权重分布监控</h2>
+
+  <div class="callout callout-info">
+    <strong>📖 权重分布监控：</strong>除了损失和准确率，监控模型权重和激活值的分布变化也很重要。权重突然变大或变小可能预示训练问题。
+  </div>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">import</span> torch
+
+<span class="cmt"># 记录权重分布（每N步记录一次）</span>
+<span class="kw">def</span> <span class="fn">log_weight_stats</span>(model, writer, global_step):
+    <span class="kw">for</span> name, param <span class="kw">in</span> model.named_parameters():
+        <span class="kw">if</span> param.requires_grad:
+            <span class="cmt"># 记录权重的均值和标准差</span>
+            writer.add_scalar(<span class="str">f'Weights/<span class="var">{name}</span>/mean'</span>, param.data.mean(), global_step)
+            writer.add_scalar(<span class="str">f'Weights/<span class="var">{name}</span>/std'</span>, param.data.std(), global_step)
+
+            <span class="cmt"># 记录梯度的均值和标准差</span>
+            <span class="kw">if</span> param.grad <span class="kw">is not None</span>:
+                writer.add_scalar(<span class="str">f'Grads/<span class="var">{name}</span>/mean'</span>, param.grad.mean(), global_step)
+                writer.add_scalar(<span class="str">f'Grads/<span class="var">{name}</span>/std'</span>, param.grad.std(), global_step)
+
+<span class="cmt"># 记录激活值分布</span>
+<span class="kw">def</span> <span class="fn">log_activation_stats</span>(model, writer, global_step):
+    <span class="kw">for</span> name, module <span class="kw">in</span> model.named_modules():
+        <span class="kw">if</span> <span class="fn">isinstance</span>(module, torch.nn.Linear):
+            <span class="kw">def</span> <span class="fn">hook_fn</span>(module, input, output):
+                writer.add_scalar(<span class="str">f'Activations/<span class="var">{name}</span>/mean'</span>, output.mean(), global_step)
+                writer.add_scalar(<span class="str">f'Activations/<span class="var">{name}</span>/std'</span>, output.std(), global_step)
+            module.register_forward_hook(hook_fn)</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 监控要点：</strong>如果某层的权重标准差持续增大，可能出现权重爆炸；如果梯度标准差持续接近0，该层可能无法学习。关注"dead neurons"——输出恒为0的神经元。
+  </div>
+</div>
+
+<div class="section" id="llm-monitoring-s4">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：完整的训练监控系统</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>构建一个完整的训练监控系统。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 使用TensorBoard或MLflow记录训练过程</p>
+      <p>② 实现Early Stopping和梯度裁剪</p>
+      <p>③ 记录：训练损失、验证损失、准确率、学习率、梯度范数</p>
+      <p>④ 监控吞吐量（tokens/sec）和GPU利用率</p>
+      <p>⑤ 可视化训练曲线，诊断过拟合问题并解决</p>
+    </div>
+  </div>
+</div>
+
+
+
+</div>
+
+</section>

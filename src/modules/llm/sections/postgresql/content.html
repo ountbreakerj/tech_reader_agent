@@ -1,0 +1,828 @@
+<section class="llm-mod llm-m-postgresql" id="llm-postgresql"><div class="module-wrapper">
+<!-- 侧边栏导航 -->
+
+
+
+
+
+<!-- 主内容区 -->
+
+
+
+<!-- Hero Banner -->
+<div class="hero-banner">
+  <h1>🐘 PostgreSQL进阶</h1>
+  <p>掌握PostgreSQL高级特性，成为数据库专家</p>
+</div>
+
+<!-- ==================== SECTION 1 ==================== -->
+<div class="section" id="llm-postgresql-s1">
+  <h2>PostgreSQL vs MySQL</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>如果把MySQL比作一辆经济型轿车（简单、实用、省油），那么PostgreSQL就像一辆豪华SUV（功能丰富、性能强大、适合复杂场景）。两者都是好车，但适用于不同的驾驶需求。
+  </div>
+
+  <div class="vs-table">
+    <h4>核心特性对比</h4>
+    <table>
+      <tr><th>特性</th><th>MySQL</th><th>PostgreSQL</th></tr>
+      <tr><td><strong>开发公司</strong></td><td>Oracle</td><td>全球开源社区</td></tr>
+      <tr><td><strong>许可证</strong></td><td>GPL（开源版）</td><td>PostgreSQL License（非常宽松）</td></tr>
+      <tr><td><strong>SQL标准支持</strong></td><td>部分支持</td><td>最完整的支持</td></tr>
+      <tr><td><strong>JSON支持</strong></td><td>JSON类型（功能有限）</td><td>JSONB（功能强大，支持索引）</td></tr>
+      <tr><td><strong>扩展性</strong></td><td>插件有限</td><td>丰富的扩展（PostGIS、TimescaleDB等）</td></tr>
+      <tr><td><strong>窗口函数</strong></td><td>8.0+支持</td><td>完整支持，更强大</td></tr>
+      <tr><td><strong>CTE（WITH查询）</strong></td><td>8.0+支持</td><td>支持递归CTE，更灵活</td></tr>
+      <tr><td><strong>物化视图</strong></td><td>不支持</td><td>支持</td></tr>
+      <tr><td><strong>表继承</strong></td><td>不支持</td><td>支持</td></tr>
+      <tr><td><strong>全文搜索</strong></td><td>基本支持</td><td>完整支持，可定制性强</td></tr>
+      <tr><td><strong>并发控制</strong></td><td>锁机制</td><td>MVCC（多版本并发控制）</td></tr>
+      <tr><td><strong>存储过程语言</strong></td><td>SQL/PSM</td><td>PL/pgSQL、PL/Python、PL/Perl等</td></tr>
+      <tr><td><strong>学习曲线</strong></td><td>较容易</td><td>较陡峭</td></tr>
+      <tr><td><strong>性能</strong></td><td>读密集型优化</td><td>复杂查询和写入性能更好</td></tr>
+    </table>
+  </div>
+
+  <h3>选型建议</h3>
+
+  <div class="compare">
+    <div class="compare-card left">
+      <h4>✅ 选择MySQL</h4>
+      <ul>
+        <li>简单的CRUD应用</li>
+        <li>读密集型场景</li>
+        <li>快速开发和原型</li>
+        <li>已有MySQL生态</li>
+        <li>团队MySQL经验丰富</li>
+      </ul>
+    </div>
+    <div class="compare-card right">
+      <h4>✅ 选择PostgreSQL</h4>
+      <ul>
+        <li>复杂的查询和分析</li>
+        <li>地理空间数据（PostGIS）</li>
+        <li>JSON文档存储</li>
+        <li>需要高数据完整性</li>
+        <li>未来可能需要扩展功能</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 我的建议：</strong>如果是新项目且团队愿意学习，推荐PostgreSQL。它的功能更强大，扩展性更好，社区活跃。很多云服务（AWS RDS、Google Cloud SQL）都支持PostgreSQL。
+  </div>
+</div>
+
+<!-- ==================== SECTION 2 ==================== -->
+<div class="section" id="llm-postgresql-s2">
+  <h2>安装与配置</h2>
+
+  <h3>Windows安装</h3>
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-content"><strong>下载安装包</strong> — 访问 postgresql.org/download 下载 PostgreSQL 18.6 Windows 安装程序（截至 2026-08）</div>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-content"><strong>运行安装程序</strong> — 选择安装目录，设置密码（超级用户postgres的密码，记住它！）</div>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-content"><strong>配置端口</strong> — 默认5432，保持默认即可</div>
+  </div>
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-content"><strong>选择区域</strong> — 选择Default locale或Chinese</div>
+  </div>
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-content"><strong>安装完成</strong> — pgAdmin 4会自动安装，是图形化管理工具</div>
+  </div>
+
+  <h3>Linux安装（Ubuntu/Debian）</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Bash</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 安装PostgreSQL</span>
+sudo apt update
+sudo apt install postgresql postgresql-contrib -y
+
+<span class="cmt"># 启动服务</span>
+sudo systemctl start postgresql
+
+<span class="cmt"># 设置开机自启</span>
+sudo systemctl enable postgresql
+
+<span class="cmt"># 登录PostgreSQL（切换到postgres用户）</span>
+sudo -u postgres psql
+
+<span class="cmt"># 创建新用户</span>
+CREATE USER myuser WITH PASSWORD 'mypassword';
+
+<span class="cmt"># 创建数据库</span>
+CREATE DATABASE mydb OWNER myuser;
+
+<span class="cmt"># 授权</span>
+GRANT ALL PRIVILEGES ON DATABASE mydb TO myuser;
+
+<span class="cmt"># 退出</span>
+\q</code></pre>
+  </div>
+
+  <h3>配置文件详解</h3>
+
+  <p>PostgreSQL的配置文件位置：<code>/etc/postgresql/17/main/postgresql.conf</code></p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">ini</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 基础配置</span>
+listen_addresses = <span class="str">'localhost'</span>     <span class="cmt"># 监听地址，'*'表示所有</span>
+port = <span class="num">5432</span>                         <span class="cmt"># 端口号</span>
+max_connections = <span class="num">100</span>               <span class="cmt"># 最大连接数</span>
+
+<span class="cmt"># 内存配置</span>
+shared_buffers = <span class="num">128MB</span>              <span class="cmt"># 共享缓冲区（建议物理内存的25%）</span>
+work_mem = <span class="num">4MB</span>                      <span class="cmt"># 每个查询的工作内存</span>
+maintenance_work_mem = <span class="num">64MB</span>         <span class="cmt"># 维护操作内存</span>
+effective_cache_size = <span class="num">4GB</span>          <span class="cmt"># 操作系统缓存大小（建议物理内存的50%）</span>
+
+<span class="cmt"># WAL配置（写前日志）</span>
+wal_buffers = <span class="num">16MB</span>
+checkpoint_completion_target = <span class="num">0.9</span>
+max_wal_size = <span class="num">1GB</span>
+
+<span class="cmt"># 查询优化</span>
+random_page_cost = <span class="num">1.1</span>              <span class="cmt"># SSD硬盘设为1.1，HDD设为4</span>
+effective_io_concurrency = <span class="num">200</span>     <span class="cmt"># SSD设为200</span>
+
+<span class="cmt"># 日志</span>
+logging_collector = <span class="num">on</span>
+log_directory = <span class="str">'log'</span>
+log_filename = <span class="str">'postgresql-%Y-%m-%d.log'</span>
+log_min_duration_statement = <span class="num">1000</span>  <span class="cmt"># 慢查询阈值（毫秒）</span>
+
+<span class="cmt"># 字符集</span>
+client_encoding = <span class="str">UTF8</span></code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 性能调优原则：</strong>PostgreSQL的性能主要由<code>shared_buffers</code>、<code>work_mem</code>和<code>effective_cache_size</code>三个参数决定。生产环境中，<code>shared_buffers</code>设为物理内存的25%，<code>effective_cache_size</code>设为50%。
+  </div>
+
+  <h3>连接管理（pg_hba.conf）</h3>
+
+  <p>配置文件位置：<code>/etc/postgresql/17/main/pg_hba.conf</code></p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">ini</span>
+      
+    </div>
+    <pre><code><span class="cmt"># TYPE  DATABASE        USER            ADDRESS                 METHOD</span>
+local   all             all                                     scram-sha-256
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256
+host    mydb            myuser          192.168.1.0/24          scram-sha-256</code></pre>
+  </div>
+</div>
+
+<!-- ==================== SECTION 3 ==================== -->
+<div class="section" id="llm-postgresql-s3">
+  <h2>高级SQL特性</h2>
+
+  <!-- 3.1 窗口函数 -->
+  <div id="llm-postgresql-s3-1">
+    <h3>窗口函数</h3>
+
+    <div class="callout callout-analogy">
+      <strong>类比：</strong>普通聚合函数（GROUP BY）会把多行数据压缩成一行。窗口函数则在保留所有行的同时，对周围的行进行计算。就像在Excel中计算滑动平均值。
+    </div>
+
+    <p>窗口函数的基本语法：</p>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="kw">函数</span>() <span class="kw">OVER</span> (
+    <span class="kw">PARTITION BY</span> <span class="var">分组字段</span>   <span class="cmt">-- 可选，按什么分组</span>
+    <span class="kw">ORDER BY</span> <span class="var">排序字段</span>       <span class="cmt">-- 可选，按什么排序</span>
+    <span class="kw">ROWS BETWEEN</span> ... <span class="kw">AND</span> ... <span class="cmt">-- 可选，窗口范围</span>
+)</code></pre>
+    </div>
+
+    <h4>排名函数</h4>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># ROW_NUMBER：行号（没有并列，1,2,3,4,5）</span>
+<span class="kw">SELECT</span>
+    <span class="var">name</span>,
+    <span class="var">score</span>,
+    <span class="fn">ROW_NUMBER</span>() <span class="kw">OVER</span> (<span class="kw">ORDER BY</span> <span class="var">score</span> <span class="kw">DESC</span>) <span class="kw">AS</span> rank
+<span class="kw">FROM</span> <span class="cls">students</span>;
+
+<span class="cmt"># RANK：排名（有并列，1,2,2,4,5）</span>
+<span class="kw">SELECT</span>
+    <span class="var">name</span>,
+    <span class="var">score</span>,
+    <span class="fn">RANK</span>() <span class="kw">OVER</span> (<span class="kw">ORDER BY</span> <span class="var">score</span> <span class="kw">DESC</span>) <span class="kw">AS</span> rank
+<span class="kw">FROM</span> <span class="cls">students</span>;
+
+<span class="cmt"># DENSE_RANK：密集排名（有并列，1,2,2,3,4）</span>
+<span class="kw">SELECT</span>
+    <span class="var">name</span>,
+    <span class="var">score</span>,
+    <span class="fn">DENSE_RANK</span>() <span class="kw">OVER</span> (<span class="kw">ORDER BY</span> <span class="var">score</span> <span class="kw">DESC</span>) <span class="kw">AS</span> rank
+<span class="kw">FROM</span> <span class="cls">students</span>;</code></pre>
+    </div>
+
+    <h4>PARTITION BY分组</h4>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># 每个部门内部的员工薪资排名</span>
+<span class="kw">SELECT</span>
+    <span class="var">department</span>,
+    <span class="var">name</span>,
+    <span class="var">salary</span>,
+    <span class="fn">RANK</span>() <span class="kw">OVER</span> (
+        <span class="kw">PARTITION BY</span> <span class="var">department</span>   <span class="cmt"># 按部门分组</span>
+        <span class="kw">ORDER BY</span> <span class="var">salary</span> <span class="kw">DESC</span>      <span class="cmt"># 组内按薪资降序</span>
+    ) <span class="kw">AS</span> dept_rank
+<span class="kw">FROM</span> <span class="cls">employees</span>;</code></pre>
+    </div>
+
+    <h4>LAG/LEAD：前一行/后一行</h4>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># 计算每天的销售额变化</span>
+<span class="kw">SELECT</span>
+    <span class="var">date</span>,
+    <span class="var">amount</span>,
+    <span class="fn">LAG</span>(<span class="var">amount</span>, <span class="num">1</span>) <span class="kw">OVER</span> (<span class="kw">ORDER BY</span> <span class="var">date</span>) <span class="kw">AS</span> prev_amount,
+    <span class="var">amount</span> - <span class="fn">LAG</span>(<span class="var">amount</span>, <span class="num">1</span>) <span class="kw">OVER</span> (<span class="kw">ORDER BY</span> <span class="var">date</span>) <span class="kw">AS</span> change
+<span class="kw">FROM</span> <span class="cls">daily_sales</span>;
+
+<span class="cmt"># 计算移动平均值</span>
+<span class="kw">SELECT</span>
+    <span class="var">date</span>,
+    <span class="var">amount</span>,
+    <span class="fn">AVG</span>(<span class="var">amount</span>) <span class="kw">OVER</span> (
+        <span class="kw">ORDER BY</span> <span class="var">date</span>
+        <span class="kw">ROWS BETWEEN</span> <span class="num">2</span> <span class="kw">PRECEDING AND CURRENT ROW</span>  <span class="cmt"># 前2行到当前行</span>
+    ) <span class="kw">AS</span> moving_avg_3days
+<span class="kw">FROM</span> <span class="cls">daily_sales</span>;</code></pre>
+    </div>
+
+    <div class="callout callout-tip">
+      <strong>💡 窗口函数使用场景：</strong>排名、滑动平均、环比同比计算、累计求和、分组内排名等。是数据分析和报表开发的利器。
+    </div>
+  </div>
+
+  <!-- 3.2 CTE递归查询 -->
+  <div id="llm-postgresql-s3-2">
+    <h3>CTE（Common Table Expressions）</h3>
+
+    <div class="callout callout-analogy">
+      <strong>类比：</strong>CTE就像是临时视图，让你在查询中定义一个临时的结果集，然后在主查询中引用它。递归CTE则可以处理层次结构数据（如组织架构、产品分类）。
+    </div>
+
+    <h4>基础CTE</h4>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># 使用CTE提高查询可读性</span>
+<span class="kw">WITH</span> active_users <span class="kw">AS</span> (
+    <span class="kw">SELECT</span> <span class="var">id</span>, <span class="var">username</span>, <span class="var">email</span>
+    <span class="kw">FROM</span> <span class="cls">users</span>
+    <span class="kw">WHERE</span> <span class="var">status</span> = <span class="str">'active'</span>
+),
+user_orders <span class="kw">AS</span> (
+    <span class="kw">SELECT</span>
+        <span class="var">user_id</span>,
+        <span class="fn">COUNT</span>(*) <span class="kw">AS</span> order_count,
+        <span class="fn">SUM</span>(<span class="var">total_amount</span>) <span class="kw">AS</span> total_spent
+    <span class="kw">FROM</span> <span class="cls">orders</span>
+    <span class="kw">GROUP BY</span> <span class="var">user_id</span>
+)
+<span class="kw">SELECT</span>
+    <span class="var">au</span>.<span class="var">username</span>,
+    <span class="var">au</span>.<span class="var">email</span>,
+    <span class="fn">COALESCE</span>(<span class="var">uo</span>.<span class="var">order_count</span>, <span class="num">0</span>) <span class="kw">AS</span> orders,
+    <span class="fn">COALESCE</span>(<span class="var">uo</span>.<span class="var">total_spent</span>, <span class="num">0</span>) <span class="kw">AS</span> spent
+<span class="kw">FROM</span> active_users <span class="var">au</span>
+<span class="kw">LEFT JOIN</span> user_orders <span class="var">uo</span> <span class="kw">ON</span> <span class="var">au</span>.<span class="var">id</span> = <span class="var">uo</span>.<span class="var">user_id</span>;</code></pre>
+    </div>
+
+    <h4>递归CTE（层次结构查询）</h4>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># 查询组织架构的所有层级</span>
+<span class="kw">WITH RECURSIVE</span> org_tree <span class="kw">AS</span> (
+    <span class="cmt"># 锚点成员：根节点</span>
+    <span class="kw">SELECT</span>
+        <span class="var">id</span>,
+        <span class="var">name</span>,
+        <span class="var">manager_id</span>,
+        <span class="num">0</span> <span class="kw">AS</span> level,
+        <span class="var">name</span>::<span class="cls">TEXT</span> <span class="kw">AS</span> path
+    <span class="kw">FROM</span> <span class="cls">employees</span>
+    <span class="kw">WHERE</span> <span class="var">manager_id</span> <span class="kw">IS NULL</span>  <span class="cmt"># CEO</span>
+
+    <span class="kw">UNION ALL</span>
+
+    <span class="cmt"># 递归成员：下属</span>
+    <span class="kw">SELECT</span>
+        <span class="var">e</span>.<span class="var">id</span>,
+        <span class="var">e</span>.<span class="var">name</span>,
+        <span class="var">e</span>.<span class="var">manager_id</span>,
+        <span class="var">ot</span>.<span class="var">level</span> + <span class="num">1</span>,
+        <span class="var">ot</span>.<span class="var">path</span> || <span class="str">' -> '</span> || <span class="var">e</span>.<span class="var">name</span>
+    <span class="kw">FROM</span> <span class="cls">employees</span> <span class="var">e</span>
+    <span class="kw">INNER JOIN</span> org_tree <span class="var">ot</span> <span class="kw">ON</span> <span class="var">e</span>.<span class="var">manager_id</span> = <span class="var">ot</span>.<span class="var">id</span>
+)
+<span class="kw">SELECT</span>
+    <span class="fn">REPEAT</span>(<span class="str">'  '</span>, <span class="var">level</span>) || <span class="var">name</span> <span class="kw">AS</span> org_chart,
+    <span class="var">path</span>
+<span class="kw">FROM</span> org_tree
+<span class="kw">ORDER BY</span> <span class="var">path</span>;</code></pre>
+    </div>
+
+    <div class="callout callout-tip">
+      <strong>💡 递归CTE应用场景：</strong>组织架构、产品分类、评论嵌套、文件夹结构、物料清单（BOM）等任何层次结构数据。
+    </div>
+  </div>
+
+  <!-- 3.3 JSON/JSONB -->
+  <div id="llm-postgresql-s3-3">
+    <h3>JSON/JSONB数据类型</h3>
+
+    <div class="callout callout-analogy">
+      <strong>类比：</strong>如果关系型数据库是结构化的Excel表格，那么JSONB就像是Excel中的单元格可以存储任意JSON文档。你可以像查询关系型数据一样查询JSON内部的数据，还能建立索引。
+    </div>
+
+    <h4>JSON vs JSONB</h4>
+
+    <table>
+      <tr><th>类型</th><th>特点</th><th>使用场景</th></tr>
+      <tr><td><code>JSON</code></td><td>存储原始JSON文本，保留格式</td><td>写入频繁，查询少</td></tr>
+      <tr><td><code>JSONB</code></td><td>二进制存储，查询快，支持索引</td><td>查询频繁（推荐）</td></tr>
+    </table>
+
+    <h4>创建带JSONB的表</h4>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># 创建产品表，使用JSONB存储灵活的属性</span>
+<span class="kw">CREATE TABLE</span> <span class="cls">products</span> (
+    <span class="var">id</span> <span class="cls">SERIAL PRIMARY KEY</span>,
+    <span class="var">name</span> <span class="cls">VARCHAR</span>(<span class="num">100</span>) <span class="kw">NOT NULL</span>,
+    <span class="var">category</span> <span class="cls">VARCHAR</span>(<span class="num">50</span>),
+    <span class="var">attributes</span> <span class="cls">JSONB</span> <span class="kw">DEFAULT</span> <span class="str">'{}'</span>::<span class="cls">JSONB</span>,
+    <span class="var">created_at</span> <span class="cls">TIMESTAMPTZ</span> <span class="kw">DEFAULT</span> <span class="fn">NOW</span>()
+);
+
+<span class="cmt"># 插入JSONB数据</span>
+<span class="kw">INSERT INTO</span> <span class="cls">products</span> (<span class="var">name</span>, <span class="var">category</span>, <span class="var">attributes</span>)
+<span class="kw">VALUES</span> (
+    <span class="str">'iPhone 15'</span>,
+    <span class="str">'手机'</span>,
+    <span class="str">'{"brand": "Apple", "storage": 256, "color": "黑色", "specs": {"screen": "6.1寸", "battery": "3349mAh"}}'</span>::<span class="cls">JSONB</span>
+);</code></pre>
+    </div>
+
+    <h4>查询JSONB</h4>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># 查询JSONB字段</span>
+<span class="kw">SELECT</span>
+    <span class="var">name</span>,
+    <span class="var">attributes</span>-><span class="str">'brand'</span> <span class="kw">AS</span> brand,
+    <span class="var">attributes</span>->><span class="str">'storage'</span> <span class="kw">AS</span> storage_gb
+<span class="kw">FROM</span> <span class="cls">products</span>;
+
+<span class="cmt"># 查询嵌套字段</span>
+<span class="kw">SELECT</span>
+    <span class="var">name</span>,
+    <span class="var">attributes</span>#>> <span class="str">'{specs, screen}'</span> <span class="kw">AS</span> screen_size
+<span class="kw">FROM</span> <span class="cls">products</span>;
+
+<span class="cmt"># 条件过滤JSONB</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">products</span>
+<span class="kw">WHERE</span> <span class="var">attributes</span>->><span class="str">'brand'</span> = <span class="str">'Apple'</span>;
+
+<span class="cmt"># 检查JSONB是否包含某个键</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">products</span>
+<span class="kw">WHERE</span> <span class="var">attributes</span> @> <span class="str">'{"color": "黑色"}'</span>::<span class="cls">JSONB</span>;
+
+<span class="cmt"># 展开JSONB数组</span>
+<span class="kw">SELECT</span>
+    <span class="var">name</span>,
+    <span class="var">value</span>
+<span class="kw">FROM</span> <span class="cls">products</span>,
+    <span class="fn">jsonb_array_elements_text</span>(<span class="var">attributes</span>-><span class="str">'tags'</span>) <span class="kw">AS</span> <span class="var">value</span>;</code></pre>
+    </div>
+
+    <h4>JSONB索引</h4>
+
+    <div class="code-block-wrapper">
+      <div class="code-header">
+        <span class="code-lang">SQL</span>
+        
+      </div>
+      <pre><code><span class="cmt"># GIN索引：支持@>、?、?|、?&操作符</span>
+<span class="kw">CREATE INDEX</span> idx_attrs <span class="kw">ON</span> <span class="cls">products</span> <span class="kw">USING GIN</span> (<span class="var">attributes</span>);
+
+<span class="cmt"># B-tree索引：针对特定字段</span>
+<span class="kw">CREATE INDEX</span> idx_brand <span class="kw">ON</span> <span class="cls">products</span> ((<span class="var">attributes</span>->><span class="str">'brand'</span>));
+
+<span class="cmt"># 复合索引</span>
+<span class="kw">CREATE INDEX</span> idx_category_brand <span class="kw">ON</span> <span class="cls">products</span> (<span class="var">category</span>, (<span class="var">attributes</span>->><span class="str">'brand'</span>));</code></pre>
+    </div>
+
+    <div class="callout callout-tip">
+      <strong>💡 JSONB最佳实践：</strong>
+      <ul style="margin-top: 0.5rem;">
+        <li>固定字段用列存储，灵活字段用JSONB</li>
+        <li>JSONB字段务必建立GIN索引</li>
+        <li>频繁查询的JSONB字段可以单独建B-tree索引</li>
+        <li>考虑使用物化视图预计算JSONB查询结果</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SECTION 4 ==================== -->
+<div class="section" id="llm-postgresql-s4">
+  <h2>高级索引</h2>
+
+  <p>PostgreSQL支持多种索引类型，针对不同数据类型和查询模式：</p>
+
+  <table>
+    <tr><th>索引类型</th><th>数据类型</th><th>适用场景</th></tr>
+    <tr><td><strong>B-tree</strong></td><td>所有类型</td><td>等值查询、范围查询（默认，最常用）</td></tr>
+    <tr><td><strong>Hash</strong></td><td>所有类型</td><td>只用于等值查询（PostgreSQL 10+）</td></tr>
+    <tr><td><strong>GiST</strong></td><td>几何、全文搜索、JSONB</td><td>范围查询、相似度搜索</td></tr>
+    <tr><td><strong>SP-GiST</strong></td><td>电话号码、IP地址</td><td>不平衡数据结构</td></tr>
+    <tr><td><strong>GIN</strong></td><td>数组、JSONB、全文搜索</td><td>包含查询、全文搜索</td></tr>
+    <tr><td><strong>BRIN</strong></td><td>时间序列、自增ID</td><td>物理顺序与逻辑顺序相关的大表</td></tr>
+  </table>
+
+  <h3>部分索引</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 只为未处理的订单建立索引（节省空间）</span>
+<span class="kw">CREATE INDEX</span> idx_pending_orders <span class="kw">ON</span> <span class="cls">orders</span> (<span class="var">created_at</span>)
+<span class="kw">WHERE</span> <span class="var">status</span> = <span class="str">'pending'</span>;
+
+<span class="cmt"># 只为高分记录建立索引</span>
+<span class="kw">CREATE INDEX</span> idx_high_scores <span class="kw">ON</span> <span class="cls">players</span> (<span class="var">score</span>)
+<span class="kw">WHERE</span> <span class="var">score</span> > <span class="num">1000</span>;</code></pre>
+  </div>
+
+  <h3>表达式索引</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 不区分大小写的索引</span>
+<span class="kw">CREATE INDEX</span> idx_email_lower <span class="kw">ON</span> <span class="cls">users</span> (<span class="fn">LOWER</span>(<span class="var">email</span>));
+
+<span class="cmt"># 使用该索引的查询</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">users</span>
+<span class="kw">WHERE</span> <span class="fn">LOWER</span>(<span class="var">email</span>) = <span class="str">'john@example.com'</span>;</code></pre>
+  </div>
+
+  <h3>EXPLAIN ANALYZE详解</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 分析查询执行计划（实际执行）</span>
+<span class="kw">EXPLAIN ANALYZE</span>
+<span class="kw">SELECT</span> <span class="var">u</span>.<span class="var">name</span>, <span class="fn">COUNT</span>(<span class="var">o</span>.<span class="var">id</span>) <span class="kw">AS</span> order_count
+<span class="kw">FROM</span> <span class="cls">users</span> <span class="var">u</span>
+<span class="kw">LEFT JOIN</span> <span class="cls">orders</span> <span class="var">o</span> <span class="kw">ON</span> <span class="var">u</span>.<span class="var">id</span> = <span class="var">o</span>.<span class="var">user_id</span>
+<span class="kw">WHERE</span> <span class="var">u</span>.<span class="var">created_at</span> > <span class="str">'2024-01-01'</span>
+<span class="kw">GROUP BY</span> <span class="var">u</span>.<span class="var">id</span>
+<span class="kw">ORDER BY</span> order_count <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> <span class="num">10</span>;</code></pre>
+  </div>
+
+  <div class="callout callout-key">
+    <strong>关键指标解读：</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li><strong>Seq Scan</strong>：全表扫描（可能需要索引）</li>
+      <li><strong>Index Scan</strong>：索引扫描（好）</li>
+      <li><strong>Bitmap Index Scan</strong>：位图索引扫描（好）</li>
+      <li><strong>rows</strong>：预估行数 vs 实际行数差距大时需要ANALYZE</li>
+      <li><strong>actual time</strong>：实际执行时间（毫秒）</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== SECTION 5 ==================== -->
+<div class="section" id="llm-postgresql-s5">
+  <h2>性能优化</h2>
+
+  <h3>连接池（PgBouncer）</h3>
+
+  <p>PostgreSQL每个连接都会启动一个后端进程，连接数过多会消耗大量资源。PgBouncer是一个轻量级连接池，可以显著提升性能。</p>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">Bash</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 安装PgBouncer</span>
+sudo apt install pgbouncer -y
+
+<span class="cmt"># 配置 /etc/pgbouncer/pgbouncer.ini</span>
+[databases]
+mydb = host=127.0.0.1 port=5432 dbname=mydb
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 6432
+auth_type = md5
+auth_file = /etc/pgbouncer/userlist.txt
+pool_mode = transaction  <span class="cmt"># 事务级连接池（推荐）</span>
+max_client_conn = 1000
+default_pool_size = 20</code></pre>
+  </div>
+
+  <h3>VACUUM和ANALYZE</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># VACUUM：清理死元组，回收空间</span>
+<span class="kw">VACUUM</span> <span class="cls">users</span>;
+
+<span class="cmt"># VACUUM FULL：完全清理（会锁表）</span>
+<span class="kw">VACUUM FULL</span> <span class="cls">users</span>;
+
+<span class="cmt"># ANALYZE：更新统计信息，帮助优化器选择更好的执行计划</span>
+<span class="kw">ANALYZE</span> <span class="cls">users</span>;
+
+<span class="cmt"># 同时执行VACUUM和ANALYZE</span>
+<span class="kw">VACUUM ANALYZE</span> <span class="cls">users</span>;</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 VACUUM策略：</strong>PostgreSQL默认开启autovacuum，会自动清理。但对更新频繁的表，建议手动定期执行 <code>VACUUM ANALYZE</code>。
+  </div>
+
+  <h3>分区表</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 创建分区表（按时间范围）</span>
+<span class="kw">CREATE TABLE</span> <span class="cls">events</span> (
+    <span class="var">id</span> <span class="cls">SERIAL</span>,
+    <span class="var">event_type</span> <span class="cls">VARCHAR</span>(<span class="num">50</span>),
+    <span class="var">payload</span> <span class="cls">JSONB</span>,
+    <span class="var">created_at</span> <span class="cls">TIMESTAMPTZ</span> <span class="kw">NOT NULL</span>
+) <span class="kw">PARTITION BY RANGE</span> (<span class="var">created_at</span>);
+
+<span class="cmt"># 创建分区</span>
+<span class="kw">CREATE TABLE</span> events_2024_01 <span class="kw">PARTITION OF</span> events
+    <span class="kw">FOR VALUES FROM</span> (<span class="str">'2024-01-01'</span>) <span class="kw">TO</span> (<span class="str">'2024-02-01'</span>);
+
+<span class="kw">CREATE TABLE</span> events_2024_02 <span class="kw">PARTITION OF</span> events
+    <span class="kw">FOR VALUES FROM</span> (<span class="str">'2024-02-01'</span>) <span class="kw">TO</span> (<span class="str">'2024-03-01'</span>);
+
+<span class="cmt"># 查询会自动只扫描相关分区</span>
+<span class="kw">SELECT</span> * <span class="kw">FROM</span> <span class="cls">events</span>
+<span class="kw">WHERE</span> <span class="var">created_at</span> >= <span class="str">'2024-01-15'</span>
+<span class="kw">AND</span> <span class="var">created_at</span> < <span class="str">'2024-02-01'</span>;</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 分区优势：</strong>对大表（千万级以上）按时间或其他字段分区，可以显著提升查询性能和维护效率。PostgreSQL 10+支持声明式分区。
+  </div>
+</div>
+
+<!-- ==================== SECTION 6 ==================== -->
+<div class="section" id="llm-postgresql-s6">
+  <h2>pgvector：PostgreSQL的向量扩展</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>pgvector 就像是给 PostgreSQL 装上了一个"语义搜索引擎"。原本只能用关键词精确匹配的数据库，现在可以直接存储和搜索 AI 模型生成的向量嵌入，让你在同一个数据库中同时管理结构化数据和向量数据。
+  </div>
+
+  <p>pgvector 是 PostgreSQL 的向量检索扩展，在 LLM/RAG 应用中极为重要。它让你无需引入独立的向量数据库，直接在 PostgreSQL 中完成向量存储和相似度搜索。</p>
+
+  <h3>安装与基本使用</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 安装pgvector扩展</span>
+<span class="kw">CREATE EXTENSION</span> vector;
+
+<span class="cmt"># 创建带向量列的表</span>
+<span class="kw">CREATE TABLE</span> <span class="cls">documents</span> (
+    <span class="var">id</span> <span class="cls">SERIAL PRIMARY KEY</span>,
+    <span class="var">content</span> <span class="cls">TEXT</span>,
+    <span class="var">metadata</span> <span class="cls">JSONB</span>,
+    <span class="var">embedding</span> <span class="cls">vector</span>(<span class="num">768</span>)  <span class="cmt"># 768维向量（对应常用Embedding模型输出维度）</span>
+);
+
+<span class="cmt"># 插入向量数据</span>
+<span class="kw">INSERT INTO</span> <span class="cls">documents</span> (<span class="var">content</span>, <span class="var">embedding</span>)
+<span class="kw">VALUES</span> (
+    <span class="str">'机器学习是人工智能的一个分支'</span>,
+    <span class="str">'[0.1, 0.2, -0.3, ...]'</span>::<span class="cls">vector</span>
+);</code></pre>
+  </div>
+
+  <h3>索引类型</h3>
+
+  <table>
+    <tr><th>索引类型</th><th>原理</th><th>特点</th><th>适用场景</th></tr>
+    <tr><td><strong>IVFFlat</strong></td><td>倒排文件索引 + 聚类</td><td>构建快，内存适中</td><td>中等规模数据（百万级）</td></tr>
+    <tr><td><strong>HNSW</strong></td><td>分层可导航小世界图</td><td>查询快，召回率高，内存较大</td><td>频繁查询，低延迟要求（推荐）</td></tr>
+  </table>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># HNSW索引（推荐，查询性能最好）</span>
+<span class="kw">CREATE INDEX</span> idx_embedding_hnsw <span class="kw">ON</span> <span class="cls">documents</span>
+<span class="kw">USING</span> hnsw (<span class="var">embedding</span> vector_cosine_ops);
+
+<span class="cmt"># IVFFlat索引（构建更快，适合批量导入场景）</span>
+<span class="kw">CREATE INDEX</span> idx_embedding_ivf <span class="kw">ON</span> <span class="cls">documents</span>
+<span class="kw">USING</span> ivfflat (<span class="var">embedding</span> vector_cosine_ops)
+<span class="kw">WITH</span> (lists = <span class="num">100</span>);</code></pre>
+  </div>
+
+  <h3>相似度搜索操作符</h3>
+
+  <table>
+    <tr><th>操作符</th><th>距离类型</th><th>说明</th><th>索引操作类</th></tr>
+    <tr><td><code>&lt;-&gt;</code></td><td>L2（欧氏距离）</td><td>两点间的直线距离</td><td><code>vector_l2_ops</code></td></tr>
+    <tr><td><code>&lt;#&gt;</code></td><td>内积</td><td>负内积（值越小越相似）</td><td><code>vector_ip_ops</code></td></tr>
+    <tr><td><code>&lt;=&gt;</code></td><td>余弦距离</td><td>1 - 余弦相似度（最常用）</td><td><code>vector_cosine_ops</code></td></tr>
+  </table>
+
+  <h3>RAG 文档检索完整示例</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header">
+      <span class="code-lang">SQL</span>
+      
+    </div>
+    <pre><code><span class="cmt"># 创建Embeddings表</span>
+<span class="kw">CREATE TABLE</span> <span class="cls">knowledge_base</span> (
+    <span class="var">id</span> <span class="cls">SERIAL PRIMARY KEY</span>,
+    <span class="var">title</span> <span class="cls">TEXT</span>,
+    <span class="var">content</span> <span class="cls">TEXT</span>,
+    <span class="var">source</span> <span class="cls">TEXT</span>,
+    <span class="var">embedding</span> <span class="cls">vector</span>(<span class="num">768</span>)
+);
+
+<span class="cmt"># 创建HNSW索引（余弦距离）</span>
+<span class="kw">CREATE INDEX</span> idx_kb_embedding <span class="kw">ON</span> <span class="cls">knowledge_base</span>
+<span class="kw">USING</span> hnsw (<span class="var">embedding</span> vector_cosine_ops);
+
+<span class="cmt"># 查询与给定问题最相关的文档（余弦相似度 Top 5）</span>
+<span class="kw">SELECT</span>
+    <span class="var">title</span>,
+    <span class="var">content</span>,
+    <span class="num">1</span> - (<span class="var">embedding</span> &lt;=&gt; <span class="str">'[0.1, 0.2, -0.3, ...]'</span>::<span class="cls">vector</span>) <span class="kw">AS</span> similarity
+<span class="kw">FROM</span> <span class="cls">knowledge_base</span>
+<span class="kw">ORDER BY</span> <span class="var">embedding</span> &lt;=&gt; <span class="str">'[0.1, 0.2, -0.3, ...]'</span>::<span class="cls">vector</span>
+<span class="kw">LIMIT</span> <span class="num">5</span>;</code></pre>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 pgvector vs 独立向量数据库：</strong>pgvector 最大的优势是与 PostgreSQL 生态无缝集成——你可以在同一个事务中完成向量搜索和关系型查询，无需维护额外基础设施。对于中小规模 RAG 应用（百万级文档），pgvector 是绝佳选择。超大规模场景仍推荐 Milvus 等专用向量数据库。
+  </div>
+</div>
+
+<!-- ==================== SECTION 7 ==================== -->
+<div class="section" id="llm-postgresql-s7">
+  <h2>PostgreSQL 17 新特性（历史版本）</h2>
+
+  <p>PostgreSQL 17 于 2024 年 9 月发布，以下是该版本的主要改进；截至 2026-08，当前稳定主版本为 PostgreSQL 18（18.6）：</p>
+
+  <table>
+    <tr><th>特性</th><th>说明</th><th>使用场景</th></tr>
+    <tr><td><strong>MERGE ... RETURNING</strong></td><td>MERGE 语句支持 RETURNING 子句，可在 UPSERT 操作中直接获取受影响的行</td><td>数据同步、ETL 流程</td></tr>
+    <tr><td><strong>JSON_TABLE()</strong></td><td>SQL 标准的 JSON 表函数，将 JSON 数组直接转换为关系型行</td><td>JSON 数据的结构化查询</td></tr>
+    <tr><td><strong>增量备份</strong></td><td>支持 <code>pg_basebackup --incremental</code>，只备份自上次备份以来变更的数据</td><td>大型数据库的备份优化</td></tr>
+    <tr><td><strong>COPY 性能提升</strong></td><td>批量导入速度提升最高 2 倍</td><td>大规模数据导入</td></tr>
+    <tr><td><strong>vacuum 内存优化</strong></td><td>VACUUM 的内存使用更加高效，减少 I/O 开销</td><td>大规模表的日常维护</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>💡 升级建议：</strong>如果是新项目，建议直接使用 PostgreSQL 18（当前 18.6，截至 2026-08）。已有项目可从 16/17 平滑升级，PostgreSQL 的大版本升级通常兼容性很好。
+  </div>
+</div>
+
+<!-- ==================== SECTION 8 ==================== -->
+<div class="section" id="llm-postgresql-s8">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：窗口函数 <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>用窗口函数实现一个销售排行榜和移动平均分析。</p>
+      <p><strong>数据准备：</strong></p>
+      <p>① 创建 <code>sales</code> 表（id、product_id、sale_date、amount）</p>
+      <p>② 插入至少30天的销售数据（可以随机生成）</p>
+      <p><strong>要求：</strong></p>
+      <p>① 计算每个产品的累计销售额（SUM OVER）</p>
+      <p>② 计算每日销售额的7天移动平均（AVG OVER ROWS）</p>
+      <p>③ 计算每个产品的销售额排名（RANK）</p>
+      <p>④ 计算与前一天的销售额差异（LAG）</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习2：递归CTE <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>用递归CTE查询组织架构的所有层级。</p>
+      <p><strong>数据准备：</strong></p>
+      <p>① 创建 <code>employees</code> 表（id、name、manager_id、department）</p>
+      <p>② 插入一个至少5层的组织架构（CEO → VP → Director → Manager → Employee）</p>
+      <p><strong>要求：</strong></p>
+      <p>① 查询从CEO到每个员工的完整路径</p>
+      <p>② 计算每个员工的层级深度</p>
+      <p>③ 统计每个管理层级的直接下属数量</p>
+      <p>④ 查询某个VP下的所有下属（递归）</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习3：JSONB实战 <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>用JSONB存储和查询灵活的用户配置数据。</p>
+      <p><strong>数据准备：</strong></p>
+      <p>① 创建 <code>user_profiles</code> 表（id、username、profile JSONB）</p>
+      <p>② profile字段包含：基本信息（name、age、email）、偏好设置（theme、language、notifications）、社交链接（github、twitter）</p>
+      <p><strong>要求：</strong></p>
+      <p>① 插入5个用户的配置数据</p>
+      <p>② 查询所有使用暗黑模式的用户</p>
+      <p>③ 查询有GitHub链接的用户</p>
+      <p>④ 为JSONB字段创建GIN索引</p>
+      <p>⑤ 对比有索引和无索引的查询性能</p>
+    </div>
+  </div>
+</div>
+
+<!-- 底部导航 -->
+</div></section>

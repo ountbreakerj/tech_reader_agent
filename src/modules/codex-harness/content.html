@@ -1,0 +1,860 @@
+<div class="module" id="mod-codex-harness" hidden>
+<div class="harness-scope codex-harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置"><a href="#/">首页</a><span aria-hidden="true">/</span><a href="#/harness">Harness</a><span aria-hidden="true">/</span><span aria-current="page">Codex</span></nav>
+  <header id="cx-home" class="harness-head">
+    <h1>Codex Harness</h1>
+    <p>一次修复会经历多次模型请求、工具执行和状态更新。这里沿着实际源码，拆开正常路径、失败分支和并发时序：谁持有数据，谁能改变它，哪一步失败后还能继续。Python 实验对应这些设计，Rust 源码和测试给出依据。</p>
+    <p class="cx-meta">源码快照：2026-09-14 · <a href="https://github.com/openai/codex/tree/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8" target="_blank" rel="noopener noreferrer">openai/codex @ <code>3abbf9fe2</code></a> · 以本地开源实现为依据</p>
+  </header>
+  <nav class="home-cards harness-module-grid" aria-label="Codex 学习模块">
+    <a class="home-card" href="#/codex-harness?section=cx-loop"><span class="harness-module-num">01 / 任务循环</span><h3>一次任务怎么跑</h3><p>继续、压缩、停止：run_turn 如何选分支？</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-context"><span class="harness-module-num">02 / 上下文</span><h3>模型每次看到什么</h3><p>Session、Turn、Step 分别管哪一段？</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-tools"><span class="harness-module-num">03 / 工具</span><h3>工具怎么找到并执行</h3><p>工具清单和执行函数怎么对得上？</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-permissions"><span class="harness-module-num">04 / 权限</span><h3>权限和沙箱怎么分工</h3><p>允许执行，和能访问哪里，是两件事。</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-history"><span class="harness-module-num">05 / 历史</span><h3>历史怎么记录和恢复</h3><p>内存里的对话与磁盘上的 JSONL。</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-compact"><span class="harness-module-num">06 / 压缩</span><h3>上下文太长怎么办</h3><p>保留哪些信息，才能接着干活？</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-extensions"><span class="harness-module-num">07 / 扩展</span><h3>怎么接入新能力</h3><p>Skills、MCP、hooks 各自负责什么？</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-example"><span class="harness-module-num">08 / 串起来</span><h3>跟着一次修复走完</h3><p>实际读写临时文件，运行失败测试，再修复验证。</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-stream"><span class="harness-module-num">09 / 流式与并发</span><h3>响应没结束，工具先开工</h3><p>参数何时完整？并发执行和有序回填怎样配合？</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-process"><span class="harness-module-num">10 / 进程管理</span><h3>长命令由谁接着管</h3><p>等待返回、进程退出、终端输入是三件事。</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-retry"><span class="harness-module-num">11 / 连接与重试</span><h3>断线后从哪里继续</h3><p>重试带什么历史？已经执行的工具会怎样？</p><div class="go">进入模块 →</div></a>
+    <a class="home-card" href="#/codex-harness?section=cx-lab"><span class="harness-module-num">12 / 源码实战</span><h3>从测试反推设计</h3><p>控制事件时序，复现取消、重复 ID 和等待问题。</p><div class="go">进入模块 →</div></a>
+  </nav>
+
+  <section id="cx-loop" class="cx-chapter">
+    <p class="cx-kicker">01 / 任务循环</p><h2>一次任务，往往要问模型很多次</h2>
+    <p class="cx-question">你只发了一条消息，为什么 Codex 会连续读文件、改代码、跑测试？</p>
+    <p>因为一条用户任务可以包含很多步。模型先根据已有信息提出下一步；Harness 执行工具，把结果写进历史，再把更新后的信息发给模型。这个过程由 <code>run_turn</code> 串起来。</p>
+    <figure class="cx-diagram"><button type="button" class="cx-diagram-open" aria-label="放大 Codex 任务循环图" title="放大流程图"><picture><source media="(max-width: 600px)" srcset="@asset/custom/codex-task-loop-mobile.png" width="650" height="1120"><img class="fig-img" src="@asset/custom/codex-task-loop.png" alt="Codex 任务循环：用户任务进入上下文，模型提出下一步，工具经过权限检查后执行，结果回到上下文；没有后续工作时结束本轮。" width="1120" height="650"></picture></button><figcaption>工具结果回到上下文，下一次模型请求才知道刚才实际发生了什么。</figcaption></figure>
+    <h3>源码里发生了什么</h3>
+    <p><code>run_turn</code> 会整理输入与能力，检查是否需要压缩上下文，准备本次请求，再调用 <code>run_sampling_request</code>。这里的 sampling 可以简单理解成“请模型生成这一步的回答”。</p>
+    <p>回答可能包含文字，也可能包含工具调用。工具结果会进入后续历史；仍有工作要做时，循环继续。用户中途追加的输入也会在合适的步骤被处理。准备结束时，还要检查停止相关的 hook 是否要求继续。</p>
+    <h3>用 Python 留下主线</h3>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 循环函数，调用时需传入模型和工具函数</span></div><pre><code data-language="python" data-example="loop" data-runnable="false">async def run_turn(task, ask_model, execute_tool):
+    history = [{"role": "user", "content": task}]
+
+    for _ in range(20):
+        reply = await ask_model(history)
+        history.append(reply)
+        call = reply.get("tool_call")
+
+        if call is None:
+            return reply["content"]
+
+        result = await execute_tool(call)
+        history.append({
+            "role": "tool",
+            "call_id": call["id"],
+            "content": result,
+        })
+
+    raise RuntimeError("达到示例的步骤上限")</code></pre></div>
+    <p><code>history</code> 是列表，每条消息是字典。<code>ask_model</code> 和 <code>execute_tool</code> 是调用方传进来的异步函数，分别负责请求模型、执行工具。<code>async def</code> 定义异步函数；<code>await</code> 表示等这一步完成再往下走，这里仍按顺序执行工具。</p>
+    <p><code>reply.get("tool_call")</code> 在没有工具调用时返回 <code>None</code>。有调用时，用 <code>call_id</code> 把结果和原调用对上，再交给下一次模型请求。<code>range(20)</code> 是示例防止一直循环的上限，消息字段也是教学约定。</p>
+    <p>真实实现还处理一条响应里的多个工具调用、流式响应、重试、取消、中途输入和停止 hook。这个函数只保留“请求 → 执行 → 回填”的主线；<a href="#/codex-harness?section=cx-example">第 08 节</a>把它接成一个能直接运行的小程序。</p>
+    <h3>再往下读：这里其实套着三个循环</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">所在层</th><th scope="col">每次循环做什么</th><th scope="col">继续的原因</th></tr></thead><tbody>
+      <tr><th scope="row"><code>run_turn</code></th><td>推进用户任务，捕获下一步状态</td><td>有工具结果待处理、有新输入，或停止 hook 给出了继续指令</td></tr>
+      <tr><th scope="row"><code>run_sampling_request</code></th><td>组织一次模型请求及失败后的重试</td><td>请求失败，而且错误类型和重试策略允许再试</td></tr>
+      <tr><th scope="row"><code>try_run_sampling_request</code></th><td>消费这一条响应里的事件，安排工具任务</td><td>响应还在传输；流结束后还要收集工具结果</td></tr>
+    </tbody></table></div>
+    <p>所以日志里出现两次模型请求，不一定表示模型“思考了两步”。第二次可能是工具执行后的新一步，也可能是上一请求断线后的恢复。排查时同时看 turn、response 和 call 的标识，不能只数请求次数。</p>
+    <h3>一次成功采样之后，先判断什么</h3>
+    <p>源码先收集异步 hook 的结果，再检查输入队列和 token 状态。<code>needs_follow_up</code> 等于“模型这一步需要后续处理”或“当前任务还有待处理输入”。只有确定还要继续，才会按当前窗口状态决定是否先压缩；没有后续工作时，才进入停止 hook。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 采样结束后的分支，可单独运行</span></div><pre><code data-language="python" data-example="loop-state" data-runnable="true">def next_action(tool_follow_up, pending_input,
+                window_full, stop_hook):
+    needs_follow_up = tool_follow_up or pending_input
+    if needs_follow_up:
+        return "compact" if window_full else "sample"
+
+    decision = stop_hook()
+    if decision["block"] and decision["prompt"]:
+        return "record_hook_then_sample"
+    return "finish"
+
+def no_block():
+    return {"block": False, "prompt": ""}
+
+print(next_action(True, False, True, no_block))
+print(next_action(False, True, False, no_block))
+print(next_action(False, False, True, no_block))
+# compact / sample / finish，分别输出一行</code></pre></div>
+    <p>这个函数演示判断顺序，返回的字符串是教学状态名。真实代码还包含主动请求新窗口、不同任务来源和收尾回调。关键是第三个输出：窗口满了，但任务已经没有后续步骤，并不必然先做一次昂贵的压缩。</p>
+    <h3>取消为什么不能只是 break</h3>
+    <p>用户取消时，网络等待、已安排的工具任务和事件收尾都可能仍在进行。流读取通过取消 token 感知中断；工具也拿到它的子 token。<code>try_run_sampling_request</code> 离开收流循环后，会收集在途工具结果，再检查取消状态并返回 <code>TurnAborted</code>。</p>
+    <p>这不代表取消能撤销已经写入的文件，也不代表后台进程一定被杀掉。取消的是哪段工作、资源由谁持有，要继续看工具实现。<a href="#/codex-harness?section=cx-process">长命令章节</a>会解释为什么终端会话有不同的生命周期。</p>
+    <p class="cx-source">分支依据：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L535" target="_blank" rel="noopener noreferrer"><code>run_turn 采样成功后的分支</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L2992" target="_blank" rel="noopener noreferrer"><code>在途工具与取消收尾</code></a>。</p>
+    <div class="cx-takeaway"><p><strong>值得学的设计：</strong>把“继续做任务”“重试请求”“接收响应”分成不同层。每层只处理自己的继续条件，出错后也更容易确定从哪里恢复。</p></div>
+    <details><summary>想一想：模型说“测试通过了”，就能结束吗？</summary><p>这句话只是模型输出。判断是否通过，要看实际测试工具的输出和退出状态。Harness 把这些证据带回模型，但并不因此保证模型的每个结论都正确。做自己的 Agent 时，要给关键结果加明确的验证。</p></details>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L163" target="_blank" rel="noopener noreferrer"><code>core/src/session/turn.rs · run_turn</code></a>；同文件的 <code>run_sampling_request</code> 负责一次采样请求及相关重试。</p>
+    <nav class="cx-chapter-nav" aria-label="任务循环章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-context">接着看：上下文 →</a></nav>
+  </section>
+
+  <section id="cx-context" class="cx-chapter">
+    <p class="cx-kicker">02 / 上下文</p><h2>每问一次模型，都要准备好这一刻的信息</h2>
+    <p>模型不会自动知道你的工作目录、当前权限或刚才读到的文件。Harness 要把该带的信息准备好。理解这部分，先分清三种“范围”。</p>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">名称</th><th scope="col">直白地说</th><th scope="col">例子</th></tr></thead><tbody>
+      <tr><th scope="row">Session</th><td>贯穿多轮任务的会话</td><td>历史、共享服务、持久化状态</td></tr>
+      <tr><th scope="row">Turn</th><td>处理本轮输入的过程</td><td>“修好这个测试”及其后续多步执行</td></tr>
+      <tr><th scope="row">Step</th><td>这一次模型请求采用的状态</td><td>这一步的模型设置、环境、MCP 和工具清单</td></tr>
+    </tbody></table></div>
+    <h3>为什么要有 StepContext</h3>
+    <p>任务进行中，设置或可用能力可能变化。<code>StepContext</code> 把本次请求要用的设置和能力固定下来。模型看到的工具，和处理这次调用时使用的工具计划，来自同一份状态。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 固定这一步的设置，可单独运行</span></div><pre><code data-language="python" data-example="context" data-runnable="true">from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class StepContext:
+    model: str
+    cwd: str
+    tool_names: tuple[str, ...]
+
+settings = {"model": "model-v1"}
+step = StepContext(
+    model=settings["model"],
+    cwd="/workspace",
+    tool_names=("read_file", "run_tests"),
+)
+
+settings["model"] = "model-v2"
+print(step.model)  # model-v1</code></pre></div>
+    <p><code>dataclass</code> 帮你生成保存这些字段的对象；<code>frozen=True</code> 阻止普通的字段重新赋值。<code>tuple[str, ...]</code> 表示由字符串组成的元组。这里选用字符串和元组，所以后面改 <code>settings</code> 不会改掉已经创建的 <code>step</code>。</p>
+    <p>注意，<code>frozen=True</code> 不会递归冻结内部数据；如果字段装的是列表，列表内容仍可能被修改。这个例子用 Python 3.10 或更新版本即可运行，演示的是“一步采用一份确定状态”。</p>
+    <details class="cx-rust-reference"><summary>对照 Rust：StepContext 保存了哪些东西</summary>
+    <div class="code-block-wrapper"><div class="code-header"><span>Rust · StepContext 字段节选</span></div><pre><code>pub(crate) settings: Arc&lt;ResolvedStepSettings&gt;,
+pub(crate) environments: TurnEnvironmentSnapshot,
+pub(crate) mcp: Arc&lt;McpBinding&gt;,
+pub(crate) tool_router: Arc&lt;ToolRouter&gt;,</code></pre></div>
+    <p><code>pub(crate)</code> 表示字段在当前 Rust crate 内可见，crate 可以先理解成一个编译单元。<code>Arc&lt;T&gt;</code> 让多个地方共同持有一份数据，本身不表示深拷贝，也不保证内部数据不可变。实际 StepContext 除了设置，还保存环境、MCP 绑定和工具路由等状态。</p>
+    </details>
+    <h3>它怎样变成模型请求</h3>
+    <p><code>build_prompt</code> 接收整理过的历史输入、基础指令和本次 StepContext。其中工具字段取自 <code>step_context.tool_router.model_visible_specs()</code>。因此，上下文不只是聊天文字，还包括模型这一步能够调用的工具说明。</p>
+    <h3>快照固定的是运行条件，不是整个世界</h3>
+    <p>假设模型在第 3 步看到了 <code>read_file</code>，这个工具排队时，用户切换了工具配置。<code>ToolCallRuntime</code> 保留的仍是发布这份工具清单时的 <code>StepContext</code>，因此不会执行到第 4 步的另一套路由上。源码在 <code>tools/parallel.rs</code> 的字段旁专门说明了这个理由。</p>
+    <p>但 StepContext 不是文件系统快照。即使工作目录没有变化，别人也可能刚改过文件。这里保证的是请求和执行采用同一套运行条件；需要确认文件内容时，仍然要真正读取文件。Python 里的 <code>frozen=True</code> 也不会把磁盘冻住。</p>
+    <h3>Prompt 并不是把所有文字拼成一个字符串</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">输入部分</th><th scope="col">怎样产生</th><th scope="col">为什么分开</th></tr></thead><tbody>
+      <tr><th scope="row">基础指令</th><td><code>get_prompt_base_instructions</code> 提供给 <code>build_prompt</code></td><td>与这一轮产生的普通消息有不同职责</td></tr>
+      <tr><th scope="row">历史与上下文条目</th><td>从历史生成适合模型输入模态的条目，含调用和结果</td><td>保持角色、调用关系和内容类型，不能只拼文字</td></tr>
+      <tr><th scope="row">工具说明</th><td>当前 StepContext 的 <code>model_visible_specs()</code></td><td>说明必须与本次路由和能力一致</td></tr>
+      <tr><th scope="row">响应约束</th><td>例如最终 JSON 的 schema、并行工具调用标志</td><td>描述这次请求的输出约定</td></tr>
+    </tbody></table></div>
+    <p><code>build_initial_context_with_world_state</code> 则负责更早的上下文组装：它使用捕获的环境状态与对应 StepContext，将 developer 内容、带上下文的 user 内容和扩展贡献放到各自位置。它不是每次都重新粘贴全部历史的函数。</p>
+    <h3>为什么还记录“上次已经告诉模型什么”</h3>
+    <p>历史管理器持有一个参考上下文，作为后续上下文差异的基线。例如工作目录或权限设置发生变化时，需要决定补入差异，还是重新注入完整上下文。压缩重写了历史后，这个基线也必须与新历史配合；否则程序可能以为“以前说过”，模型这次却根本没看到。</p>
+    <p>设计上可以把它理解成两份账：一份记录当前真实配置，一份记录模型上下文中已经表达的配置。它们相关，但不能直接视为同一对象。读源码时，要同时追“状态从哪里捕获”和“什么内容被写入历史”。</p>
+    <p class="cx-source">进一步对照：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/mod.rs#L4094" target="_blank" rel="noopener noreferrer"><code>build_initial_context_with_world_state</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/tools/parallel.rs#L44" target="_blank" rel="noopener noreferrer"><code>ToolCallRuntime 持有 step_context</code></a>。</p>
+    <div class="cx-takeaway"><p><strong>值得学的设计：</strong>在异步边界前捕获运行条件，再把这份状态一路传下去。不要让排队的旧请求临时读取新配置，也不要把配置快照误当成外部世界没有变化的证明。</p></div>
+    <details id="cx-context-question"><summary>观察点：切换了设置，为什么不能到处直接读全局配置？</summary><p>否则同一次请求可能一部分用了旧配置，另一部分用了新配置。比如模型看到了旧工具清单，执行时却换成另一套工具。StepContext 让本次请求保持一致，后续步骤再捕获新的状态。</p></details>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/step_context.rs#L18" target="_blank" rel="noopener noreferrer"><code>core/src/session/step_context.rs · StepContext</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L1509" target="_blank" rel="noopener noreferrer"><code>turn.rs · build_prompt</code></a>。</p>
+    <nav class="cx-chapter-nav" aria-label="上下文章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-tools">接着看：工具 →</a></nav>
+  </section>
+
+  <section id="cx-tools" class="cx-chapter">
+    <p class="cx-kicker">03 / 工具</p><h2>模型能看到的工具，与程序能执行的工具</h2>
+    <p>一个工具有两面：给模型看的名称、用途和参数说明，以及程序里真正干活的处理逻辑。例如，“运行命令”的说明告诉模型怎么传参数，执行逻辑才负责启动进程并收集结果。</p>
+    <h3>Registry、Router、Spec 分别是什么</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">源码名称</th><th scope="col">负责什么</th></tr></thead><tbody>
+      <tr><th scope="row"><code>ToolRegistry</code></th><td>保存已注册的工具。你可以把它想成按名称找实现的表。</td></tr>
+      <tr><th scope="row"><code>ToolRouter</code></th><td>持有本次工具计划，把对模型的展示与可执行的实现放在一起。</td></tr>
+      <tr><th scope="row"><code>model_visible_specs</code></th><td>实际送进本次模型请求的工具说明。并不是把所有注册工具无条件列进去。</td></tr>
+    </tbody></table></div>
+    <p>模式、命名空间和暴露策略都会影响工具如何展示。<code>ToolRouter</code> 内部同时保存 <code>registry</code> 与 <code>model_visible_specs</code>，正好体现了“实现存在”和“本次如何提供”这两个层次。</p>
+    <h3>用字典把名称和函数连起来</h3>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 工具说明与执行函数，可单独运行</span></div><pre><code data-language="python" data-example="tools" data-runnable="true">def first_item(items):
+    return items[0] if items else None
+
+tool_specs = [{
+    "name": "first_item",
+    "description": "返回列表首项，空列表返回 None",
+    "argument_names": ["items"],
+}]
+handlers = {"first_item": first_item}
+
+call = {
+    "id": "call-1",
+    "name": "first_item",
+    "arguments": {"items": ["a", "b"]},
+}
+handler = handlers.get(call["name"])
+if handler is None:
+    raise ValueError("找不到这个工具")
+
+result = handler(**call["arguments"])
+output = {
+    "role": "tool",
+    "call_id": call["id"],
+    "content": result,
+}
+print(output["content"])  # a</code></pre></div>
+    <p><code>tool_specs</code> 是简化的工具说明，<code>handlers</code> 保存真正的函数对象。字典里的 <code>first_item</code> 没有括号，表示先保存函数；到 <code>handler(...)</code> 才执行它。<code>**call["arguments"]</code> 把字典展开成关键字参数，相当于 <code>first_item(items=["a", "b"])</code>。</p>
+    <p>这套字典字段只用于教学。实际工具说明还有参数结构等约定，执行侧也要校验参数并处理权限，不能把模型传来的内容直接交给任意函数。</p>
+    <details class="cx-rust-reference"><summary>对照 Rust：工具实现与本次展示清单放在哪里</summary>
+    <div class="code-block-wrapper"><div class="code-header"><span>Rust · ToolRouter 字段节选</span></div><pre><code>registry: ToolRegistry,
+model_visible_specs: Arc&lt;[ToolSpec]&gt;,
+tool_mode: ToolMode,</code></pre></div>
+    <p><code>registry</code> 对应保存实现的那一侧，<code>model_visible_specs</code> 对应本次给模型的说明。<code>[ToolSpec]</code> 表示一段 ToolSpec 序列；这里由 <code>Arc</code> 共享持有。路由器还处理工具模式、命名空间和调用分发，职责比上面的字典更完整。</p>
+    </details>
+    <h3>一次调用怎么回到模型手里</h3>
+    <p>模型返回工具调用及参数，运行时据此找到对应处理逻辑。执行结果再作为工具输出与原调用关联，进入后续历史。对模型来说，“我请求运行了测试”和“测试返回了退出码 1”是不同的信息。</p>
+    <p>工具出错也是结果。把错误讲清楚，模型才有机会换参数、补依赖或停止，而不是重复同一个失败动作。</p>
+    <h3>参数解析失败，与工具执行失败，要分开看</h3>
+    <p>比如模型传来 <code>{"items": "abc"}</code>。这是合法 JSON，但不一定是合法工具参数。JSON 解析、参数校验、授权检查、实际执行是连续的几道检查；通过前一道，不代表后一道也通过。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 在执行前校验参数，可单独运行</span></div><pre><code data-language="python" data-example="tool-errors" data-runnable="true">import json
+
+def dispatch(call):
+    output = {"call_id": call["id"]}
+    if call["name"] != "first_item":
+        return {**output, "error": "未知工具"}
+    try:
+        args = json.loads(call["arguments"])
+    except json.JSONDecodeError:
+        return {**output, "error": "参数不是合法 JSON"}
+    if not isinstance(args, dict) or set(args) != {"items"}:
+        return {**output, "error": "只接受 items 参数"}
+    if not isinstance(args["items"], list):
+        return {**output, "error": "items 必须是列表"}
+    items = args["items"]
+    return {**output, "value": items[0] if items else None}
+
+call = {"id": "c1", "name": "first_item",
+        "arguments": '{"items": "abc"}'}
+print(dispatch(call))
+# {'call_id': 'c1', 'error': 'items 必须是列表'}</code></pre></div>
+    <p><code>isinstance</code> 检查值的类型，<code>set(args)</code> 检查字典的参数名集合。这里假设调用外壳已解析完成，<code>id</code>、<code>name</code> 和字符串形式的 <code>arguments</code> 都存在；演示重点是工具自己的参数契约。例子只执行固定的一个工具。</p>
+    <p>在真实 <code>ToolCallRuntime::handle_tool_call</code> 中，普通 <code>FunctionCallError</code> 可以编码成失败响应，让模型调整下一步；<code>Fatal</code> 走另一条错误路径。也就是说，“工具返回错误”不等于“整个 Harness 必须崩溃”，但也不能把所有内部故障伪装成普通工具文本。</p>
+    <h3>工具变多以后，名称冲突也是运行时问题</h3>
+    <p><code>ToolRegistry</code> 使用带命名空间的 <code>ToolName</code>。注册可信内部工具遇到重名，会走错误处理；外部工具重名会被跳过并记录冲突。默认命名空间的 <code>exec_command</code> 和 <code>shell_command</code> 还被保留，外部工具不能用这两个名称替换核心命令能力。</p>
+    <p>这个限制很具体：如果本来叫“运行本地命令”的工具被同名外部实现覆盖，模型看到的说明、权限判断和实际操作就可能对不上。命名空间与注册策略是在维护能力身份，并不只是为了让名称好看。</p>
+    <h3>延迟展示解决的是请求成本</h3>
+    <p>把所有工具的完整 schema 都塞进每次请求，会增加输入长度，还会让模型面对太多相似选择。源码中存在 deferred exposure 和工具搜索相关路径：已注册能力可以暂时不完整展示，等需要时再发现或提供。理解时分三步看：是否已注册、以什么方式展示、调用时是否获准执行。</p>
+    <p class="cx-source">具体分支：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/tools/registry.rs#L323" target="_blank" rel="noopener noreferrer"><code>可信与外部工具注册</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/tools/parallel.rs#L76" target="_blank" rel="noopener noreferrer"><code>普通错误与 Fatal 的转换</code></a>。</p>
+    <div class="cx-takeaway"><p><strong>值得学的设计：</strong>工具是一份完整的契约：名称、参数、执行能力、返回结果和展示方式必须匹配。一个函数能被字典查到，只完成了其中很小的一部分。</p></div>
+    <details><summary>容易混淆：没展示给模型，就等于完成了权限控制？</summary><p>工具展示是在管理模型能发现什么。真正的授权还要由执行侧检查。隐藏一个工具说明，不能代替沙箱、访问策略或审批。</p></details>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/tools/registry.rs#L287" target="_blank" rel="noopener noreferrer"><code>tools/registry.rs</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/tools/router.rs#L74" target="_blank" rel="noopener noreferrer"><code>tools/router.rs</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/tools/spec_plan.rs#L531" target="_blank" rel="noopener noreferrer"><code>tools/spec_plan.rs · build_model_visible_specs</code></a>。</p>
+    <nav class="cx-chapter-nav" aria-label="工具章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-permissions">接着看：权限 →</a></nav>
+  </section>
+
+  <section id="cx-permissions" class="cx-chapter">
+    <p class="cx-kicker">04 / 权限</p><h2>“这次准不准做”与“进程能碰到哪里”</h2>
+    <p><strong>审批（approval）</strong>决定某个操作是否允许执行，是否需要额外确认。<strong>沙箱（sandbox）</strong>约束实际执行环境，例如哪些文件能读写、网络能否访问。两者配合，才能把规则落实到操作上。</p>
+    <h3>ToolOrchestrator 怎样安排一次执行</h3>
+    <ol class="cx-steps">
+      <li><strong>先判断授权要求。</strong><p>工具和当前策略决定是可直接执行、禁止执行，还是需要审批。源码把这些情况写成了不同分支。</p></li>
+      <li><strong>选择第一次执行的环境。</strong><p>结合工具偏好、权限配置、平台支持等条件选择沙箱策略。某些配置允许第一次就不使用沙箱，不能简单理解为“所有工具一律先沙箱”。</p></li>
+      <li><strong>执行并判断失败类型。</strong><p>如果确实被沙箱拒绝，还要检查是否允许换策略重试，必要时申请额外授权。普通程序报错不会自动成为放宽权限的理由。</p></li>
+    </ol>
+    <h3>拿运行测试举个例子</h3>
+    <p>测试断言失败，说明测试执行了，但结果不符合预期。写缓存被沙箱拦下，说明环境限制影响了执行。这两种报错需要不同处理：前者查代码，后者查路径和权限条件。</p>
+    <p>这里讲的是接入 <code>ToolOrchestrator</code> 的执行路径。外部 MCP 服务等能力还有自己的授权与运行边界，不能认为本地进程沙箱会自动管住远端服务的所有行为。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 执行顺序示意，需传入三个处理函数</span></div><pre><code data-language="python" data-example="permissions" data-runnable="false">def execute_with_policy(
+    call,
+    decide_permission,
+    choose_environment,
+    run_in_environment,
+):
+    decision = decide_permission(call)
+    if decision == "ask":
+        return {"status": "waiting_for_approval"}
+    if decision != "allow":
+        raise PermissionError("这次操作没有获得授权")
+
+    environment = choose_environment(call)
+    return run_in_environment(call, environment)</code></pre></div>
+    <p>把三个处理函数当作参数传入，是为了看清分工：第一个判断准不准做，第二个选择执行环境，第三个在选定环境中执行。遇到 <code>ask</code> 时先返回等待状态，调用方拿到审批结果后才能重新判断。</p>
+    <p>这段代码没有实现审批界面或操作系统沙箱。一个 Python 的 <code>if</code> 只能控制程序走哪条分支；真正限制文件和网络访问，还要靠 <code>run_in_environment</code> 接入的执行环境。这里也省略了源码中的失败分类与重试。</p>
+    <h3>失败后为什么不能简单“换成更大权限再试”</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">实际情况</th><th scope="col">下一步判断</th><th scope="col">不能直接得出的结论</th></tr></thead><tbody>
+      <tr><th scope="row">测试进程退出码为 1</th><td>看断言、依赖、工作目录和输出，识别失败原因</td><td>“权限不够”</td></tr>
+      <tr><th scope="row">确认属于沙箱拒绝</th><td>检查此工具和策略是否支持另一种尝试，处理所需审批</td><td>“已经自动获得沙箱外权限”</td></tr>
+      <tr><th scope="row">授权被拒绝</th><td>把拒绝交回调用方，按现有条件调整行动</td><td>“换个命令字符串就能继续做同一件事”</td></tr>
+      <tr><th scope="row">执行连接丢失</th><td>确认进程是否启动、结果能否找回</td><td>“操作肯定没有发生，可以直接重跑”</td></tr>
+    </tbody></table></div>
+    <p>这里还藏着一个问题：进程可能已经完成部分写入，之后才碰到受限路径。即使下一次执行获得授权，也不能假定上一尝试完全没有副作用。授权回答“这次能否做”，并不提供事务回滚。</p>
+    <h3>等待审批期间，状态也可能改变</h3>
+    <p>长命令提供了一个具体例子。<code>write_stdin</code> 准备向旧终端写入内容时，会按适用规则审批；审批回来后，源码还会重新核对进程身份。原因是等待期间原进程可能已被移除，而同一个数字 ID 可能被另一个进程使用。</p>
+    <p>这类问题常叫 <strong>TOCTOU</strong>，意思是“检查时和使用时，中间隔了一段时间”。你可以用 Python 经验理解：从字典取出对象，<code>await</code> 一会儿，再按同一个键取对象，它未必还是刚才那个。源码通过保留对象并比较身份，避免把获准的输入发给另一个终端。</p>
+    <h3>把一次操作当作一个完整对象检查</h3>
+    <p>同样的 <code>python script.py</code>，换工作目录、环境变量、文件权限或网络条件，行为都可能变化。审批依据需要覆盖相关运行条件；不能只把命令名或一段用户可见文字当作操作的全部。对终端输入也是如此，往已启动的解释器追加一段代码，本身可能构成新的操作。</p>
+    <p class="cx-source">等待后的身份核对：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/unified_exec/process_manager.rs#L817" target="_blank" rel="noopener noreferrer"><code>write_stdin 的交互锁、审批与重新验证</code></a>。</p>
+    <div class="cx-takeaway"><p><strong>值得学的设计：</strong>授权、执行环境和操作身份要一起传递。每次重试或等待后，重新确认当前要执行的仍是获准的那件事；普通失败不能自动放宽规则。</p></div>
+    <details><summary>想一想：只在提示词里写“不要修改项目外的文件”够吗？</summary><p>这能指导模型，但实际写入仍由工具完成。需要执行环境限制写入范围，并在工具请求越界时作出明确决定。提示词负责表达意图，执行层负责落实限制。</p></details>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/tools/orchestrator.rs" target="_blank" rel="noopener noreferrer"><code>tools/orchestrator.rs · ToolOrchestrator::run</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/tools/sandboxing.rs" target="_blank" rel="noopener noreferrer"><code>tools/sandboxing.rs</code></a>。</p>
+    <nav class="cx-chapter-nav" aria-label="权限章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-history">接着看：历史 →</a></nav>
+  </section>
+
+  <section id="cx-history" class="cx-chapter">
+    <p class="cx-kicker">05 / 历史</p><h2>记住刚才做了什么，也为下次继续留下记录</h2>
+    <p>一次任务做了几十步以后，程序至少要回答两个问题：下一次模型请求带哪些历史？程序退出后，拿什么恢复会话？Codex 用相关但不同的组件处理它们。</p>
+    <h3>ContextManager：当前可用的对话历史</h3>
+    <p><code>ContextManager</code> 保存历史条目和上下文状态。新工具输出进入历史时，会按策略截断过长的内容；准备模型输入时，还会做规范化和内容适配。它不是一个只会无限追加字符串的列表。</p>
+    <p>源码中的历史是 <code>Arc&lt;Vec&lt;ResponseItemEnvelope&gt;&gt;</code>。只读快照先共享数据，需要修改时再处理拷贝。这是减少重复复制大段历史的一种办法。</p>
+    <h3>RolloutRecorder：把记录写到磁盘</h3>
+    <p><code>RolloutRecorder</code> 将会话记录写入 JSONL 文件。JSONL 就是“一行一个 JSON 对象”，适合逐条追加、逐条读取。记录里可以包含会话信息、消息、事件和压缩相关条目；具体保存内容受记录策略影响。</p>
+    <p>恢复时可以读取这些记录重建相关会话状态，再继续追加。这里的“恢复”并不意味着重新运行之前的所有命令，更不意味着自动恢复文件系统到过去的样子。</p>
+    <h3>用 Python 区分列表与 JSONL 文件</h3>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 写入并读回两条记录，可单独运行</span></div><pre><code data-language="python" data-example="history" data-runnable="true">import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+history = [
+    {"role": "user", "content": "修好空列表测试"},
+    {"role": "tool", "content": "目标测试通过"},
+]
+
+with TemporaryDirectory() as folder:
+    log_path = Path(folder) / "session.jsonl"
+    with log_path.open("a", encoding="utf-8") as file:
+        for item in history:
+            line = json.dumps(item, ensure_ascii=False)
+            file.write(line + "\n")
+
+    restored = []
+    with log_path.open(encoding="utf-8") as file:
+        for line in file:
+            restored.append(json.loads(line))
+
+    print(restored[-1]["content"])  # 目标测试通过</code></pre></div>
+    <p><code>history</code> 只在程序内存里；<code>file.write</code> 把记录交给文件。<code>"a"</code> 表示追加，<code>json.dumps</code> 把字典转成 JSON 字符串，<code>json.loads</code> 再转回来。每次读一行，就得到一条记录。</p>
+    <p>这里用临时目录演示，退出 <code>with TemporaryDirectory()</code> 后目录会自动清理。真正要在下次启动时恢复，就要选择固定的保存位置。示例只演示 JSONL 读写；Codex 还有专门的记录类型、保存策略和恢复逻辑，普通 Python 列表也没有复现前面的共享快照设计。</p>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">你要知道什么</th><th scope="col">先看哪里</th></tr></thead><tbody>
+      <tr><th scope="row">模型这一步拿到了哪些历史</th><td>ContextManager 与准备 prompt 的过程</td></tr>
+      <tr><th scope="row">会话有哪些持久化记录</th><td>rollout JSONL 及其读取逻辑</td></tr>
+      <tr><th scope="row">工作区文件现在是什么样</th><td>重新读取文件、检查 Git diff、运行测试</td></tr>
+    </tbody></table></div>
+    <h3>共享历史时，为什么还需要版本号</h3>
+    <p><code>Arc</code> 让多个读取方共享同一份历史；发生修改时，用写时复制避免改坏旧快照。但“拿到一份完整的旧数据”不等于“它仍适合当前步骤”。尤其是压缩、重置或回滚后，不能只比较列表长度来判断历史是否变化。</p>
+    <p><code>ContextManager</code> 分别保存 <code>history_version</code> 和 <code>user_message_revision</code>：前者跟踪历史重写，后者跟踪用户输入或重置相关变化。这样需要判断“有没有新用户信息”的逻辑，不必把所有内部历史调整都当作新输入。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 旧快照与当前历史，可单独运行</span></div><pre><code data-language="python" data-example="history-version" data-runnable="true">history = ("用户任务", "工具调用", "工具结果")
+history_version = 0
+snapshot = history
+snapshot_version = history_version
+
+# 压缩产生一份新历史，旧快照仍可以读。
+history = ("任务与进展摘要",)
+history_version += 1
+
+print(len(snapshot), len(history))  # 3 1
+print(snapshot_version == history_version)  # False</code></pre></div>
+    <p>元组类比这里的只读快照，重新赋值类比替换当前历史。示例没有实现 Rust 的共享引用或真实版本规则；它演示的是两个不同问题：旧快照还能读取，但基于旧历史计算的结果可能需要重新判断。</p>
+    <h3>调用、结果、界面事件，不是同一种记录</h3>
+    <p>模型说“运行测试”产生一个调用条目；命令真的结束后，产生关联结果。界面还可能收到开始、输出增量和结束事件。给模型的输入要保留调用与结果关系，给界面的事件则服务于显示和进度。不能把终端上看到的所有文字直接当成下一次请求的完整历史。</p>
+    <p><code>handle_output_item_done</code> 在安排工具前先记录完整调用。工具结果稍后回填，所以异常中断时可能留下“已经请求、结果尚未收集”的阶段。恢复逻辑要根据记录类型重建状态；单靠最后一行文字无法判断整个操作是否完成。</p>
+    <h3>恢复过程不是给外部操作做事务回放</h3>
+    <p>设想命令把文件改好了，进程却在结果落盘之前退出。文件系统已经变化，日志里可能还缺结果。反过来，日志里保留了上次读文件的内容，磁盘文件也可能早已被用户修改。会话日志与文件系统之间没有天然的“要么全发生，要么全没发生”。</p>
+    <p>因此 JSONL 适合追加记录，并不自动带来数据库事务或“恰好执行一次”的保证。自己的 Harness 若要支持恢复，需要明确：哪些记录表示意图、哪些表示观察到的结果、哪些动作可以重复；继续工作时如何核对外部状态。</p>
+    <div class="cx-takeaway"><p><strong>值得学的设计：</strong>分别维护工作历史、历史版本和持久化记录。恢复后用当前文件与实际工具结果补足证据，不把过去的日志当成现在世界的副本。</p></div>
+    <details><summary>观察点：恢复会话后，为什么还可能重新读文件？</summary><p>会话暂停期间，用户或其他程序可能改过文件。历史只证明当时读到了什么，不能证明文件现在仍是那个内容。继续修改前，重新检查当前状态更可靠。</p></details>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/context_manager/history.rs#L72" target="_blank" rel="noopener noreferrer"><code>core/src/context_manager/history.rs</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/rollout/src/recorder.rs#L86" target="_blank" rel="noopener noreferrer"><code>rollout/src/recorder.rs · RolloutRecorder</code></a>。</p>
+    <nav class="cx-chapter-nav" aria-label="历史章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-compact">接着看：上下文压缩 →</a></nav>
+  </section>
+
+  <section id="cx-compact" class="cx-chapter">
+    <p class="cx-kicker">06 / 压缩</p><h2>上下文快满了，怎样带着重点继续</h2>
+    <p>读了很多文件、拿了很多工具输出后，历史会越来越长。模型每次请求能容纳的内容有上限，不能把整段经历永远原样塞回去。<strong>Compact</strong> 处理的就是“缩短工作上下文，还能继续做事”。</p>
+    <h3>在什么时候压缩</h3>
+    <p><code>run_pre_sampling_compact</code> 会在采样前检查是否需要压缩。一轮任务进行到中途，也可能触发自动压缩。判断与当前模型窗口、使用量和配置有关，并不是固定做满几个步骤就压缩。</p>
+    <p>压缩可能走本地编排的压缩流程，也可能走远端压缩接口，取决于所用模型和配置。这里的“本地”不等于离线运行本地模型。</p>
+    <h3>该留下什么</h3>
+    <p>以修复测试为例，后续步骤最需要知道：用户要修什么、已经确认的原因、改了哪些文件、哪些测试通过了、还剩什么。完整的长报错和重复读取结果，未必都值得继续占据窗口。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>教学示例：一次有用的交接摘要</span></div><pre><code>目标：修复空列表输入导致的异常。
+已确认：失败来自 first_item 对空列表直接取第 0 项。
+已修改：空列表返回 None；补了空输入测试。
+验证：目标测试通过，全量测试尚未运行。
+下一步：跑相关测试集，检查调用方是否接受 None。
+约束：保持原有非空输入行为。</code></pre></div>
+    <p>这段是便于理解的示例，不是 Codex 的固定摘要格式。它说明了一个原则：压缩后要让下一步知道目前做到哪儿，而不是只留下一段笼统的“已经处理过”。</p>
+    <h3>用 Python 表示“旧步骤变摘要，近期步骤保留”</h3>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 压缩思路，需传入生成摘要的异步函数</span></div><pre><code data-language="python" data-example="compact" data-runnable="false">async def compact_context(
+    older_steps, recent_steps, summarize,
+):
+    summary_text = await summarize(older_steps)
+    summary_item = {
+        "kind": "summary",
+        "text": summary_text,
+    }
+    return [summary_item] + recent_steps</code></pre></div>
+    <p><code>older_steps</code> 和 <code>recent_steps</code> 是调用方事先整理好的两组完整步骤。<code>summarize</code> 负责把旧步骤总结成文字；<code>+</code> 把摘要条目与近期步骤拼成一个新列表。<code>kind</code> 和 <code>text</code> 是示例自己的字段。</p>
+    <p>这只是帮助理解的一种压缩安排，不是 Codex 的具体保留算法。实际处理还要考虑 token 预算、用户指令、工具调用与结果的配对，以及不同压缩路径的规则；不能随手取“最后几条消息”就认为上下文仍完整。生成摘要的函数也需要真实实现，写一个 <code>async def</code> 不会自动得到总结能力。</p>
+    <h3>源码里有三种值得区分的触发场景</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">场景</th><th scope="col">源码怎样考虑</th><th scope="col">要解决的问题</th></tr></thead><tbody>
+      <tr><th scope="row">新采样前</th><td><code>run_pre_sampling_compact</code> 检查已有上下文和模型条件</td><td>请求发出前，尽量把历史控制在可用范围</td></tr>
+      <tr><th scope="row">任务中途</th><td>成功采样后，若还需继续且窗口达到条件，调用 <code>run_auto_compact</code></td><td>新工具输出可能显著增加历史长度</td></tr>
+      <tr><th scope="row">切换模型</th><td><code>maybe_run_previous_model_inline_compact</code> 检查压缩格式兼容性或窗口缩小等条件</td><td>原模型能接受的上下文，新模型未必接受</td></tr>
+    </tbody></table></div>
+    <p>切换模型的分支不是简单比较模型名字。源码会考虑 <code>comp_hash</code> 等压缩兼容信息，也会考虑换到较小窗口时是否已经触及限制。它保留前一个模型的上下文以及回退上下文，是为了让压缩在适用的模型条件下完成。</p>
+    <h3>压缩算法的选择，与触发条件分开</h3>
+    <p><code>run_auto_compact</code> 先处理 <code>TokenBudget</code> 功能分支；其他路径再根据 provider 能力选择远端 V2 压缩或本地编排的压缩。触发器回答“现在要不要换一个更短的上下文”，具体实现回答“怎么得到新的上下文”。将两者拆开，才能支持不同模型与协议。</p>
+    <h3>压缩时最容易丢的，其实是刚进来的新要求</h3>
+    <p>新任务开始时，预压缩估算尚未包含将要加入的上下文和输入。源码对此有明确注释：输入可能在压缩之后才被写进历史。所以预检查并不能证明后面的完整请求一定不会超限。</p>
+    <p>另一处处理也值得看：如果预压缩失败，<code>run_turn</code> 仍会通过输入与 hook 的记录路径保存本次新输入。否则用户刚说的约束可能既没被处理，也没进入可恢复记录。写类似逻辑时，不要在摘要服务失败后顺手丢掉待处理用户消息。</p>
+    <h3>压缩前后，哪些关系必须保留</h3>
+    <p>调用与结果应作为相互关联的步骤处理，不能留下“返回了测试通过”却看不出对应哪次调用；目标、尚未完成的工作和关键约束要能继续被模型看到；环境上下文的参考基线也要和新历史一致。摘要是否通顺，只是检查的一部分。</p>
+    <details><summary>练习：摘要只剩“测试已经通过”，缺少了什么？</summary><p>缺少测试范围、执行时的代码版本、命令是否完整结束，以及用户是否又提出了新要求。目标测试通过不等于相关测试全部通过；压缩若把这些差别抹掉，下一步就可能错误结束。更有用的记录是“修改 A 后，命令 B 退出码为 0；相关测试 C 尚未运行”。</p></details>
+    <p class="cx-source">模型切换与实现选择：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L1299" target="_blank" rel="noopener noreferrer"><code>maybe_run_previous_model_inline_compact</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L1397" target="_blank" rel="noopener noreferrer"><code>run_auto_compact</code></a>。</p>
+    <div class="cx-takeaway"><p><strong>值得学的取舍：</strong>压缩是在改变后续决策的依据。除了节省 token，还要保住新输入、调用关系和未完成事项；压缩失败也必须有明确的保存与退出路径。</p></div>
+    <details><summary>容易混淆：压缩、截断、长期记忆是不是一回事？</summary><p>截断常用于限制单次工具输出的长度；压缩重整较长的对话上下文；长期记忆则处理跨任务保留什么信息。它们都影响模型能看到什么，但触发时机和目标不同。</p></details>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L1231" target="_blank" rel="noopener noreferrer"><code>session/turn.rs · run_pre_sampling_compact</code></a>；同文件继续追 <code>run_auto_compact</code> 的分支。</p>
+    <nav class="cx-chapter-nav" aria-label="压缩章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-extensions">接着看：扩展 →</a></nav>
+  </section>
+
+  <section id="cx-extensions" class="cx-chapter">
+    <p class="cx-kicker">07 / 扩展</p><h2>新增能力，先弄清楚接在哪一层</h2>
+    <p>“加一个功能”不一定都要改主循环。先判断你要加的是操作方法、外部工具，还是某个时机执行的规则，才能选对入口。</p>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">扩展方式</th><th scope="col">解决什么问题</th><th scope="col">例子</th></tr></thead><tbody>
+      <tr><th scope="row">Skill</th><td>给出完成某类任务的方法与相关资源</td><td>一套维护技术文档的步骤</td></tr>
+      <tr><th scope="row">MCP</th><td>连接外部服务提供的工具与资源</td><td>查询代码索引或业务系统</td></tr>
+      <tr><th scope="row">Hook</th><td>在运行时约定的时机接入逻辑</td><td>工具前后检查、准备结束时补充要求</td></tr>
+      <tr><th scope="row">子 Agent</th><td>把有明确边界的工作交给另一段 Agent 执行过程</td><td>检查某个独立模块后返回结果</td></tr>
+    </tbody></table></div>
+    <h3>用停止 hook 理解扩展点</h3>
+    <p><code>run_turn_stop_hooks</code> 根据会话来源决定运行哪种停止 hook。普通根任务对应 Stop；通过线程创建的子 Agent 对应 SubagentStop；部分内部任务有自己的处理。Hook 的结果交回运行时，由运行时处理后续行为。</p>
+    <p>异步 hook 的结果会被收集处理，可以带来额外上下文或警告。结束阶段的 hook 也可能要求继续做事。因此，“模型刚生成了最终回答”和“本轮已经完全结束”之间，还有运行时的收尾判断。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 用函数理解停止 hook，可单独运行</span></div><pre><code data-language="python" data-example="extensions" data-runnable="true">def stop_hook(state):
+    if not state["tests_passed"]:
+        return {
+            "continue": True,
+            "reason": "目标测试还没通过，需要继续检查",
+        }
+    return {"continue": False, "reason": ""}
+
+state = {"tests_passed": False}
+decision = stop_hook(state)
+if decision["continue"]:
+    print(decision["reason"])</code></pre></div>
+    <p>这里把 hook 当作一个接收状态、返回决定的函数。函数本身没有再次调用模型；运行时要接住 <code>continue</code> 和 <code>reason</code>，才知道是否补充信息、继续执行。示例会输出“目标测试还没通过，需要继续检查”。</p>
+    <p>实际系统中的 <code>tests_passed</code> 应来自测试工具的结果，不能只听模型说“通过了”。这里的字典和 Python 回调用于类比；Codex 的 hook 有自己的配置、输入输出格式与执行方式，Skill 的文字也不会自动变成这样的函数。</p>
+    <h3>和 DSH 放在一起看</h3>
+    <p>DSH 从 Cordis 插件与事件出发组织能力。Codex 在这里呈现的是围绕任务循环的明确运行时组件。两者都要解决扩展问题，但插件生命周期、事件返回值和 hook 结果的约定各不相同。</p>
+    <p>子 Agent 的价值在于分工与隔离上下文。它也会带来信息交接、等待和文件冲突等成本；把一个离不开共享状态的小任务拆得太碎，未必更快。</p>
+    <h3>Hook 的返回值，必须被主循环落实</h3>
+    <p>在停止阶段，<code>should_block</code> 表示阻止本次结束，但运行时还需要能转成消息的 <code>continuation_fragments</code>。有内容时，<code>run_turn</code> 把继续指令写进历史，设置 <code>stop_hook_active</code>，再进入下一次循环。</p>
+    <p>如果 hook 只说“不能结束”，却没有给出可用的继续内容，源码会发出警告并忽略这次阻止。这样做是因为下一次模型请求需要新增依据，不能只靠一个布尔值反复启动。<code>stop_hook_active</code> 也会传给下一次停止检查，表明这轮收尾已被 hook 介入过。</p>
+    <h3>异步 hook 的结果要选准插入时机</h3>
+    <p>它不能在任意时刻偷偷改正在发送的 prompt。源码的 <code>drain_async_hook_results</code> 在用户 prompt 之前可以将额外上下文记录进历史；任务已经进入采样过程时，则把它交给待处理输入路径。警告通过事件发出。处理位置决定信息是这一步生效，还是下一步才生效。</p>
+    <p>用 Python 写插件时也会遇到同样问题：后台任务完成后，先把结果放进队列，在主循环明确的边界读取。直接修改一个大家共享的消息列表，会让人很难解释某次请求到底包含了什么。</p>
+    <h3>子 Agent 的“子”体现在哪里</h3>
+    <p>它有自己的执行过程和上下文，父任务拿到的是交接结果，而不是自动拥有它的全部中间思考。源码也区分任务来源：正常根任务运行 Stop，经线程创建的子 Agent 运行 SubagentStop，一些内部任务不走普通生命周期 hook。</p>
+    <p>上下文分开并不等于文件系统自动隔离。两个 Agent 改同一份文件仍可能冲突；父任务也要检查子任务交回的证据与当前工作区是否一致。适合拆出去的是输入明确、结果能检查、与主任务能独立推进的工作。</p>
+    <p class="cx-source">异步结果进入历史或队列的位置：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/hook_runtime.rs#L774" target="_blank" rel="noopener noreferrer"><code>drain_async_hook_results</code></a>。继续分支见 <a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L642" target="_blank" rel="noopener noreferrer"><code>run_turn 停止检查</code></a>。</p>
+    <div class="cx-takeaway"><p><strong>值得学的设计：</strong>扩展要定义输入、结果和生效时机。主循环接住结果、记录它，再决定下一步；扩展越多，越需要保持这些边界明确。</p></div>
+    <details><summary>想一想：一个 Skill 写了“执行后检查结果”，就等于装了 Hook 吗？</summary><p>不等于。Skill 里的文字提供操作指导，Hook 则在配置生效时由运行时在约定阶段调用。想理解某条规则为什么发生，需要看它究竟来自指令、工具实现，还是实际注册的 Hook。</p></details>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/hook_runtime.rs#L385" target="_blank" rel="noopener noreferrer"><code>core/src/hook_runtime.rs · run_turn_stop_hooks</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L967" target="_blank" rel="noopener noreferrer"><code>session/turn.rs · build_skills_and_plugins</code></a>。对照阅读：<a href="#/dsh?section=s4">DSH 的事件系统</a>。</p>
+    <nav class="cx-chapter-nav" aria-label="扩展章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-example">接着看：完整例子 →</a></nav>
+  </section>
+
+  <section id="cx-example" class="cx-chapter">
+    <p class="cx-kicker">08 / 串起来</p><h2>跟着一次“修复失败测试”走完</h2>
+    <p>下面是一条教学用的典型路径，不是本次真实运行记录，也不是 Codex 写死的固定步骤。模型会根据实际工具结果调整行动。</p>
+    <ol class="cx-steps">
+      <li><strong>用户提出任务：修好空列表测试。</strong><p>任务进入本轮处理。Harness 准备历史、项目规则和当前环境，形成这一步的上下文。</p></li>
+      <li><strong>模型决定先读测试和实现。</strong><p>这时还没有读到文件。只有调用真正被执行、内容返回后，模型才获得新的证据。</p></li>
+      <li><strong>工具返回代码与失败结果。</strong><p>工具调用走到对应实现；需要执行命令时按适用策略处理权限与环境。输出写入历史，下一次采样能看到失败位置。</p></li>
+      <li><strong>模型提出修改，工具应用修改。</strong><p>修改文件也是操作。处理函数负责实际变更，并把成功或失败带回循环。模型不能只靠文字宣布文件已改。</p></li>
+      <li><strong>运行目标测试，再检查相关行为。</strong><p>如果断言仍失败，就带着新结果继续分析。如果只是沙箱拒绝访问，就按环境问题处理。两种失败不要混为一谈。</p></li>
+      <li><strong>确认结果，收尾并保存过程。</strong><p>没有后续工作时，运行时处理停止 hook 等收尾逻辑。会话记录支持之后追查；最终回答应说明改了什么、验证了什么、还缺什么。</p></li>
+    </ol>
+    <h3>你可以怎样观察自己的运行记录</h3>
+    <p>选一段工具调用，按下面三列整理。先抓住信息流，再顺着本页的源码链接深入。</p>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">行动前知道什么</th><th scope="col">实际执行了什么</th><th scope="col">结果改变了什么</th></tr></thead><tbody>
+      <tr><td>只知道测试名字</td><td>读取测试与实现</td><td>发现空列表未处理</td></tr>
+      <tr><td>已有一个修复猜想</td><td>修改代码并运行目标测试</td><td>知道猜想是否成立</td></tr>
+      <tr><td>目标测试通过</td><td>检查调用方与相关测试</td><td>判断修改是否影响其他行为</td></tr>
+    </tbody></table></div>
+    <h3>真正跑一遍：失败、读文件、修复、复测</h3>
+    <p>下面的 Python 3.10+ 程序只依赖标准库。它在临时目录创建一个有缺陷的文件，通过子进程测试，再读取并修改文件，最后重新测试。<code>ask_model</code> 仍是写好的规则，所以无需 API key；实际文件操作和测试结果都是真的。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 完整示例，仅依赖标准库</span></div><pre><code data-language="python" data-example="complete" data-runnable="true">import asyncio
+import subprocess
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+BROKEN = "def first_item(items):\n    return items[0]\n"
+FIXED = (
+    "def first_item(items):\n"
+    "    return items[0] if items else None\n"
+)
+TEST_CODE = """
+from sample import first_item
+assert first_item([]) is None
+assert first_item(["a", "b"]) == "a"
+print("2 个测试通过")
+"""
+
+def execute_tool(call, source_path):
+    name = call["name"]
+    if name == "run_tests":
+        result = subprocess.run(
+            [sys.executable, "-B", "-X", "utf8", "-c", TEST_CODE],
+            cwd=source_path.parent, capture_output=True,
+            text=True, encoding="utf-8", timeout=10,
+        )
+        output = (result.stdout + result.stderr).strip()
+        return {"ok": result.returncode == 0,
+                "message": output.splitlines()[-1] if output else "",
+                "exit_code": result.returncode}
+    if name == "read_file":
+        return {"ok": True, "message": source_path.read_text(
+            encoding="utf-8")}
+    if name == "apply_fix":
+        if source_path.read_text(encoding="utf-8") != BROKEN:
+            return {"ok": False, "message": "文件已变化，停止修改"}
+        source_path.write_text(FIXED, encoding="utf-8")
+        return {"ok": True, "message": "已补上空列表分支"}
+    return {"ok": False, "message": "未知工具"}
+
+
+async def ask_model(history):
+    last = history[-1]
+    if last["role"] == "user":
+        name = "run_tests"
+    else:
+        result = last["content"]
+        if last["tool_name"] == "run_tests" and result["ok"]:
+            return {"role": "assistant", "content": "目标测试通过。"}
+        if last["tool_name"] == "run_tests":
+            already_fixed = any(
+                item.get("tool_name") == "apply_fix"
+                for item in history
+            )
+            if already_fixed:
+                return {"role": "assistant", "content": "复测仍失败。"}
+            name = "read_file"
+        elif last["tool_name"] == "read_file":
+            name = "apply_fix"
+        elif result["ok"]:
+            name = "run_tests"
+        else:
+            return {"role": "assistant", "content": result["message"]}
+    return {
+        "role": "assistant",
+        "tool_call": {"id": f"c{len(history)}", "name": name},
+    }
+
+
+async def run_turn(task, source_path):
+    history = [{"role": "user", "content": task}]
+    for _ in range(10):
+        reply = await ask_model(history)
+        history.append(reply)
+        call = reply.get("tool_call")
+        if call is None:
+            return reply["content"], history
+        result = await asyncio.to_thread(execute_tool, call, source_path)
+        print(call["id"], call["name"], "=>", result["message"])
+        history.append({"role": "tool", "call_id": call["id"],
+                        "tool_name": call["name"], "content": result})
+    raise RuntimeError("达到示例的步骤上限")
+
+
+if __name__ == "__main__":
+    with TemporaryDirectory() as folder:
+        source_path = Path(folder) / "sample.py"
+        source_path.write_text(BROKEN, encoding="utf-8")
+        answer, history = asyncio.run(run_turn("修好空输入", source_path))
+        print("最终回答：", answer)</code></pre></div>
+    <p><code>sys.executable</code> 使用当前 Python 解释器；<code>-B</code> 不生成 .pyc 字节码缓存，临时目录保证每次从新文件开始；<code>-X utf8</code> 让子进程的输出编码一致。<code>asyncio.to_thread</code> 把阻塞的文件和子进程操作交给线程，避免堵住异步事件循环。它不会自动提供沙箱，也不保证取消等待时同步函数立即停止。</p>
+    <p>程序依次返回 c1 的失败结果、c3 读取的源码、c5 的修改结果、c7 的复测结果，最后输出“目标测试通过。”。<code>apply_fix</code> 只允许修改仍等于预期旧内容的文件；这演示的是乐观检查，检查与写入之间并没有实现操作系统级的原子锁。</p>
+    <h3>为什么这比直接调用四个函数更接近 Harness</h3>
+    <p>主循环没有写死下一步一定是修复。它只负责请求、执行、记录；行动策略在 <code>ask_model</code> 里。把初始文件换成 FIXED，第一次测试就会通过，后面的读取和修改都不会发生。把 FIXED 改成另一个错误实现，则会走“复测仍失败”的结束分支。</p>
+    <p>这里仍省略了真实模型、完整参数解析、权限审批、持久化与取消处理。修复文本也是预先写好的，并不是模型生成。子进程超时会抛出异常，本例让它向上传播，不把超时冒充普通测试失败。</p>
+    <details><summary>练习：给这个实验制造三种不同失败</summary><p>让测试断言失败，观察失败怎样进入下一次判断；在 apply_fix 前把文件改成第三种内容，观察旧内容检查怎样阻止覆盖；让测试超过 10 秒，观察超时为什么走异常路径。三个场景分别涉及业务结果、状态冲突和执行基础设施，修复方法也不同。</p></details>
+    <div class="cx-takeaway"><p><strong>这条路径最核心的思想：</strong>每一步都让下一步多知道一点真实情况。任务循环、工具、上下文、权限和记录，就是为了让这个过程持续运转。</p></div>
+    <details><summary>练习：如果要自己写一个小型 Harness，先做哪几件事？</summary><p>先接好模型请求、一个工具、工具结果回填和明确的停止条件。然后加入取消、失败处理、权限边界与过程记录。能跟着证据完成一个小任务后，再考虑自动压缩和更多扩展。这是学习建议，不是 Codex 源码的初始化顺序。</p></details>
+    <nav class="cx-chapter-nav" aria-label="案例章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-stream">接着看：流式与并发 →</a></nav>
+  </section>
+
+  <section id="cx-stream" class="cx-chapter">
+    <p class="cx-kicker">09 / 流式与并发</p><h2>响应还在传，完整的工具调用可以先执行</h2>
+    <p class="cx-question">模型一边输出文字，一边提出多个工具调用。运行时究竟等到什么时候才开工？</p>
+    <p><code>try_run_sampling_request</code> 消费的是 <code>ResponseEvent</code> 序列。它不是等网络返回一个完整字符串再统一处理。文字增量可以更新界面；工具输入增量可以供专门的消费者处理；完整输出项到达后，才进入 <code>handle_output_item_done</code> 的调用分发路径。</p>
+    <h3>四个时间点不要混在一起</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">事件或阶段</th><th scope="col">此时知道什么</th><th scope="col">运行时做什么</th></tr></thead><tbody>
+      <tr><th scope="row"><code>OutputItemAdded</code></th><td>开始产生一个新输出项</td><td>建立当前项和显示状态等信息</td></tr>
+      <tr><th scope="row"><code>ToolCallInputDelta</code></th><td>收到部分工具输入，未必是完整参数</td><td>把增量交给适用的参数消费者，不把任意半截 JSON 当成完整调用</td></tr>
+      <tr><th scope="row"><code>OutputItemDone</code></th><td>这个输出项已完整</td><td>构造工具调用，记录它并安排执行；整条响应此时可能仍未结束</td></tr>
+      <tr><th scope="row"><code>Completed</code> 与收尾</th><td>模型响应结束，但工具可能还在跑</td><td>处理使用量等信息，收集在途结果，再返回采样结果</td></tr>
+    </tbody></table></div>
+    <p>“完整输出项”和“完整响应”是两个边界。读文件调用已经完整时，可以和后续模型输出重叠，减少等待；但收到 <code>{"path": "src/</code> 这样的片段时，普通工具分发还没有足够参数。源码允许专门的输入增量处理，并不意味着通用工具收到半截参数就执行。</p>
+    <h3>并发不等于结果乱序进入历史</h3>
+    <p><code>ToolCallRuntime</code> 会启动工具任务。采样层用 <code>FuturesOrdered</code> 保存结果 future，响应流结束后由 <code>drain_in_flight</code> 按队列顺序取结果。A 先发出但较慢，B 后发出却先完成，B 可以先变得就绪，写入模型历史时仍按 A、B 排列。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 并发完成，有序回填，可单独运行</span></div><pre><code data-language="python" data-example="stream-order" data-runnable="true">import asyncio
+
+async def main():
+    second_finished = asyncio.Event()
+    finished = []
+
+    async def tool(call_id):
+        if call_id == "A":
+            await second_finished.wait()
+        finished.append(call_id)
+        if call_id == "B":
+            second_finished.set()
+        return {"call_id": call_id, "content": "ok"}
+
+    tasks = [asyncio.create_task(tool(name)) for name in ("A", "B")]
+    results = await asyncio.gather(*tasks)
+    print("完成顺序：", finished)  # ['B', 'A']
+    print("历史顺序：", [item["call_id"] for item in results])
+    # ['A', 'B']
+
+asyncio.run(main())</code></pre></div>
+    <p><code>Event</code> 在这里控制时序，不靠“睡多久应该差不多”来猜。<code>create_task</code> 安排两个协程执行，<code>gather</code> 按传入顺序返回结果。这个例子只类比结果顺序，不复现流解析和工具权限。代价也很直观：B 已完成，但按序回填会等待前面的 A。</p>
+    <h3>谁决定工具能不能并发</h3>
+    <p><code>build_prompt</code> 的 <code>parallel_tool_calls: true</code> 允许模型提出并行调用；执行侧还会查询 <code>tool_supports_parallel</code>。两者不是同一个开关。源码在共享的 <code>RwLock</code> 上，为可并行调用取读锁，为不可并行调用取写锁。</p>
+    <details class="cx-rust-reference"><summary>对照 Rust：并发闸门只有几行，含义很具体</summary>
+    <div class="code-block-wrapper"><div class="code-header"><span>Rust · tools/parallel.rs 执行闸门节选</span></div><pre><code>let guard = if supports_parallel {
+    Either::Left(lock.read().await)
+} else {
+    Either::Right(lock.write().await)
+};</code></pre></div>
+    <p>多个读锁可以共存，写锁要求独占。这里“读/写”指锁的模式，不是根据命令文字判断是否读取或修改文件。<code>supports_parallel</code> 来自工具能力声明；这把锁协调共享同一运行时闸门的调用，也不是整个工作区的全局文件锁。</p>
+    </details>
+    <p>锁会覆盖实际分发和等待结果的阶段，直到该次处理结束再释放。这样可以让声明支持并发的工具重叠执行，让需要独占的工具与这些调用错开。工具内部仍可能需要更细的锁，例如同一终端的输出缓冲区不能让两个轮询者同时取走。</p>
+    <h3>取消恰好遇到工具完成，算哪个结果</h3>
+    <p>工具运行时用 <code>tokio::select!</code> 等待执行结果或取消信号。如果已经达到终态，或者任务已经完成，就保留实际结果；否则中止任务并生成中止响应。这个判断避免一个已经完成的调用，只因为取消信号晚到一瞬间，就被误报成从未完成。</p>
+    <p>这仍不是副作用撤销。任务被中止前可能已经写过文件；后台终端也有单独的持有者。结果应清楚区分成功、普通错误、中止和未知状态，让后续步骤决定要核对什么。</p>
+    <details><summary>练习：把上面的 gather 改成逐个 await tool(name)，会怎样？</summary><p>A 会先等待 B 发信号，但 B 根本还没被启动，于是一直等下去。关键不在于出现了 await，而在于任务是否已经分别被调度。源码把执行任务启动与按序收集结果分开，正是为了兼顾并发和稳定的历史顺序。</p></details>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L2409" target="_blank" rel="noopener noreferrer"><code>try_run_sampling_request</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/stream_events_utils.rs#L300" target="_blank" rel="noopener noreferrer"><code>handle_output_item_done</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/tools/parallel.rs#L114" target="_blank" rel="noopener noreferrer"><code>handle_tool_call_with_source</code></a>。</p>
+    <div class="cx-takeaway"><p><strong>值得学的设计：</strong>分别定义何时能启动、哪些任务能重叠、结果按什么顺序保存，以及取消后怎样收尾。一个 parallel 标志无法代替这些约定。</p></div>
+    <nav class="cx-chapter-nav" aria-label="流式章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-process">接着看：长命令 →</a></nav>
+  </section>
+
+  <section id="cx-process" class="cx-chapter">
+    <p class="cx-kicker">10 / 进程管理</p><h2>工具返回了，命令可能还没有结束</h2>
+    <p class="cx-question">跑测试需要几十秒。一次工具调用等了一会儿就返回，后面的输出和进程由谁管理？</p>
+    <p><code>UnifiedExecProcessManager</code> 持有进程表。<code>exec_command</code> 可以在等待窗口结束时返回已有输出和会话标识，让后续 <code>write_stdin</code> 接着读取或写入。这里的 session ID 是工具层用于找回进程的句柄，不等于操作系统 PID，也不等于聊天会话 ID。</p>
+    <h3>先存进程，再开始第一次等待</h3>
+    <p><code>exec_command_inner</code> 启动执行、建立输出收集和事件发送后，会先把仍活着的进程放进进程表，再进入初次等待。源码注释解释了顺序：如果本轮在等待期间被中断，不能因为最后一个局部引用被释放，就意外终止本该继续受管理的后台进程。</p>
+    <p>从 Python 看，就是先把子进程对象存进长期存活的 manager，再把控制权交给 <code>await</code>。只把对象放在一个可能被取消的函数局部变量里，资源生命周期就会跟这次等待绑在一起。</p>
+    <h3>三个经常被叫作“超时”的不同事件</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">发生的事</th><th scope="col">进程状态</th><th scope="col">后续处理</th></tr></thead><tbody>
+      <tr><th scope="row">达到 yield 等待时长</th><td>可能仍在运行</td><td>带会话标识返回，后面继续轮询</td></tr>
+      <tr><th scope="row">要求完整执行的路径达到 timeout</th><td>源码会标记超时并尝试确认终止</td><td>返回相应执行结果，不能当成“仍在正常等待”</td></tr>
+      <tr><th scope="row">模型响应连接断开</th><td>本地进程未必受到影响</td><td>查执行记录和进程状态，再恢复模型请求</td></tr>
+    </tbody></table></div>
+    <h3>用一个真正的子进程观察等待返回</h3>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 等待超时保留进程，可单独运行</span></div><pre><code data-language="python" data-example="process" data-runnable="true">import asyncio
+import sys
+
+async def collect(process):
+    output = await process.stdout.read()
+    return {"exit_code": await process.wait(),
+            "output": output.decode().strip()}
+
+async def poll(entry, seconds):
+    try:
+        return await asyncio.wait_for(
+            asyncio.shield(entry["result"]), seconds,
+        )
+    except asyncio.TimeoutError:
+        return {"session_id": "p1", "status": "running"}
+
+async def main():
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-u", "-c",
+        "import sys; sys.stdin.readline(); print('finished')",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    processes = {"p1": {"process": process,
+                        "result": asyncio.create_task(collect(process))}}
+    entry = processes["p1"]
+    try:
+        print(await poll(entry, 0.02))  # running，仍在等输入
+        process.stdin.write(b"\n")
+        await process.stdin.drain()
+        process.stdin.close()
+        print(await poll(entry, 5))  # exit_code: 0
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        await entry["result"]
+        processes.pop("p1")
+
+asyncio.run(main())</code></pre></div>
+    <p>子进程先等一行输入，因此第一次等待结束后它仍活着。<code>shield</code> 保护收集任务，使 <code>wait_for</code> 超时不会连带取消它；第二次等待可以拿到同一任务的结果。<code>finally</code> 负责结束实验并回收资源。实际完成时长取决于机器，第二次若仍返回 running，清理分支会结束它。</p>
+    <p>这个例子用 pipe 演示进程持有与等待，和 Codex 的终端能力并非完全等价；输出很小，所以先全部收集再返回。生产实现需要持续读取并限制缓冲区，避免大量输出塞满管道或内存。Codex 这里使用 <code>HeadTailBuffer</code> 保存输出视图，并区分事件流和工具返回的输出快照。</p>
+    <h3>为什么轮询也要加锁</h3>
+    <p><code>write_stdin</code> 在同一进程的 <code>interaction_lock</code> 上串行处理读写，因为它们共享一个会被取走内容的输出缓冲区和生命周期。两个轮询者同时读取，可能一个取走数据，另一个却认为没有输出。不同终端的轮询仍可以并发。</p>
+    <p>操作顺序是：取得进程对象，等待它的交互锁，读取适用审批状态，必要时等待审批，再确认 ID 仍对应同一对象，最后执行输入或轮询。锁解决同一对象的交互冲突，身份复查解决对象已被替换的问题，二者不能互相代替。</p>
+    <h3>空轮询、终端输入与退出码</h3>
+    <p>输入为空时，<code>write_stdin</code> 用于接着等输出；有输入时才涉及写入。当前源码的非 TTY 路径不接受普通文本输入，专门处理中断，其余会报 stdin 已关闭；TTY 则通过终端写入。不能因为工具叫 write_stdin，就假定所有进程都支持交互输入。</p>
+    <p>返回会话标识通常说明还有后续可跟进，退出码则说明程序的终止结果。“一段时间没新输出”不等于卡死或成功。排查时看进程是否还活着、是否在等输入，以及输出是不是已被前一次轮询读走。</p>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/unified_exec/process_manager.rs#L497" target="_blank" rel="noopener noreferrer"><code>exec_command_inner</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/unified_exec/process_manager.rs#L817" target="_blank" rel="noopener noreferrer"><code>write_stdin</code></a>。</p>
+    <div class="cx-takeaway"><p><strong>值得学的设计：</strong>把一次等待与进程生命周期分开。进程必须有明确持有者，输出有明确消费者，终止有明确结果；返回控制权不意味着工作已经完成。</p></div>
+    <nav class="cx-chapter-nav" aria-label="进程章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-retry">接着看：连接与重试 →</a></nav>
+  </section>
+
+  <section id="cx-retry" class="cx-chapter">
+    <p class="cx-kicker">11 / 连接与重试</p><h2>断线后，重新请求模型不等于重做整轮任务</h2>
+    <p class="cx-question">模型响应中已经发出了写文件调用，随后连接断开。再次请求时，应该把什么交给模型？</p>
+    <p><code>run_sampling_request</code> 的第一次尝试使用传入的 input。后续重试会重新从当前历史准备 prompt，而不是永远复用最开始的输入。原因是第一次响应期间可能已经记录了完整调用，也可能有工具结果进入历史。</p>
+    <h3>连接复用与会话状态分属不同层</h3>
+    <p><code>ModelClient::new_session</code> 可以取出缓存的 WebSocket 状态供本轮使用；认证所有者的代次变化时，会丢弃旧缓存。连接复用减少重复建立连接的成本，认证变化则要求避免沿用不再匹配的连接状态。</p>
+    <p>对 Python 开发者，可以类比“长期存活的 HTTP 客户端”与“这次请求的上下文”。客户端能复用连接，但本次模型、工具清单、历史和响应标识仍要分别管理。连接还活着，不代表它里面的历史引用一定适合压缩或模型切换后的新请求。</p>
+    <h3>先分类错误，再选择恢复动作</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">错误或状态</th><th scope="col">当前源码的处理要点</th></tr></thead><tbody>
+      <tr><th scope="row">上下文窗口超限</th><td>采样请求层标记 token 已满并返回错误，由外层按条件处理；不把相同大请求当普通网络故障无限重发</td></tr>
+      <tr><th scope="row">使用额度达到限制</th><td>更新可用的限额信息后返回；不走普通可重试流错误循环</td></tr>
+      <tr><th scope="row">不可重试错误</th><td><code>is_retryable()</code> 为 false 时直接返回</td></tr>
+      <tr><th scope="row">可重试流错误</th><td>按 provider 的预算与错误指定的等待时间，或 backoff，决定再试</td></tr>
+      <tr><th scope="row">预算耗尽且传输可回退</th><td>尝试从 WebSocket 切到 HTTPS；成功切换后重置该重试计数</td></tr>
+    </tbody></table></div>
+    <p>还有一条受功能开关控制的例外：启用 <code>UnboundedConnectionRetries</code>，且是适用来源与 provider 的采样连接失败时，使用独立的连接重试计数和有上限的退避等待。它不适用于所有错误，也不能推断所有配置都有同样的总次数上限。</p>
+    <h3>用 Python 演示有界重试</h3>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 只重试连接失败，可单独运行</span></div><pre><code data-language="python" data-example="retry" data-runnable="true">import asyncio
+
+async def request_with_retry(
+    send, history, sleep, max_retries=2,
+):
+    for attempt in range(max_retries + 1):
+        try:
+            return await send(list(history))
+        except ConnectionError:
+            if attempt == max_retries:
+                raise
+            await sleep(0.1 * (2 ** attempt))
+
+async def main():
+    attempts = 0
+    seen = []
+    history = ["用户任务"]
+
+    async def send(prompt):
+        nonlocal attempts
+        attempts += 1
+        seen.append(prompt)
+        if attempts == 1:
+            history.append("已收集的工具结果")
+            raise ConnectionError("响应断开")
+        return "恢复成功"
+
+    async def show_delay(seconds):
+        print("重试等待：", seconds)
+
+    print(await request_with_retry(send, history, show_delay))
+    print(seen)
+    # [['用户任务'], ['用户任务', '已收集的工具结果']]
+
+asyncio.run(main())</code></pre></div>
+    <p><code>max_retries=2</code> 表示首次请求之外最多再试两次，总共三次。传入 <code>sleep</code> 是为了让实验可以记录等待时间，实际接入时可使用 <code>asyncio.sleep</code>。示例只捕获 ConnectionError；权限错误、参数错误和取消不会被它吞掉。当前历史用字符串列表简化，<code>list(history)</code> 也只是浅拷贝。</p>
+    <h3>为什么不能承诺“有 call_id 就绝不会重复执行”</h3>
+    <p><code>call_id</code> 首先用来关联调用与结果，不天然是全局幂等键。幂等的意思是重复执行不会产生额外效果；写入固定内容和追加一行就有不同性质。真实仓库还有一个测试，专门让两个调用使用相同 ID，验证各自的结果仍保留正确的调用元数据。</p>
+    <p>采样重试会清理前一个 response ID 的扩展状态，防止下一调用归属错响应；已经执行的调用信息也会附回 prompt。这些措施帮助保留过程，但并不提供跨所有工具、所有断线窗口的“恰好执行一次”。如果工具已经生效却没留下结果，或模型重新提出一个类似操作，还需要工具层的幂等设计或当前状态核对。</p>
+    <h3>排查一次断线，沿三个边界找证据</h3>
+    <ol class="cx-steps">
+      <li><strong>响应边界。</strong><p>是否出现 Completed？源码把“流结束却没有 Completed”当流错误。只收到部分文字，不能视为完整响应成功。</p></li>
+      <li><strong>调用边界。</strong><p>是否收到完整工具项并记录了调用？工具是否已经启动？不能从连接断开反推工具从未执行。</p></li>
+      <li><strong>结果边界。</strong><p>结果是否已经被收集并写入历史？下一次 prompt 是否带上它？这是理解恢复后模型行为的关键。</p></li>
+    </ol>
+    <p class="cx-source">源码：<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/client.rs#L525" target="_blank" rel="noopener noreferrer"><code>ModelClient::new_session</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/session/turn.rs#L1538" target="_blank" rel="noopener noreferrer"><code>run_sampling_request</code></a>；<a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/responses_retry.rs#L51" target="_blank" rel="noopener noreferrer"><code>handle_retryable_response_stream_error</code></a>。</p>
+    <div class="cx-takeaway"><p><strong>值得学的设计：</strong>重试需要错误分类、次数与等待策略，还要知道上次已经发生了什么。网络恢复和业务操作是否可以重复，是两个需要分别解决的问题。</p></div>
+    <nav class="cx-chapter-nav" aria-label="重试章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-lab">接着看：源码实验 →</a></nav>
+  </section>
+
+  <section id="cx-lab" class="cx-chapter">
+    <p class="cx-kicker">12 / 源码实战</p><h2>把设计理解到能写出验证它的实验</h2>
+    <p>读完函数名称，只能知道大概分工。再问一句“把执行顺序故意打乱，这个约定还成立吗”，就开始触及运行时设计。Codex 的测试会模拟模型事件、延迟完成信号、检查下一次请求，而不只检查最终回答是不是 done。</p>
+    <h3>从这四个真实测试入手</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">测试</th><th scope="col">人为制造的条件</th><th scope="col">它保护的约定</th></tr></thead><tbody>
+      <tr><th scope="row"><a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/tests/suite/tool_parallelism.rs#L190" target="_blank" rel="noopener noreferrer">不同工具同时执行</a></th><td>一条模拟响应提出两个不同、可并行的工具调用</td><td>用耗时检查它们确实重叠执行</td></tr>
+      <tr><th scope="row"><a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/tests/suite/tool_parallelism.rs#L226" target="_blank" rel="noopener noreferrer">结果顺序与调用对应</a></th><td>同一响应发出三个命令，再捕获下一次模型请求</td><td>调用项在结果前，输出顺序与调用 ID 对应</td></tr>
+      <tr><th scope="row"><a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/tests/suite/tool_parallelism.rs#L304" target="_blank" rel="noopener noreferrer">工具先于响应完成</a></th><td>先发送完整工具项，延迟响应完成事件</td><td>工具可以先开始，而不必等整条响应结束</td></tr>
+      <tr><th scope="row"><a href="https://github.com/openai/codex/blob/3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8/codex-rs/core/src/stream_events_utils_tests.rs#L331" target="_blank" rel="noopener noreferrer">重复 ID 不串记录</a></th><td>重复调用 ID、反序收集结果，并切换记录配置</td><td>每份输出仍关联到自己的真实调用记录，配置变化不会串记录</td></tr>
+    </tbody></table></div>
+    <p>前面三个在 <code>core/tests/suite/tool_parallelism.rs</code>，第四个在 <code>core/src/stream_events_utils_tests.rs</code>。这些是固定源码快照中的测试设计，本页不代表已在你的机器执行了整套 Rust 测试。</p>
+    <details><summary>对照源码中的完整测试名</summary><ol>
+      <li>不同工具同时执行：<code>mixed_parallel_tools_run_in_parallel</code></li>
+      <li>结果顺序与调用对应：<code>tool_results_grouped</code></li>
+      <li>工具先于响应完成：<code>shell_tools_start_before_response_completed_when_stream_delayed</code></li>
+      <li>重复 ID 不串记录：<code>direct_results_keep_their_own_records_when_call_ids_repeat</code></li>
+    </ol></details>
+    <h3>用 Python 写一个不依赖网速的时序实验</h3>
+    <p>下面先收到完整工具调用，启动工具；模拟响应保持未完成，直到测试主动放行。由此验证“工具可以先跑，但下一次模型请求仍要等响应和工具收尾完成”。</p>
+    <div class="code-block-wrapper"><div class="code-header"><span>Python · 控制事件顺序的实验，可单独运行</span></div><pre><code data-language="python" data-example="lab" data-runnable="true">import asyncio
+
+async def experiment():
+    tool_started = asyncio.Event()
+    response_done = asyncio.Event()
+    trace = []
+
+    async def tool():
+        trace.append("tool_started")
+        tool_started.set()
+        await response_done.wait()
+        trace.append("tool_result")
+        return "ok"
+
+    async def sampling():
+        trace.append("item_done")
+        task = asyncio.create_task(tool())
+        await response_done.wait()
+        result = await task
+        trace.append("next_request")
+        return result
+
+    task = asyncio.create_task(sampling())
+    await tool_started.wait()
+    assert not task.done()
+    assert trace == ["item_done", "tool_started"]
+    response_done.set()
+    assert await task == "ok"
+    assert trace == ["item_done", "tool_started",
+                     "tool_result", "next_request"]
+    print(trace)
+
+asyncio.run(asyncio.wait_for(experiment(), timeout=2))</code></pre></div>
+    <p>这里的 Event 像两道由测试控制的门。它让“谁先发生”可重复验证，而不是依赖机器刚好跑得快。外层两秒超时是防止实验死等，不是判断并发是否正确的依据。用正常 Python 模式运行，<code>-O</code> 会跳过 assert 检查。</p>
+    <h3>自己改 Harness 时，优先验证什么</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">修改区域</th><th scope="col">值得制造的失败</th><th scope="col">应观察的证据</th></tr></thead><tbody>
+      <tr><th scope="row">输入与上下文</th><td>工具等待时追加用户要求，或切换工具配置</td><td>旧调用保持原 step 的运行条件；新输入在适用的下一边界被处理</td></tr>
+      <tr><th scope="row">工具与并发</th><td>B 先于 A 完成；一个普通失败；执行中取消</td><td>调用关系、结果顺序、终态和中止记录都正确</td></tr>
+      <tr><th scope="row">压缩与恢复</th><td>预压缩失败；压缩后再切换模型</td><td>新输入未丢失；后续 prompt 仍保留必要上下文与约束</td></tr>
+      <tr><th scope="row">终端会话</th><td>两个轮询者操作同一进程；等待审批时旧进程被移除</td><td>缓冲区读取不冲突；输入不会发往另一个同 ID 进程</td></tr>
+      <tr><th scope="row">连接重试</th><td>工具启动后，响应在 Completed 前断开</td><td>历史保留已发生的事；重试没有把错误归属到旧响应</td></tr>
+    </tbody></table></div>
+    <h3>一次有目标的源码阅读</h3>
+    <p>例如研究“为什么工具先执行、结果却按顺序返回”：先让 CodeGraph 从 <code>try_run_sampling_request</code> 追到 <code>handle_output_item_done</code>，再查看这两个函数、<code>ToolCallRuntime</code> 和 <code>drain_in_flight</code> 的实现。静态调用图遇到 future 或动态分发时可能没有完整路径，就沿工具给出的具体位置补读这一处。</p>
+    <p>最后回到 <code>tool_results_grouped</code>，看它检查的确切输入条目。把结论写成一句可以验证的话：“这条路径先记录调用，工具可并发执行，结果按调用顺序回填，下一次请求包含这些结果。”比“用了异步提高性能”更接近对实现的理解。</p>
+    <div class="cx-takeaway"><p><strong>值得学的习惯：</strong>为每个设计找到可观察的约定，再用错误输入或特殊时序试着破坏它。能说明失败怎样被处理，才算读到了实现的深处。</p></div>
+    <nav class="cx-chapter-nav" aria-label="实战章节导航"><a href="#/codex-harness?section=cx-home">← 模块目录</a><a href="#/codex-harness?section=cx-source-map">接着看：源码地图 →</a></nav>
+  </section>
+
+  <section id="cx-source-map" class="cx-chapter">
+    <h2>源码地图与阅读顺序</h2>
+    <p>路径都相对于 Codex 仓库根目录。先沿主线读懂一次请求，再挑你最关心的模块深入。</p>
+    <h3>从 Python 过渡到 Rust，先认这些写法</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">Rust 写法</th><th scope="col">用 Python 经验理解</th><th scope="col">需要注意</th></tr></thead><tbody>
+      <tr><th scope="row"><code>struct</code></th><td>先当作带字段的数据对象，类似 dataclass</td><td>Rust 的字段类型由编译器检查</td></tr>
+      <tr><th scope="row"><code>impl</code></th><td>为某个类型实现方法</td><td>不像 Python 一样把方法都写在 class 块内</td></tr>
+      <tr><th scope="row"><code>Vec&lt;T&gt;</code></th><td>可增长的序列，类似 list</td><td>元素遵循同一个类型 T</td></tr>
+      <tr><th scope="row"><code>Option&lt;T&gt;</code></th><td>可能有值，也可能没有</td><td>用 Some(value) 和 None 区分，需显式处理</td></tr>
+      <tr><th scope="row"><code>Result&lt;T, E&gt;</code></th><td>操作可能成功，也可能失败</td><td>以 Ok / Err 返回；遇到 ? 时，常是在把错误交给调用方</td></tr>
+      <tr><th scope="row"><code>Arc&lt;T&gt;</code></th><td>多个地方共享持有一份数据</td><td>引用计数支持线程间共享；可否安全使用仍取决于内部类型</td></tr>
+      <tr><th scope="row"><code>async fn / .await</code></th><td>对应 async def / await 的异步思路</td><td>具体运行时和调度规则不同</td></tr>
+      <tr><th scope="row"><code>tokio::spawn</code></th><td>类似 asyncio.create_task，安排任务执行</td><td>任务可以先启动，再由另一处等待结果</td></tr>
+      <tr><th scope="row"><code>tokio::select!</code></th><td>同时等几个异步事件，处理先就绪的分支</td><td>取消、丢弃 future 和资源清理要看各分支，不能假定会自动撤销副作用</td></tr>
+      <tr><th scope="row"><code>Mutex / RwLock</code></th><td>与 asyncio.Lock 类似，用来协调共享状态</td><td>RwLock 区分共享读锁和独占写锁；应检查持锁跨过了哪些 await</td></tr>
+      <tr><th scope="row"><code>FuturesOrdered</code></th><td>可类比 gather 按输入顺序收集结果</td><td>结果顺序不等于任务完成顺序，前面的慢任务可能延迟后续结果被取出</td></tr>
+    </tbody></table></div>
+    <h3>沿着一轮任务找源码</h3>
+    <div class="harness-table-wrap"><table><thead><tr><th scope="col">顺序</th><th scope="col">源码入口</th><th scope="col">带着这个问题读</th></tr></thead><tbody>
+      <tr><td>1</td><td><code>codex-rs/core/src/session/turn.rs</code><br>run_turn / build_prompt</td><td>一轮任务为什么会继续，什么时候结束？</td></tr>
+      <tr><td>2</td><td><code>codex-rs/core/src/session/step_context.rs</code></td><td>一次请求固定了哪些设置与能力？</td></tr>
+      <tr><td>3</td><td><code>codex-rs/core/src/tools/router.rs</code><br><code>registry.rs / spec_plan.rs</code></td><td>工具说明怎样和实现匹配？</td></tr>
+      <tr><td>4</td><td><code>codex-rs/core/src/tools/orchestrator.rs</code><br><code>sandboxing.rs</code></td><td>批准、拒绝、失败重试分别走哪条分支？</td></tr>
+      <tr><td>5</td><td><code>codex-rs/core/src/context_manager/history.rs</code><br><code>codex-rs/rollout/src/recorder.rs</code></td><td>哪些内容给模型，哪些记录写到磁盘？</td></tr>
+      <tr><td>6</td><td><code>codex-rs/core/src/session/turn.rs</code><br>run_pre_sampling_compact / run_auto_compact</td><td>什么时候压缩，压缩后怎样继续？</td></tr>
+      <tr><td>7</td><td><code>codex-rs/core/src/hook_runtime.rs</code></td><td>扩展返回的结果由谁接住？</td></tr>
+      <tr><td>8</td><td><code>codex-rs/core/src/stream_events_utils.rs</code><br><code>codex-rs/core/src/tools/parallel.rs</code></td><td>什么时候启动工具，结果为什么按序收集，取消如何处理？</td></tr>
+      <tr><td>9</td><td><code>codex-rs/core/src/unified_exec/process_manager.rs</code></td><td>谁保留后台进程，等待与终止如何区分？</td></tr>
+      <tr><td>10</td><td><code>codex-rs/core/src/client.rs</code><br><code>codex-rs/core/src/responses_retry.rs</code></td><td>哪些连接可复用，重试何时停止或切换传输？</td></tr>
+      <tr><td>11</td><td><code>codex-rs/core/tests/suite/tool_parallelism.rs</code><br><code>codex-rs/core/src/stream_events_utils_tests.rs</code></td><td>怎样用可控事件时序证明设计约定？</td></tr>
+    </tbody></table></div>
+    <p class="cx-meta">以上内容对应固定提交 <code>3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8</code>。Python 示例用于解释设计，采用简化的消息与数据格式；Rust 节选来自该提交。源码链接需要联网，正文、代码与示意图可离线阅读。开源仓库中的实现不代表所有托管服务的内部实现。</p>
+    <nav class="cx-chapter-nav" aria-label="源码地图导航"><a href="#/harness">← Harness 总入口</a><a href="#/dsh">对照阅读 DSH →</a></nav>
+  </section>
+</div>
+</div>

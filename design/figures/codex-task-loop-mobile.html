@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Codex 任务循环</title>
+<style>
+* { box-sizing: border-box; }
+body { width: 650px; height: 1120px; margin: 0; padding: 32px; background: #f8faf9; color: #222c29; font-family: "Microsoft YaHei", sans-serif; }
+main { position: relative; height: 1056px; }
+.task { position: absolute; left: 156px; top: 0; font-size: 32px; color: #276746; }
+.node { position: absolute; left: 156px; width: 430px; height: 124px; border: 2px solid; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+b { font-size: 35px; line-height: 1.5; }
+small { font-size: 26px; line-height: 1.6; }
+.context { top: 90px; background: #e4f3ea; border-color: #438c64; }
+.model { top: 285px; background: #e8effa; border-color: #5c80b1; }
+.permission { top: 480px; background: #fae9e6; border-color: #b16e63; }
+.execute { top: 675px; background: #fcf0dc; border-color: #ae873b; }
+.result { top: 870px; background: #e4f3ea; border-color: #438c64; }
+.finish { left: 0; top: 285px; width: 110px; height: 124px; background: #f0f0f0; border-color: #8a8e8d; }
+.finish b { font-size: 27px; }
+.down { position: absolute; left: 370px; height: 61px; width: 2px; background: #57655f; }
+.down::after { content: ""; position: absolute; left: -6px; bottom: -1px; border-top: 12px solid #57655f; border-left: 7px solid transparent; border-right: 7px solid transparent; }
+.branch { position: absolute; left: 115px; top: 347px; width: 36px; height: 2px; background: #57655f; }
+.branch::after { content: ""; position: absolute; top: -6px; left: -1px; border-right: 12px solid #57655f; border-top: 7px solid transparent; border-bottom: 7px solid transparent; }
+.loop { position: absolute; left: 124px; top: 150px; width: 27px; height: 782px; border: 2px solid #57655f; border-right: 0; }
+.loop::after { content: ""; position: absolute; right: -1px; top: -8px; border-left: 12px solid #57655f; border-top: 7px solid transparent; border-bottom: 7px solid transparent; }
+.label { position: absolute; padding: 4px; font-size: 24px; background: #f8faf9; }
+</style>
+<main aria-label="Codex 任务循环竖版">
+  <div class="task">用户提出任务</div>
+  <div class="down" style="top:48px;height:36px"></div>
+  <div class="node context"><b>准备上下文</b><small>任务、规则、历史</small></div>
+  <div class="down" style="top:220px"></div>
+  <div class="node model"><b>模型判断</b><small>决定下一步</small></div>
+  <div class="down" style="top:415px"></div>
+  <div class="label" style="left:382px;top:423px">工具调用</div>
+  <div class="loop"></div>
+  <div class="branch"></div>
+  <div class="label" style="left:8px;top:244px">收尾</div>
+  <div class="node finish"><b>结束<br>本轮</b></div>
+  <div class="node permission"><b>权限检查</b><small>决定是否、如何执行</small></div>
+  <div class="down" style="top:610px"></div>
+  <div class="node execute"><b>执行工具</b><small>读文件、改代码、测试</small></div>
+  <div class="down" style="top:805px"></div>
+  <div class="node result"><b>记录结果</b><small>成功或失败都要反馈</small></div>
+  <div class="label" style="left:6px;top:697px">继续<br>下一步</div>
+</main>
+</html>

@@ -1,0 +1,81 @@
+<section class="llm-mod llm-m-prompt-vs-finetune" id="llm-prompt-vs-finetune"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>⚖️ 模块0：提示调优 vs 微调</h1>
+  <p>PEFT方法全景与选型指南</p>
+</div><div class="section" id="llm-prompt-vs-finetune-s1">
+    <h2>三种适配策略</h2>
+    
+    <table>
+    <tr><th>策略</th><th>原理</th><th>训练参数量</th><th>数据需求</th><th>效果</th></tr>
+    <tr><td>全参数微调</td><td>更新模型所有参数</td><td>100%</td><td>万-十万级</td><td>最好（但成本高）</td></tr>
+<tr><td>Prompt-Tuning</td><td>只训练输入的提示向量</td><td><0.1%</td><td>百-千级</td><td>接近微调</td></tr>
+<tr><td>Prefix-Tuning</td><td>在每层添加可训练前缀</td><td>~0.1%</td><td>百-千级</td><td>接近微调</td></tr>
+
+  </table>
+    <div class="callout callout-key">
+    <p>🔑 PEFT（Parameter-Efficient Fine-Tuning）的核心思想：冻结大模型的大部分参数，只训练少量新增参数，即可达到接近全参数微调的效果。</p>
+  </div>
+  </div><div class="section" id="llm-prompt-vs-finetune-s2">
+    <h2>Prompt-Tuning详解</h2>
+    
+    <p>Prompt-Tuning在输入前拼接一组<strong>可训练的连续向量</strong>（Soft Prompt），通过反向传播优化这些向量。</p>
+    <div class="compare">
+    <div class="compare-card left"><h4>Hard Prompt（手工设计）</h4><ul><li>自然语言文本</li><li>需要人类设计</li><li>效果依赖设计质量</li><li>不可微分</li></ul></div>
+    <div class="compare-card right"><h4>Soft Prompt（可训练）</h4><ul><li>连续向量</li><li>自动学习</li><li>效果随数据提升</li><li>可微分优化</li></ul></div>
+  </div>
+    <h3>P-Tuning v2</h3>
+    <p>在每一层Transformer都添加可训练的提示向量（不仅是输入层），效果更接近全参数微调。</p>
+  </div><div class="section" id="llm-prompt-vs-finetune-s3">
+    <h2>PEFT方法全景</h2>
+    
+    <table>
+    <tr><th>方法</th><th>原理</th><th>新增参数量</th><th>训练速度</th><th>适用模型</th></tr>
+    <tr><td>LoRA</td><td>在权重矩阵旁添加低秩分解矩阵A和B</td><td>~0.1-1%</td><td>快</td><td>所有Transformer</td></tr>
+<tr><td>QLoRA</td><td>4-bit量化 + LoRA</td><td>~0.1%</td><td>快</td><td>显存受限场景</td></tr>
+<tr><td>Adapter</td><td>在FFN后插入小型网络</td><td>~1-5%</td><td>中</td><td>BERT/GPT</td></tr>
+<tr><td>Prefix-Tuning</td><td>每层添加可训练前缀向量</td><td>~0.1%</td><td>快</td><td>所有Transformer</td></tr>
+<tr><td>DoRA</td><td>分解权重为方向+大小，LoRA只更新方向</td><td>~0.1%</td><td>快</td><td>比LoRA更优</td></tr>
+
+  </table>
+    <h3>LoRA原理</h3>
+    <p>将权重更新矩阵 ΔW 分解为两个低秩矩阵的乘积：<code>ΔW = A × B</code></p>
+    <ul>
+        <li>原始权重 W ∈ R^{d×d}（冻结不训练）</li>
+        <li>A ∈ R^{d×r}, B ∈ R^{r×d}（r << d，可训练）</li>
+        <li>前向传播：<code>h = Wx + BAx</code></li>
+    </ul>
+  </div><div class="section" id="llm-prompt-vs-finetune-s4">
+    <h2>选型决策指南</h2>
+    
+    <table>
+    <tr><th>场景</th><th>推荐方法</th><th>原因</th></tr>
+    <tr><td>数据很少（<100条）</td><td>Prompt Engineering</td><td>不需要训练</td></tr>
+<tr><td>数据中等（100-1万条）</td><td>LoRA/QLoRA</td><td>参数高效，效果好</td></tr>
+<tr><td>数据充足（>1万条）</td><td>全参数微调</td><td>效果最好</td></tr>
+<tr><td>显存有限（<16GB）</td><td>QLoRA (4-bit)</td><td>大幅减少显存</td></tr>
+<tr><td>需要快速迭代</td><td>LoRA</td><td>训练快，可热切换</td></tr>
+<tr><td>多任务部署</td><td>LoRA适配器切换</td><td>基座模型共享，仅切换小矩阵</td></tr>
+
+  </table>
+    <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code>from peft import LoraConfig, get_peft_model
+
+config = LoraConfig(
+    task_type="CAUSAL_LM",
+    r=16,                # 秩
+    lora_alpha=32,       # 缩放系数
+    lora_dropout=0.05,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+)
+model = get_peft_model(base_model, config)
+print(f"可训练参数: {model.print_trainable_parameters()}")
+# 输出: trainable params: 4.2M || all params: 7B || 0.06%</code></pre>
+  </div>
+    <div class="callout callout-tip">
+    <p>💡 <strong>2024-2026推荐：</strong>QLoRA是显存受限场景的首选；LoRA是生产部署的标准方案；全参数微调只在数据充足+资源充裕时使用。</p>
+  </div>
+  </div>
+</div></section>

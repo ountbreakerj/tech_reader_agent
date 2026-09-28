@@ -1,0 +1,406 @@
+<section class="llm-mod llm-m-distributed" id="llm-distributed"><div class="module-wrapper">
+<nav class="nav">
+  <span class="brand">LLM Training</span>
+  <a href="#/llm?section=llm-classic-arch">经典架构</a>
+  <a href="#/llm?section=llm-distributed" class="active">分布式训练</a>
+  <a href="#/llm?section=llm-alignment">对齐训练</a>
+  <a href="#/llm?section=llm-modern-arch">前沿架构</a>
+  <a href="#/llm?section=llm-eval-advanced">评估体系</a>
+</nav>
+
+<header>
+  <h1>分布式训练</h1>
+  <p>从数据并行到 3D 混合并行，掌握大模型训练的核心工程能力</p>
+</header>
+
+<div class="container">
+
+<!-- ==================== 为什么需要分布式 ==================== -->
+<div class="section">
+  <h2>1. 为什么需要分布式训练</h2>
+  <p>以一个 70B 参数的模型为例，训练时需要消耗的显存远超单卡容量：</p>
+
+  <div class="formula">
+    显存 = 模型参数 + 梯度 + 优化器状态 + 激活值<br>
+    FP16 参数: 70B × 2 bytes = 140 GB<br>
+    FP32 梯度: 70B × 4 bytes = 280 GB<br>
+    Adam 优化器: 70B × (4+4+4) bytes = 840 GB（FP32 参数副本 + 一阶/二阶动量）<br>
+    <strong>合计: ~1,260 GB（不含激活值）</strong>
+  </div>
+
+  <div class="callout-warn">即使使用 BF16 混合精度（参数 2B + 梯度 2B + 优化器 8B = 12B/参数），70B 模型仍需 840 GB 显存，相当于 10.5 张 H100 80GB。加上激活值，实际需求更高。</div>
+
+  <table>
+    <tr><th>显存组成</th><th>FP32 (bytes)</th><th>BF16 混合精度 (bytes)</th><th>说明</th></tr>
+    <tr><td>模型参数</td><td>4</td><td>2</td><td>FP32 或 BF16 存储</td></tr>
+    <tr><td>梯度</td><td>4</td><td>2</td><td>与参数精度一致</td></tr>
+    <tr><td>Adam 一阶动量 (m)</td><td>4</td><td>4</td><td>FP32 维护</td></tr>
+    <tr><td>Adam 二阶动量 (v)</td><td>4</td><td>4</td><td>FP32 维护</td></tr>
+    <tr><td>FP32 参数副本</td><td>-</td><td>4</td><td>混合精度必需</td></tr>
+    <tr><td><strong>合计/参数</strong></td><td><strong>16</strong></td><td><strong>16</strong></td><td>不含激活值</td></tr>
+  </table>
+</div>
+
+<!-- ==================== 数据并行 ==================== -->
+<div class="section">
+  <h2>2. 数据并行（Data Parallel）</h2>
+  <p>数据并行是最基础的分布式策略：每个 GPU 持有完整模型副本，将数据均分到各卡上并行计算，然后同步梯度。</p>
+
+  <h3>DP vs DDP vs FSDP2</h3>
+  <table>
+    <tr><th>方式</th><th>通信</th><th>GIL 限制</th><th>适用场景</th></tr>
+    <tr><td>DP（DataParallel）</td><td>单进程多线程，参数服务器</td><td>受 GIL 限制</td><td>单机少量 GPU（已过时）</td></tr>
+    <tr><td>DDP（DistributedDataParallel）</td><td>多进程，AllReduce</td><td>无限制</td><td>生产环境标准方案</td></tr>
+    <tr><td>FSDP2（Fully Sharded DP）</td><td>多进程，分片参数/梯度/优化器</td><td>无限制</td><td>超大模型单卡放不下</td></tr>
+  </table>
+
+  <h3>DDP 训练代码</h3>
+<pre><code><span class="kw">import</span> torch
+<span class="kw">import</span> torch.distributed <span class="kw">as</span> dist
+<span class="kw">from</span> torch.nn.parallel <span class="kw">import</span> DistributedDataParallel <span class="kw">as</span> DDP
+<span class="kw">from</span> torch.utils.data <span class="kw">import</span> DataLoader, DistributedSampler
+
+<span class="kw">def</span> <span class="fn">train_ddp</span>(local_rank):
+    <span class="cmt"># 1. 初始化进程组</span>
+    dist.init_process_group(backend=<span class="str">"nccl"</span>)
+    torch.cuda.set_device(local_rank)
+
+    <span class="cmt"># 2. 创建模型并包装 DDP</span>
+    model = <span class="cls">MyModel</span>().cuda()
+    model = DDP(model, device_ids=[local_rank])
+
+    <span class="cmt"># 3. 使用 DistributedSampler 保证各卡数据不重叠</span>
+    sampler = DistributedSampler(dataset, shuffle=<span class="kw">True</span>)
+    loader = DataLoader(dataset, batch_size=<span class="num">8</span>, sampler=sampler)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=<span class="num">3e-4</span>)
+
+    <span class="kw">for</span> epoch <span class="kw">in</span> range(<span class="num">10</span>):
+        sampler.set_epoch(epoch)  <span class="cmt"># 保证每 epoch shuffle 不同</span>
+        <span class="kw">for</span> batch <span class="kw">in</span> loader:
+            input_ids = batch[<span class="str">"input_ids"</span>].cuda()
+            labels = batch[<span class="str">"labels"</span>].cuda()
+            loss = model(input_ids, labels).loss
+            loss.backward()   <span class="cmt"># DDP 自动在 backward 中做 AllReduce 同步梯度</span>
+            optimizer.step()
+            optimizer.zero_grad()
+
+    dist.destroy_process_group()
+
+<span class="cmt"># 启动: torchrun --nproc_per_node=8 train.py</span></code></pre>
+
+  <div class="callout-info">DDP 使用 <strong>Bucket AllReduce</strong> 优化通信：将多个小梯度张量打包成桶（默认 25MB），减少通信次数。同时在反向传播过程中与计算重叠（overlap），几乎零额外开销。</div>
+</div>
+
+<!-- ==================== FSDP2 ==================== -->
+<div class="section">
+  <h2>3. FSDP2（Fully Sharded Data Parallel）</h2>
+  <p>FSDP2 是 PyTorch 原生的全分片数据并行方案（取代 FSDP1），其核心思想是：<strong>不</strong>让每张卡都持有完整的参数、梯度和优化器状态，而是将它们分片存储到各卡上。</p>
+
+  <div class="step">
+    <div class="step-title">FSDP2 工作流程</div>
+    <p>1. <strong>前向传播</strong>：需要某层参数时，AllGather 从各卡收集完整参数<br>
+    2. 计算完成后立即释放非本地分片<br>
+    3. <strong>反向传播</strong>：再次 AllGather 获取完整参数，计算梯度<br>
+    4. ReduceScatter 同步梯度，每卡只保留自己的梯度分片<br>
+    5. 每卡只更新自己负责的优化器状态分片</p>
+  </div>
+
+  <h3>FSDP2 训练代码</h3>
+<pre><code><span class="kw">from</span> torch.distributed.fsdp <span class="kw">import</span> fully_shard, MixedPrecisionPolicy
+
+<span class="kw">def</span> <span class="fn">train_fsdp2</span>():
+    dist.init_process_group(backend=<span class="str">"nccl"</span>)
+
+    <span class="cmt"># 混合精度策略</span>
+    mp_policy = MixedPrecisionPolicy(
+        param_dtype=torch.bfloat16,   <span class="cmt"># 参数使用 BF16</span>
+        reduce_dtype=torch.bfloat16,  <span class="cmt"># 梯度规约使用 BF16</span>
+    )
+
+    model = <span class="cls">MyLLaMA</span>().cuda()
+
+    <span class="cmt"># 逐层应用 FSDP2 分片</span>
+    <span class="kw">for</span> layer <span class="kw">in</span> model.layers:
+        fully_shard(layer, mp_policy=mp_policy)  <span class="cmt"># 每个 Transformer 块独立分片</span>
+    fully_shard(model, mp_policy=mp_policy)      <span class="cmt"># 最外层也分片</span>
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=<span class="num">3e-4</span>)
+
+    <span class="kw">for</span> batch <span class="kw">in</span> dataloader:
+        loss = model(batch[<span class="str">"input_ids"</span>].cuda())
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+
+<span class="cmt"># 启动: torchrun --nproc_per_node=8 train_fsdp2.py</span></code></pre>
+
+  <div class="callout-tip">FSDP2 的显存优势：8 卡训练 70B 模型时，每卡仅存储 1/8 的参数/梯度/优化器状态（约 105 GB），加上激活值后，每张 H100 80GB 有望放下（配合 activation checkpointing）。</div>
+</div>
+
+<!-- ==================== DeepSpeed ZeRO ==================== -->
+<div class="section">
+  <h2>4. DeepSpeed ZeRO 三阶段详解</h2>
+  <p>DeepSpeed ZeRO（Zero Redundancy Optimizer）是微软的分布式训练框架，通过逐步分片消除冗余来降低显存占用。</p>
+
+  <table>
+    <tr><th>阶段</th><th>分片内容</th><th>每卡显存 (70B, 8卡)</th><th>通信开销</th></tr>
+    <tr><td>Stage 1</td><td>优化器状态</td><td>~400 GB / 8 = 50 GB</td><td>与 DDP 相同</td></tr>
+    <tr><td>Stage 2</td><td>优化器状态 + 梯度</td><td>~280 GB / 8 = 35 GB</td><td>与 DDP 相同</td></tr>
+    <tr><td>Stage 3</td><td>优化器状态 + 梯度 + 参数</td><td>~140 GB / 8 = 17.5 GB</td><td>比 DDP 多 1.5x</td></tr>
+  </table>
+
+  <h3>DeepSpeed ZeRO Stage 3 配置</h3>
+<pre><code>{
+    <span class="str">"train_batch_size"</span>: <span class="num">32</span>,
+    <span class="str">"gradient_accumulation_steps"</span>: <span class="num">8</span>,
+    <span class="str">"fp16"</span>: {
+        <span class="str">"enabled"</span>: <span class="kw">true</span>,
+        <span class="str">"loss_scale"</span>: <span class="num">0</span>,
+        <span class="str">"initial_scale_power"</span>: <span class="num">16</span>
+    },
+    <span class="str">"zero_optimization"</span>: {
+        <span class="str">"stage"</span>: <span class="num">3</span>,
+        <span class="str">"offload_optimizer"</span>: {
+            <span class="str">"device"</span>: <span class="str">"cpu"</span>,
+            <span class="str">"pin_memory"</span>: <span class="kw">true</span>
+        },
+        <span class="str">"offload_param"</span>: {
+            <span class="str">"device"</span>: <span class="str">"none"</span>
+        },
+        <span class="str">"overlap_comm"</span>: <span class="kw">true</span>,
+        <span class="str">"contiguous_gradients"</span>: <span class="kw">true</span>,
+        <span class="str">"stage3_max_live_params"</span>: <span class="num">1e9</span>,
+        <span class="str">"stage3_max_reuse_distance"</span>: <span class="num">1e9</span>
+    },
+    <span class="str">"gradient_clipping"</span>: <span class="num">1.0</span>,
+    <span class="str">"wall_clock_breakdown"</span>: <span class="kw">true</span>
+}</code></pre>
+
+  <h3>DeepSpeed 训练代码</h3>
+<pre><code><span class="kw">import</span> deepspeed
+
+<span class="kw">def</span> <span class="fn">train_deepspeed</span>():
+    model = <span class="cls">MyLLaMA</span>()
+    <span class="cmt"># DeepSpeed 初始化：自动处理分布式、混合精度、ZeRO</span>
+    model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(
+        model=model,
+        config=<span class="str">"ds_config.json"</span>,
+        model_parameters=model.parameters(),
+    )
+
+    <span class="kw">for</span> batch <span class="kw">in</span> dataloader:
+        input_ids = batch[<span class="str">"input_ids"</span>].to(model_engine.device)
+        loss = model_engine(input_ids).loss
+        model_engine.backward(loss)       <span class="cmt"># 自动混合精度 + ZeRO 分片</span>
+        model_engine.step()               <span class="cmt"># 自动梯度裁剪 + 参数更新</span>
+
+<span class="cmt"># 启动: deepspeed --num_gpus=8 train.py --deepspeed_config ds_config.json</span></code></pre>
+</div>
+
+<!-- ==================== ZeRO-Offload / Infinity ==================== -->
+<div class="section">
+  <h2>5. ZeRO-Offload / ZeRO-Infinity</h2>
+  <p>当 GPU 显存依然不够时，可以将部分数据卸载到 CPU 内存甚至 NVMe SSD。</p>
+
+  <div class="step">
+    <div class="step-title">ZeRO-Offload（Stage 2 + CPU Offload）</div>
+    <p>将优化器状态和梯度更新计算卸载到 CPU 上执行。GPU 只负责前向和反向传播。<br>
+    <strong>代价</strong>：CPU-GPU 通信带宽成为瓶颈，训练速度降低约 30-50%。</p>
+  </div>
+
+  <div class="step">
+    <div class="step-title">ZeRO-Infinity（Stage 3 + NVMe Offload）</div>
+    <p>进一步将参数也卸载到 NVMe SSD，利用 NVMe 的高带宽（~7 GB/s）进行分页传输。<br>
+    <strong>效果</strong>：在单节点 8 卡上可以训练万亿参数模型。<br>
+    <strong>代价</strong>：训练速度显著降低，适合资源受限场景。</p>
+  </div>
+
+  <table>
+    <tr><th>策略</th><th>GPU 显存需求</th><th>CPU 内存需求</th><th>NVMe 需求</th><th>相对速度</th></tr>
+    <tr><td>ZeRO-3</td><td>低</td><td>-</td><td>-</td><td>1.0x</td></tr>
+    <tr><td>ZeRO-3 + Offload Opt</td><td>极低</td><td>高</td><td>-</td><td>0.5-0.7x</td></tr>
+    <tr><td>ZeRO-Infinity</td><td>极低</td><td>中</td><td>高</td><td>0.3-0.5x</td></tr>
+  </table>
+</div>
+
+<!-- ==================== 张量并行 ==================== -->
+<div class="section">
+  <h2>6. 张量并行（Tensor Parallel）</h2>
+  <p>张量并行（Megatron-LM 方式）将单个矩阵运算拆分到多张 GPU 上，<strong>层内</strong>并行。</p>
+
+  <div class="step">
+    <div class="step-title">列并行 + 行并行</div>
+    <p><strong>FFN</strong>：W1 按列切分（列并行），W2 按行切分（行并行），每个 GPU 计算部分结果后 AllReduce。<br>
+    <strong>Attention</strong>：按注意力头切分，每个 GPU 负责若干头的 Q/K/V 计算，最后 AllReduce。</p>
+  </div>
+
+<pre><code><span class="cmt"># Megatron-LM 风格的列并行线性层（概念代码）</span>
+<span class="kw">class</span> <span class="cls">ColumnParallelLinear</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, in_features, out_features, tp_size):
+        <span class="fn">super</span>().__init__()
+        <span class="cmt"># 每个 GPU 只存 out_features / tp_size 列</span>
+        <span class="dec">self</span>.weight = nn.Parameter(
+            torch.empty(out_features // tp_size, in_features)
+        )
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x):
+        <span class="cmt"># 局部矩阵乘法，无需通信</span>
+        <span class="kw">return</span> F.linear(x, <span class="dec">self</span>.weight)  <span class="cmt"># (B, L, out/tp)</span>
+
+<span class="kw">class</span> <span class="cls">RowParallelLinear</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, in_features, out_features, tp_size):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.weight = nn.Parameter(
+            torch.empty(out_features, in_features // tp_size)
+        )
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x):
+        out = F.linear(x, <span class="dec">self</span>.weight)  <span class="cmt"># 局部计算</span>
+        dist.all_reduce(out)              <span class="cmt"># AllReduce 汇总各卡结果</span>
+        <span class="kw">return</span> out</code></pre>
+
+  <div class="callout-info">张量并行要求 GPU 间有极高的通信带宽（NVLink 600+ GB/s），因此通常只在单节点内使用。跨节点一般使用流水线并行。</div>
+</div>
+
+<!-- ==================== 流水线并行 ==================== -->
+<div class="section">
+  <h2>7. 流水线并行（Pipeline Parallel）</h2>
+  <p>流水线并行将模型按层切分到不同 GPU 上，数据像流水线一样依次流过各阶段。</p>
+
+  <table>
+    <tr><th>方案</th><th>策略</th><th>气泡率</th><th>特点</th></tr>
+    <tr><td>GPipe</td><td>先全部前向，再全部反向</td><td>(p-1)/m</td><td>简单但显存峰值高</td></tr>
+    <tr><td>PipeDream 1F1B</td><td>交替执行前向和反向</td><td>(p-1)/m</td><td>显存峰值低</td></tr>
+    <tr><td>Interleaved 1F1B</td><td>每卡负责多个不连续层</td><td>更低</td><td>通信更频繁</td></tr>
+  </table>
+
+  <div class="step">
+    <div class="step-title">流水线气泡问题</div>
+    <p>假设模型分成 4 段（4 张 GPU），p=4。每个 micro-batch 的前向/反向都需要等前一段完成，导致 GPU 空闲（气泡）。<br>
+    解决办法：将一个 mini-batch 切成多个 <strong>micro-batch</strong>（梯度累积），提高流水线利用率。</p>
+  </div>
+
+<pre><code><span class="cmt"># PyTorch 原生 Pipeline Parallel（概念）</span>
+<span class="kw">from</span> torch.distributed.pipelining <span class="kw">import</span> SplitPoint, pipeline
+
+<span class="cmt"># 定义模型切分点</span>
+pipe = pipeline(
+    module=model,
+    mb_args=(input_ids,),
+    split_spec={
+        <span class="str">"layers.7"</span>: SplitPoint.BEGINNING,  <span class="cmt"># 前 8 层在 GPU 0</span>
+        <span class="str">"layers.15"</span>: SplitPoint.BEGINNING, <span class="cmt"># 后 8 层在 GPU 1</span>
+    }
+)
+
+<span class="cmt"># 生成调度计划</span>
+schedule = pipe.build_schedule(n_microbatches=<span class="num">16</span>)
+output = schedule.step(input_ids)</code></pre>
+</div>
+
+<!-- ==================== 混合并行 ==================== -->
+<div class="section">
+  <h2>8. 混合并行策略（3D 并行）</h2>
+  <p>大规模训练通常结合三种并行：<strong>数据并行（DP）+ 张量并行（TP）+ 流水线并行（PP）</strong>，形成 3D 并行。</p>
+
+  <div class="step">
+    <div class="step-title">典型 3D 并行配置（64 GPU = 8 节点 × 8 卡）</div>
+    <p><strong>TP = 8</strong>（节点内 8 卡，利用 NVLink 高带宽）<br>
+    <strong>PP = 8</strong>（8 个节点，跨节点通信量较小）<br>
+    <strong>DP = 1</strong>（或更大，取决于模型大小和 batch size）<br>
+    总 GPU 数 = TP × PP × DP = 8 × 8 × 1 = 64</p>
+  </div>
+
+  <table>
+    <tr><th>并行维度</th><th>切分方式</th><th>最佳通信</th><th>典型值</th></tr>
+    <tr><td>Tensor Parallel</td><td>层内切分（矩阵拆分）</td><td>NVLink（节点内）</td><td>2-8</td></tr>
+    <tr><td>Pipeline Parallel</td><td>层间切分（模型分段）</td><td>网络（跨节点）</td><td>2-16</td></tr>
+    <tr><td>Data Parallel</td><td>数据切分</td><td>网络</td><td>剩余 GPU / TP / PP</td></tr>
+    <tr><td>Sequence Parallel</td><td>序列长度切分</td><td>NVLink</td><td>与 TP 相同</td></tr>
+  </table>
+
+  <div class="callout-warn">选择并行策略时的核心原则：<strong>高带宽通信给 TP（节点内 NVLink），低带宽通信给 PP 和 DP（跨节点网络）</strong>。张量并行每层都通信，必须放在最快的链路上。</div>
+</div>
+
+<!-- ==================== 序列并行 ==================== -->
+<div class="section">
+  <h2>9. 序列并行（Sequence Parallel）</h2>
+  <p>序列并行将 <strong>LayerNorm / Dropout / 激活值</strong> 沿序列维度切分到各 GPU，进一步降低显存。</p>
+
+  <div class="step">
+    <div class="step-title">Megatron-SP 原理</div>
+    <p>在张量并行区域之外（LayerNorm、Dropout），将激活值按序列维度切分。<br>
+    进入 TP 区域前 AllGather 收集完整序列，离开 TP 区域后 ReduceScatter 重新切分。<br>
+    <strong>效果</strong>：激活值显存降低到 TP 的 1/TP，且不增加额外通信量（利用 TP 已有的 AllReduce 改为 AllGather + ReduceScatter）。</p>
+  </div>
+
+<pre><code><span class="cmt"># 序列并行中的 RMSNorm（概念代码）</span>
+<span class="kw">class</span> <span class="cls">SequenceParallelRMSNorm</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="dec">self</span>, d_model, eps=<span class="num">1e-6</span>):
+        <span class="fn">super</span>().__init__()
+        <span class="dec">self</span>.weight = nn.Parameter(torch.ones(d_model))
+        <span class="dec">self</span>.eps = eps
+
+    <span class="kw">def</span> <span class="fn">forward</span>(<span class="dec">self</span>, x):
+        <span class="cmt"># x: (B, L/tp, D) - 序列维度已切分</span>
+        <span class="cmt"># 需要 AllGather 获取完整 L 维度的统计量</span>
+        full_x = all_gather(x, dim=<span class="num">1</span>)  <span class="cmt"># (B, L, D)</span>
+        rms = torch.sqrt(full_x.pow(<span class="num">2</span>).mean(-<span class="num">1</span>, keepdim=<span class="kw">True</span>) + <span class="dec">self</span>.eps)
+        <span class="cmt"># ReduceScatter 将结果重新切回序列维度</span>
+        out = (full_x / rms) * <span class="dec">self</span>.weight
+        <span class="kw">return</span> reduce_scatter(out, dim=<span class="num">1</span>)  <span class="cmt"># (B, L/tp, D)</span></code></pre>
+</div>
+
+<!-- ==================== 显存估算 ==================== -->
+<div class="section">
+  <h2>10. 显存估算实战</h2>
+
+  <div class="formula">
+    FP16/BF16 混合精度训练（无并行）：<br>
+    显存 ≈ N × (2 + 2 + 4 + 4 + 4) bytes + 激活值<br>
+    = N × 16 bytes + A<br><br>
+    N = 参数量，A = 激活值显存（取决于 batch_size 和 seq_len）<br>
+    ZeRO-3: 显存 ≈ N × 16 / num_gpus + A
+  </div>
+
+  <h3>Python 显存计算器</h3>
+<pre><code><span class="kw">def</span> <span class="fn">estimate_memory</span>(params_b, strategy=<span class="str">"bf16"</span>, n_gpus=<span class="num">1</span>):
+    <span class="str">"""估算训练显存需求（单位 GB）"""</span>
+    params = params_b * <span class="num">1e9</span>  <span class="cmt"># 参数量转为实际数量</span>
+
+    <span class="kw">if</span> strategy == <span class="str">"bf16"</span>:
+        <span class="cmt"># BF16 混合精度: 2B参数 + 2B梯度 + 4B×3优化器</span>
+        param_mem = params * <span class="num">2</span> / <span class="num">1e9</span>      <span class="cmt"># BF16 参数</span>
+        grad_mem  = params * <span class="num">2</span> / <span class="num">1e9</span>      <span class="cmt"># BF16 梯度</span>
+        opt_mem   = params * <span class="num">12</span> / <span class="num">1e9</span>     <span class="cmt"># Adam: FP32 copy + m + v</span>
+        total = param_mem + grad_mem + opt_mem
+    <span class="kw">elif</span> strategy == <span class="str">"zero3"</span>:
+        <span class="cmt"># ZeRO Stage 3: 所有状态分片</span>
+        total = (params * <span class="num">16</span>) / (<span class="num">1e9</span> * n_gpus)
+
+    <span class="cmt"># 激活值（粗估，每参数约 0.5-1 GB for 7B @ bs=1, seq=2048）</span>
+    activation = params_b * <span class="num">0.07</span>  <span class="cmt"># 经验公式</span>
+
+    result = {
+        <span class="str">"model_states"</span>: f<span class="str">"{total:.1f} GB"</span>,
+        <span class="str">"activation"</span>: f<span class="str">"{activation:.1f} GB"</span>,
+        <span class="str">"total"</span>: f<span class="str">"{total + activation:.1f} GB"</span>,
+    }
+    <span class="kw">return</span> result
+
+<span class="cmt"># 示例</span>
+print(<span class="fn">estimate_memory</span>(<span class="num">7</span>, <span class="str">"bf16"</span>))
+<span class="cmt"># {'model_states': '112.0 GB', 'activation': '0.5 GB', 'total': '112.5 GB'}</span>
+print(<span class="fn">estimate_memory</span>(<span class="num">70</span>, <span class="str">"zero3"</span>, n_gpus=<span class="num">8</span>))
+<span class="cmt"># {'model_states': '140.0 GB', 'activation': '4.9 GB', 'total': '144.9 GB'}</span></code></pre>
+
+  <div class="callout-tip">实际训练中还需加上 CUDA context（约 0.5-1 GB）、临时缓冲区等开销。建议预留 10-15% 的额外显存。使用 <code>torch.cuda.max_memory_allocated()</code> 监控实际峰值显存。</div>
+</div>
+
+</div>
+
+<footer>
+  <p>LLM Training Tutorial - 分布式训练 &copy; 2026 | 当前版本: PyTorch 2.12.1, DeepSpeed 0.19.2</p>
+</footer>
+</div></section>

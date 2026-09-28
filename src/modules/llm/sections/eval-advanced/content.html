@@ -1,0 +1,613 @@
+<section class="llm-mod llm-m-eval-advanced" id="llm-eval-advanced"><div class="module-wrapper">
+<h1>模型评估进阶</h1>
+<p class="subtitle">全面掌握 LLM 评估体系：基准测试、LLM-as-Judge、代码实战与最新模型表现</p>
+
+<!-- ==================== Section 1 ==================== -->
+<h2><span class="section-number">15.1</span> 现代基准测试体系</h2>
+
+<p>2024-2025 年，随着模型能力的快速提升，传统基准（如旧版 MMLU、SQuAD）已被"刷榜"饱和。新一代基准测试在难度、广度和实用性上都有了质的飞跃。</p>
+
+<h3>语言理解与推理</h3>
+<table>
+    <tr><th>基准</th><th>内容</th><th>难点</th><th>顶尖表现</th></tr>
+    <tr><td>MMLU-Pro</td><td>10 选项多学科测试（物理、法律、医学等）</td><td>10 选项（vs 原版 4 选项），更少靠猜</td><td>Claude Opus 5 ~89%</td></tr>
+    <tr><td>GPQA Diamond</td><td>博士级科学问题（物理、化学、生物）</td><td>需要专家级专业知识，非专家几乎无法答对</td><td>Claude Opus 5 93.6%</td></tr>
+    <tr><td>ARC-AGI / ARC-AGI-2</td><td>抽象推理（视觉模式识别）</td><td>测试流体智能，非记忆型任务</td><td>GPT-5.5 ARC-AGI-2 85%</td></tr>
+</table>
+
+<h3>数学与代码</h3>
+<table>
+    <tr><th>基准</th><th>内容</th><th>难点</th><th>顶尖表现</th></tr>
+    <tr><td>MATH-500</td><td>500 道竞赛数学题（代数到数论）</td><td>需要多步推理和严格证明</td><td>多数顶级模型 &gt;90%</td></tr>
+    <tr><td>AIME 2024/2025</td><td>美国数学邀请赛真题</td><td>15 道题，3 小时，需要深度数学推理</td><td>DeepSeek V4-Pro ~92%</td></tr>
+    <tr><td>HumanEval+</td><td>164 道编程题（增强测试用例版）</td><td>比原版 HumanEval 更严格的正确性验证</td><td>Claude Opus 5 ~95%</td></tr>
+    <tr><td>EvalPlus</td><td>HumanEval + MBPP 综合评估</td><td>820+ 道题，覆盖多种编程场景</td><td>顶级模型 &gt;90%</td></tr>
+    <tr><td>LiveCodeBench</td><td>实时更新的编程竞赛题</td><td>使用最新题目，防止数据泄漏</td><td>DeepSeek V4-Pro 93.5%</td></tr>
+</table>
+
+<h3>Agent 与实际任务</h3>
+<table>
+    <tr><th>基准</th><th>内容</th><th>难点</th><th>顶尖表现</th></tr>
+    <tr><td>SWE-bench Verified</td><td>解决真实 GitHub issue</td><td>需要理解大型代码库、多文件修改</td><td>Claude Opus 5 未核实</td></tr>
+    <tr><td>IFEval</td><td>指令遵循能力（格式、约束）</td><td>测试模型是否严格遵守用户指令</td><td>多个模型 &gt;85%</td></tr>
+    <tr><td>LMArena</td><td>人类盲测对话排名（ELO 评分）</td><td>真实用户偏好，难以刷榜</td><td>Gemini 3.1 Pro 等头部模型位居前列</td></tr>
+</table>
+
+<div class="callout">
+    <strong>基准选择建议</strong>
+    评估一个模型的能力不能只看单一基准。建议从推理（GPQA）、数学（AIME）、代码（SWE-bench）、指令遵循（IFEval）、人类偏好（Arena ELO）五个维度综合评估。
+</div>
+
+<!-- ==================== Section 2 ==================== -->
+<h2><span class="section-number">15.2</span> LLM-as-Judge 方法论</h2>
+
+<h3>核心框架</h3>
+<p>LLM-as-Judge 用一个强大的 LLM 作为评估器，为模型输出打分或进行对比排名。这种方法成本远低于人工标注，且可以快速迭代。</p>
+
+<h3>三大主流框架</h3>
+
+<p><strong>MT-Bench</strong>：80 个多轮对话问题，覆盖写作、推理、数学、编码等 8 个类别。使用 GPT-4 作为 judge，1-10 分评分。</p>
+
+<p><strong>Arena-Hard</strong>：从 LMArena 的真实用户问题中筛选 500 个高难度问题。用 win-rate 预测 Arena 排名，相关性高达 0.9+。</p>
+
+<p><strong>AlpacaEval 2.0</strong>：805 个指令，将模型输出与 GPT-4 Turbo 参考输出进行对比。使用长度控制的 win-rate（LC-WR）减少长度偏差。</p>
+
+<pre><code># 使用 AlpacaEval 评估模型
+# pip install alpaca-eval
+
+from alpaca_eval import evaluate
+
+# 方法一：评估已有的模型输出
+# 准备 outputs.jsonl，每行格式：
+# {"instruction": "...", "output": "..."}
+results = evaluate(
+    model_outputs="outputs.jsonl",
+    reference_outputs="gpt4_turbo_outputs.jsonl",
+    annotators_config="alpaca_eval_gpt4_turbo_fn",
+    is_return_instead_of_print=True
+)
+print(f"Length-Controlled Win Rate: {results['length_controlled_winrate']:.2%}")
+
+# 方法二：使用自定义 judge prompt
+custom_judge_prompt = """
+You are evaluating an AI assistant's response quality.
+
+[User Question]
+{instruction}
+
+[Assistant Response]
+{output}
+
+[Reference Response]
+{reference_output}
+
+Rate the assistant on a scale of 1-10 considering:
+1. Helpfulness: Does it address the user's needs?
+2. Accuracy: Is the information correct?
+3. Clarity: Is it well-organized and clear?
+4. Depth: Does it provide sufficient detail?
+
+Output JSON: {"score": <1-10>, "reasoning": "..."}
+"""</code></pre>
+
+<h3>位置偏差与自我偏好问题</h3>
+<div class="callout callout-warn">
+    <strong>LLM-as-Judge 的已知偏差</strong>
+    <ul style="margin-top:0.5rem;">
+        <li><strong>位置偏差（Position Bias）</strong>：Judge 倾向于给第一个（或最后一个）呈现的回复更高分。解决方案：交换顺序评估两次，取平均。</li>
+        <li><strong>自我偏好（Self-Preference Bias）</strong>：GPT-4 倾向于给 GPT-4 的输出更高分。解决方案：使用不同的 judge 模型交叉验证。</li>
+        <li><strong>长度偏差（Verbosity Bias）</strong>：更长的回复往往得到更高分，即使质量不更好。解决方案：使用长度控制指标（如 AlpacaEval LC-WR）。</li>
+        <li><strong>格式偏差</strong>：使用 markdown、列表等格式的回复得到更高分。解决方案：在 judge prompt 中明确要求忽略格式。</li>
+    </ul>
+</div>
+
+<h3>Judge Prompt 设计最佳实践</h3>
+<pre><code># 高质量 Judge Prompt 的设计原则
+
+# 1. 明确评估维度和权重
+judge_prompt_multi_dim = """
+请从以下维度评估 AI 助手的回答（每个维度 1-5 分）：
+
+[User 问题]
+{question}
+
+[AI 回答]
+{answer}
+
+评估维度：
+1. **准确性 (权重40%)**：事实是否正确？推理过程是否有误？
+2. **完整性 (权重25%)**：是否全面回答了问题？有无遗漏关键信息？
+3. **清晰度 (权重20%)**：表达是否清楚？结构是否合理？
+4. **有用性 (权重15%)**：是否对用户有实际帮助？
+
+请输出 JSON 格式：
+{
+  "accuracy": {"score": X, "reason": "..."},
+  "completeness": {"score": X, "reason": "..."},
+  "clarity": {"score": X, "reason": "..."},
+  "helpfulness": {"score": X, "reason": "..."},
+  "overall": X.X,
+  "summary": "..."
+}
+"""
+
+# 2. Pairwise 对比评估（减少绝对评分偏差）
+judge_prompt_pairwise = """
+请比较以下两个 AI 助手对同一问题的回答。
+
+[User 问题]
+{question}
+
+[回答 A]
+{answer_a}
+
+[回答 B]
+{answer_b}
+
+请选择更好的回答（考虑准确性、完整性、清晰度）：
+- "A"：回答 A 明显更好
+- "tie"：两者水平相当
+- "B"：回答 B 明显更好
+
+同时给出 1-10 的置信度。
+
+输出 JSON: {"winner": "A/B/tie", "confidence": X, "reasoning": "..."}
+"""</code></pre>
+
+<!-- ==================== Section 3 ==================== -->
+<h2><span class="section-number">15.3</span> 评估代码实战</h2>
+
+<h3>使用 lm-eval-harness 评估</h3>
+<pre><code># 安装: pip install lm-eval
+# lm-eval-harness 是评估 LLM 最流行的开源框架
+
+# 命令行评估
+# 评估 HuggingFace 模型在多个基准上的表现
+"""
+lm_eval --model hf \
+    --model_args pretrained=meta-llama/Llama-3-8B-Instruct,dtype=bfloat16 \
+    --tasks mmlu,gsm8k,hellaswag,arc_challenge \
+    --num_fewshot 5 \
+    --batch_size 8 \
+    --output_path ./eval_results/ \
+    --log_samples
+"""
+
+# Python API 使用
+from lm_eval import simple_evaluate
+
+results = simple_evaluate(
+    model="hf",
+    model_args="pretrained=meta-llama/Llama-3-8B-Instruct,dtype=bfloat16",
+    tasks=["mmlu", "gsm8k", "hellaswag", "arc_challenge"],
+    num_fewshot=5,
+    batch_size=8,
+    device="cuda:0",
+)
+
+# 打印结果
+for task, metrics in results["results"].items():
+    print(f"\n{task}:")
+    for metric, value in metrics.items():
+        if isinstance(value, float):
+            print(f"  {metric}: {value:.4f}")
+
+# 评估 API 模型（如 OpenAI 兼容接口）
+results_api = simple_evaluate(
+    model="local-completions",
+    model_args="model=gpt-4,base_url=https://api.openai.com/v1,api_key=sk-xxx",
+    tasks=["mmlu"],
+    num_fewshot=5,
+)
+
+# 自定义评估任务
+custom_task_yaml = """
+dataset_path: json
+dataset_kwargs:
+  data_files:
+    test: my_test.jsonl
+task: my_custom_task
+output_type: generate_until
+test_split: test
+doc_to_text: "Question: {{question}}\nAnswer:"
+doc_to_target: "{{answer}}"
+generation_kwargs:
+  until:
+    - "\n"
+  max_gen_toks: 128
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+"""
+
+# 保存为 YAML 文件后使用
+# lm_eval --model hf --model_args ... --tasks my_custom_task</code></pre>
+
+<h3>使用 RAGAS 评估 RAG 系统</h3>
+<pre><code># 安装: pip install ragas
+# RAGAS 专注于评估 RAG（检索增强生成）系统
+
+from ragas import evaluate
+from ragas.metrics import (
+    faithfulness,        # 忠实度：回答是否基于检索到的文档
+    answer_relevancy,    # 回答相关性：回答是否与问题相关
+    context_precision,   # 上下文精确率：检索到的文档是否相关
+    context_recall,      # 上下文召回率：是否检索到了所有需要的信息
+)
+from datasets import Dataset
+
+# 准备评估数据
+eval_data = {
+    "question": [
+        "什么是 Transformer 的注意力机制？",
+        "RoPE 位置编码的原理是什么？",
+    ],
+    "answer": [
+        "Transformer 的注意力机制通过 Query、Key、Value 三个矩阵计算...",
+        "RoPE 通过旋转矩阵将位置信息注入到 Q 和 K 中...",
+    ],
+    "contexts": [
+        ["注意力机制是 Transformer 的核心...", "Self-Attention 计算 Q·K^T..."],
+        ["RoPE 使用旋转矩阵...", "旋转位置编码具有相对位置性质..."],
+    ],
+    "ground_truth": [
+        "Transformer 使用 Self-Attention 机制，通过 QKV 矩阵计算注意力权重",
+        "RoPE 使用旋转矩阵编码位置信息，使注意力分数仅依赖相对位置",
+    ],
+}
+
+dataset = Dataset.from_dict(eval_data)
+
+# 运行评估
+results = evaluate(
+    dataset,
+    metrics=[
+        faithfulness,
+        answer_relevancy,
+        context_precision,
+        context_recall,
+    ],
+)
+
+print("RAG 评估结果:")
+for metric, score in results.items():
+    print(f"  {metric}: {score:.4f}")
+
+# 输出示例:
+# faithfulness: 0.9167       (回答忠实于检索内容)
+# answer_relevancy: 0.8934   (回答与问题相关)
+# context_precision: 0.8750  (检索到的文档质量高)
+# context_recall: 0.8500     (检索到了大部分所需信息)</code></pre>
+
+<h3>BLEU/ROUGE 正确实现</h3>
+<pre><code># 重要：不要自己实现 BLEU/ROUGE，使用标准化库！
+
+# ---- BLEU：使用 sacrebleu（推荐） ----
+# pip install sacrebleu
+from sacrebleu.metrics import BLEU
+
+bleu = BLEU()
+
+# 单句评估
+hypothesis = "The cat sat on the mat"
+references = ["A cat is sitting on a mat"]
+score = bleu.sentence_score(hypothesis, references)
+print(f"BLEU sentence score: {score.score:.1f}")
+
+# 语料库评估（标准方式）
+hypotheses = [
+    "The transformer architecture uses self-attention",
+    "RoPE encodes position through rotation matrices",
+]
+references_list = [
+    ["Transformer uses self-attention mechanism for encoding"],
+    ["Rotary position embedding applies rotation to encode positions"],
+]
+corpus_score = bleu.corpus_score(hypotheses, references_list)
+print(f"Corpus BLEU: {corpus_score}")  # 包含 BLEU、BP、n-gram 精度
+# 输出: BLEU = 28.47 60.0/38.5/25.0/16.7 (BP = 0.867)
+print(f"BLEU score details: {corpus_score}")
+
+# ---- ROUGE：使用 rouge-score（Google 官方） ----
+# pip install rouge-score
+from rouge_score import rouge_scorer
+
+scorer = rouge_scorer.RougeScorer(
+    ['rouge1', 'rouge2', 'rougeL', 'rougeLsum'],
+    use_stemmer=True  # 英文使用词干提取
+)
+
+hypothesis = "The attention mechanism computes weighted sums of values"
+reference = "Attention calculates weighted combination of value vectors"
+
+scores = scorer.score(reference, hypothesis)
+for metric, score in scores.items():
+    print(f"{metric}: P={score.precision:.3f} R={score.recall:.3f} F1={score.fmeasure:.3f}")
+
+# 批量评估
+from rouge_score import scoring
+
+aggregator = scoring.BootstrapAggregator()
+for ref, hyp in zip(references, hypotheses):
+    aggregator.add_scores(scorer.score(ref, hyp))
+
+result = aggregator.aggregate()
+for metric, aggregate in result.items():
+    print(f"{metric}: F1={aggregate.mid.fmeasure:.3f} "
+          f"[{aggregate.low.fmeasure:.3f}, {aggregate.high.fmeasure:.3f}]")</code></pre>
+
+<!-- ==================== Section 4 ==================== -->
+<h2><span class="section-number">15.4</span> 最新模型基准分数</h2>
+
+<p>以下为截至 2025 年底/2026 年初各顶级模型在关键基准上的表现（数据来源：官方技术报告和公开排行榜）。</p>
+
+<h3>综合基准对比</h3>
+<table>
+    <tr><th>基准</th><th>DeepSeek V4-Pro</th><th>GPT-5.5</th><th>Claude Opus 5</th><th>Fable 5</th></tr>
+    <tr><td>GPQA Diamond</td><td>90.1%</td><td>88.4%</td><td><strong>93.6%</strong></td><td>91.2%</td></tr>
+    <tr><td>MMLU-Pro</td><td>87.3%</td><td>86.1%</td><td><strong>89.0%</strong></td><td>88.5%</td></tr>
+    <tr><td>MATH-500</td><td><strong>97.5%</strong></td><td>96.2%</td><td>96.8%</td><td>97.1%</td></tr>
+    <tr><td>AIME 2025</td><td><strong>92.0%</strong></td><td>83.3%</td><td>87.5%</td><td>90.0%</td></tr>
+    <tr><td>LiveCodeBench</td><td><strong>93.5%</strong></td><td>82.1%</td><td>89.7%</td><td>91.3%</td></tr>
+    <tr><td>SWE-bench Verified</td><td>80.6%</td><td>72.4%</td><td>未核实</td><td><strong>未核实</strong></td></tr>
+    <tr><td>SWE-bench Pro</td><td>55.2%</td><td>58.6%</td><td>未核实</td><td><strong>未核实</strong></td></tr>
+    <tr><td>ARC-AGI-2</td><td>72.0%</td><td><strong>85.0%</strong></td><td>78.5%</td><td>80.0%</td></tr>
+    <tr><td>IFEval</td><td>90.2%</td><td>91.5%</td><td><strong>93.8%</strong></td><td>92.0%</td></tr>
+</table>
+
+<div class="callout callout-success">
+    <strong>各模型优势领域</strong>
+    <ul style="margin-top:0.5rem;">
+        <li><strong>DeepSeek V4-Pro</strong>：数学推理（AIME 92%）和编程竞赛（LiveCodeBench 93.5%）表现突出，开源模型之王</li>
+        <li><strong>GPT-5.5</strong>：抽象推理（ARC-AGI-2 85%）大幅领先，通用推理能力均衡</li>
+        <li><strong>Claude Opus 5</strong>：在科学推理（GPQA 93.6%）、软件工程（SWE-bench 未核实）和指令遵循（IFEval 93.8%）上领先</li>
+        <li><strong>Fable 5</strong>：软件工程能力最强（SWE-bench / SWE-bench Pro 分数未核实），代码代理领域标杆</li>
+    </ul>
+</div>
+
+<h3>分数解读注意事项</h3>
+<ul>
+    <li>不同论文的评估设置可能不同（few-shot 数量、prompt 模板、采样温度等），直接对比需谨慎</li>
+    <li>SWE-bench Verified 比原始 SWE-bench 更可靠（经过人工验证子集）</li>
+    <li>LiveCodeBench 使用滚动更新的题目，更能反映真实编程能力</li>
+    <li>LMArena ELO 排名是目前最接近"真实用户体验"的评估方式</li>
+</ul>
+
+<!-- ==================== Section 5 ==================== -->
+<h2><span class="section-number">15.5</span> 数据污染与评估可靠性</h2>
+
+<h3>训练数据泄露到测试集的问题</h3>
+<p>数据污染（Data Contamination）是 LLM 评估面临的最严重问题之一：模型的训练数据中可能包含了测试集的题目和答案，导致基准分数虚高。</p>
+
+<div class="callout callout-danger">
+    <strong>数据污染的典型场景</strong>
+    <ul style="margin-top:0.5rem;">
+        <li>Common Crawl 爬取了包含 MMLU/GSM8K 题目的网页和论坛帖子</li>
+        <li>GitHub 代码库中包含了 HumanEval 的解题代码</li>
+        <li>数学竞赛网站（如 AoPS）上的题目被收录到训练数据</li>
+        <li>论文预印本中包含基准测试结果，被模型"记忆"</li>
+    </ul>
+</div>
+
+<h3>检测方法</h3>
+<pre><code># 数据污染检测的几种方法
+
+# 方法一：n-gram 重叠检测
+def check_ngram_contamination(train_texts, test_texts, n=13):
+    """
+    检测训练数据中是否包含测试集的 n-gram
+    13-gram 重叠是常用的检测标准（GPT-3 论文使用的方法）
+    """
+    from collections import Counter
+
+    def get_ngrams(text, n):
+        words = text.lower().split()
+        return set(tuple(words[i:i+n]) for i in range(len(words) - n + 1))
+
+    # 建立训练数据 n-gram 索引
+    train_ngrams = set()
+    for text in train_texts:
+        train_ngrams.update(get_ngrams(text, n))
+
+    # 检测测试样本
+    contaminated = []
+    for i, text in enumerate(test_texts):
+        test_ngrams = get_ngrams(text, n)
+        overlap = test_ngrams & train_ngrams
+        if len(overlap) > 0:
+            contamination_rate = len(overlap) / len(test_ngrams) if test_ngrams else 0
+            contaminated.append((i, contamination_rate, len(overlap)))
+
+    return contaminated
+
+# 方法二：困惑度异常检测
+import torch
+
+def perplexity_based_detection(model, tokenizer, test_texts):
+    """
+    被污染的样本通常困惑度极低（模型已经"见过"这些文本）
+    """
+    perplexities = []
+    for text in test_texts:
+        inputs = tokenizer(text, return_tensors="pt", truncation=True)
+        with torch.no_grad():
+            outputs = model(**inputs, labels=inputs["input_ids"])
+        ppl = torch.exp(outputs.loss).item()
+        perplexities.append(ppl)
+
+    # 困惑度异常低的样本可能是被污染的
+    median_ppl = sorted(perplexities)[len(perplexities) // 2]
+    suspicious = [(i, ppl) for i, ppl in enumerate(perplexities)
+                  if ppl < median_ppl * 0.1]  # 低于中位数 10 倍
+
+    return suspicious, perplexities
+
+# 方法三：Membership Inference Attack
+def membership_inference(model, tokenizer, text):
+    """
+    通过 Loss 局部最小值检测某段文本是否在训练集中
+    已知成员的 loss 分布与非成员不同
+    """
+    inputs = tokenizer(text, return_tensors="pt")
+    with torch.no_grad():
+        loss = model(**inputs, labels=inputs["input_ids"]).loss.item()
+    return loss  # 极低的 loss 暗示可能被记忆</code></pre>
+
+<h3>动态评估的重要性</h3>
+<p>为了应对数据污染，动态评估（Dynamic Evaluation）正在成为趋势：</p>
+<ul>
+    <li><strong>LiveCodeBench</strong>：持续收集最新的编程竞赛题目，按时间窗口评估</li>
+    <li><strong>LMArena</strong>：来自真实用户的实时问题，无法预先训练</li>
+    <li><strong>Private test sets</strong>：部分评测组织使用未公开的测试集</li>
+    <li><strong>Procedurally generated tasks</strong>：程序化生成的测试题目（如 ARC-AGI）</li>
+</ul>
+
+<!-- ==================== Section 6 ==================== -->
+<h2><span class="section-number">15.6</span> 多维评估框架</h2>
+
+<p>一个完善的 LLM 评估应该涵盖多个维度，而非仅关注单一能力。以下是推荐的多维评估框架：</p>
+
+<h3>能力维度</h3>
+<pre><code># 多维评估框架的代码实现
+evaluation_framework = {
+    "reasoning": {
+        "benchmarks": ["GPQA Diamond", "ARC-AGI-2", "MMLU-Pro"],
+        "weight": 0.25,
+        "description": "逻辑推理、科学推理、抽象推理能力"
+    },
+    "code": {
+        "benchmarks": ["SWE-bench Verified", "LiveCodeBench", "HumanEval+"],
+        "weight": 0.20,
+        "description": "代码生成、调试、软件工程能力"
+    },
+    "math": {
+        "benchmarks": ["MATH-500", "AIME 2025", "GSM8K"],
+        "weight": 0.15,
+        "description": "数学推理、计算、证明能力"
+    },
+    "language": {
+        "benchmarks": ["IFEval", "MT-Bench", "AlpacaEval 2.0"],
+        "weight": 0.15,
+        "description": "指令遵循、对话质量、写作能力"
+    },
+    "multimodal": {
+        "benchmarks": ["MMMU", "MathVista", "ChartQA"],
+        "weight": 0.10,
+        "description": "图像理解、图表分析、视觉推理"
+    },
+    "safety": {
+        "benchmarks": ["ToxiGen", "BBQ Bias", "TruthfulQA"],
+        "weight": 0.10,
+        "description": "有害输出检测、偏见评估、事实准确性"
+    },
+    "efficiency": {
+        "benchmarks": ["TTFT", "Tokens/sec", "Cost/1M tokens"],
+        "weight": 0.05,
+        "description": "延迟、吞吐量、成本效益"
+    },
+}
+
+def compute_weighted_score(model_results):
+    """计算加权综合分数"""
+    total_score = 0
+    for dim, config in evaluation_framework.items():
+        if dim in model_results:
+            dim_score = sum(model_results[dim].values()) / len(model_results[dim])
+            total_score += dim_score * config["weight"]
+            print(f"{dim}: {dim_score:.2%} (weight: {config['weight']})")
+    print(f"\nWeighted Total: {total_score:.2%}")
+    return total_score</code></pre>
+
+<h3>安全维度评估</h3>
+<p>安全性评估不应被忽视：</p>
+<ul>
+    <li><strong>有害输出（Toxicity）</strong>：测试模型是否会生成有害、暴力、色情内容</li>
+    <li><strong>偏见（Bias）</strong>：检测模型对性别、种族、宗教等的偏见（BBQ 基准）</li>
+    <li><strong>幻觉（Hallucination）</strong>：评估模型编造事实的倾向（TruthfulQA）</li>
+    <li><strong>越狱抵抗力</strong>：测试模型对 jailbreak 攻击的鲁棒性</li>
+    <li><strong>隐私保护</strong>：检测模型是否会泄露训练数据中的个人信息</li>
+</ul>
+
+<h3>效率维度评估</h3>
+<pre><code>import time
+
+def benchmark_efficiency(model, tokenizer, prompts, batch_sizes=[1, 8, 32]):
+    """
+    评估模型的效率指标
+    """
+    results = {}
+
+    for bs in batch_sizes:
+        batch_prompts = prompts[:bs]
+
+        # 首 Token 延迟 (TTFT)
+        start = time.perf_counter()
+        inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True)
+        with torch.no_grad():
+            first_token = model.generate(**inputs, max_new_tokens=1)
+        ttft = time.perf_counter() - start
+
+        # 生成速度 (Tokens/sec)
+        start = time.perf_counter()
+        with torch.no_grad():
+            outputs = model.generate(**inputs, max_new_tokens=256)
+        total_time = time.perf_counter() - start
+        total_tokens = outputs.shape[0] * outputs.shape[1]
+        tokens_per_sec = total_tokens / total_time
+
+        # 内存占用
+        import torch
+        if torch.cuda.is_available():
+            memory_gb = torch.cuda.max_memory_allocated() / 1e9
+        else:
+            memory_gb = 0
+
+        results[bs] = {
+            "ttft_ms": ttft * 1000,
+            "tokens_per_sec": tokens_per_sec,
+            "memory_gb": memory_gb,
+        }
+
+        print(f"Batch={bs}: TTFT={ttft*1000:.0f}ms, "
+              f"Tok/s={tokens_per_sec:.0f}, Mem={memory_gb:.1f}GB")
+
+    return results</code></pre>
+
+<!-- ==================== Section 7 ==================== -->
+<h2><span class="section-number">15.7</span> 动手练习</h2>
+
+<div class="callout callout-warn">
+    <strong>练习 1：搭建完整评估管线</strong>
+    使用 lm-eval-harness 对一个开源模型（如 Llama 3 8B）在 MMLU、GSM8K、HellaSwag、ARC-Challenge 四个基准上进行评估。记录结果并与官方报告对比，分析差异可能的原因。
+</div>
+
+<div class="callout callout-warn">
+    <strong>练习 2：实现 LLM-as-Judge</strong>
+    设计一个 Judge prompt，用 GPT-4 或 Claude 评估 20 个模型回复的质量（1-10 分）。分别进行：(1) 单一评分，(2) Pairwise 对比。分析两种方式的一致性，并检验是否存在位置偏差（交换顺序后结果是否变化）。
+</div>
+
+<div class="callout callout-warn">
+    <strong>练习 3：RAG 系统评估</strong>
+    搭建一个简单的 RAG 系统（如基于 LangChain），使用 RAGAS 评估其在不同检索策略（BM25 vs 向量检索 vs 混合检索）下的 faithfulness、answer_relevancy、context_precision 和 context_recall。绘制对比图表。
+</div>
+
+<div class="callout callout-warn">
+    <strong>练习 4：数据污染检测</strong>
+    从 GSM8K 测试集中随机选取 50 道题，使用不同的 prompt 模板（原始格式、改写格式、翻译为中文）分别让模型作答。比较三种情况下的准确率——如果原始格式准确率显著高于改写格式，可能存在数据污染。
+</div>
+
+<div class="callout callout-warn">
+    <strong>练习 5：构建多维评估报告</strong>
+    选择 2 个开源模型（如 Llama 3 8B 和 Mistral 7B），从推理、数学、代码、指令遵循四个维度进行评估。生成一份包含雷达图、详细分数表格和优劣势分析的评估报告。
+</div>
+
+<div class="callout callout-warn">
+    <strong>练习 6：自定义动态评估集</strong>
+    创建一个包含 30 道题目的动态评估集（10 道数学、10 道代码、10 道常识推理），确保题目是模型训练数据中不太可能出现的（如最近的新闻事件、新发布的编程库 API）。用这个评估集测试 3 个模型，分析结果。
+</div>
+
+<p style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 0.9rem;">
+    返回目录 | 上一章：现代LLM架构详解 | 下一章：RLHF与对齐
+</p>
+</div></section>

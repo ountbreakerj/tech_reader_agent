@@ -1,0 +1,60 @@
+<section id="sec-h-lec-07" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 07 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-07">第 07 讲 · 给 Agent 划清每次任务的边界</h1>
+    <p>让 agent 做"用户认证功能"，它可能会实现登录、注册、密码重置、邮件验证、OAuth 接入，顺便重构了一下用户模型。六件事只做完了两件，四件做到一半，没有一件经过完整验证。这就是边界失控。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>两种典型失败模式</h2>
+    <p><strong>过度延伸（Overreach）：</strong>Agent 做的超出了当前任务的边界。它意识到"这里顺便能优化一下"，"那边也有相关代码需要改"，就一并改了。每一步看起来都合理，结果是没有任何一件事做完，同时改动面很大，回归测试也跑不完。</p>
+    <p><strong>不足完成（Under-finish）：</strong>Agent 写完了代码就说"完成了"，但没有跑验证、没有更新文档、没有处理边界条件。表面上任务做完了，实际上是留下了一个"看起来完成"的半成品。Anthropic 观察到 agent 在上下文快满时会更频繁地出现不足完成——急于结束是上下文焦虑的直接表现。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>WIP = 1</h2>
+    <p>从制造业精益实践来的原则：任何时刻，在制品数量不超过 1。对 agent 的含义是：<strong>每次只做一个已明确定义的工作单元，完成并验证后，才开始下一个。</strong></p>
+    <p>实现上有两个关键：</p>
+    <ul>
+      <li><strong>工作单元必须在开始前定义好。</strong> "实现登录功能"不是一个工作单元，因为它没有可验证的完成条件。"实现 POST /auth/login 端点，返回 JWT token，test_login_success 和 test_login_wrong_password 两个测试通过"才是。</li>
+      <li><strong>中途发现别的问题，记下来，不要现在修。</strong> 这个习惯是 WIP=1 的核心：把"意外发现"写进 PROGRESS.md 或 DECISIONS.md，完成当前工作单元再说。Agent 不自然地倾向于立即修复它看到的每个问题。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>完成证据</h2>
+    <p>每个工作单元在定义时就必须指定完成证据——一组可以用命令验证的条件。完成证据把"完成了"从主观感受变成客观事实。</p>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">类型</th><th scope="col">示例</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">测试通过</th><td><code>pytest tests/test_auth.py::test_login -v</code> 全绿</td></tr>
+        <tr><th scope="row">类型检查</th><td><code>mypy --strict src/auth/</code> 无报错</td></tr>
+        <tr><th scope="row">端到端</th><td><code>curl -X POST /auth/login -d '...'</code> 返回 200 + JWT</td></tr>
+        <tr><th scope="row">行为约束</th><td>错误密码时返回 401，不泄露用户是否存在</td></tr>
+      </tbody>
+    </table></div>
+    <p>没有完成证据的工作单元不应该被执行。这不是官僚主义，是防止"差不多完成了"替代"真的完成了"的唯一可靠手段。</p>
+  </section>
+
+  <section class="harness-section">
+    <h2>范围表面与 VCR 指标</h2>
+    <p><strong>范围表面（Scope Surface）</strong>是当前工作单元涉及的所有文件、函数和依赖的总和。范围表面越小，改动越容易验证，副作用越容易控制。好的工作单元定义应该把范围表面控制在最小。</p>
+    <p>衡量边界管理质量的 <strong>VCR 指标</strong>：</p>
+    <ul>
+      <li><strong>Velocity（速度）</strong>：每单位时间完成并验证的工作单元数量。注意是"完成并验证"，不是"写了多少代码"。</li>
+      <li><strong>Completion（完成率）</strong>：有完成证据的工作单元占全部启动的工作单元的比例。过度延伸导致完成率下降。</li>
+      <li><strong>Reliability（可靠率）</strong>：完成后没有引入回归的比例。范围表面大的工作单元可靠率通常更低。</li>
+    </ul>
+    <p>三个指标在设计功能清单时就应该考虑进去。过大的工作单元会同时损害三个数字。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-06">← 第 06 讲</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-08">第 08 讲 →</a>
+  </nav>
+</section>

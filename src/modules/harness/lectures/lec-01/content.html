@@ -1,0 +1,55 @@
+<section id="sec-h-lec-01" class="harness-scope">
+  <nav class="harness-breadcrumb" aria-label="当前位置">
+    <a href="#/">首页</a><span aria-hidden="true">/</span>
+    <a href="#/harness">Harness 工程</a><span aria-hidden="true">/</span>
+    <span aria-current="page">第 01 讲</span>
+  </nav>
+  <header class="harness-head">
+    <h1 id="h-lec-01">第 01 讲 · 模型能力强，不等于执行可靠</h1>
+    <p>SWE-bench Verified 上 50–60% 的通过率听起来还不错，但那是精心挑选过的任务。你的日常需求丢过去，通过率只会更低。问题可能不在模型身上。</p>
+  </header>
+
+  <section class="harness-section">
+    <h2>同一匹马，两种命运</h2>
+    <p>Anthropic 做过一个对照实验：同一个 prompt "做一个 2D 复古游戏编辑器"，同一个模型 Opus 4.5，跑了两次。第一次裸跑，20 分钟花了 $9，游戏核心功能跑不起来。第二次配上了完整的 harness——planner、generator、evaluator 三 agent 架构——6 小时花了 $200，游戏可以正常游玩。Opus 4.5 还是那个 Opus 4.5，模型没有换，换的是马具。</p>
+    <p>OpenAI 把这件事说得更直白：Codex 在一个 harness 搭得好的仓库里，表现能从"不可靠"直接跳到"可靠"。不是"好了一点"，是质变。<strong>harness 这个词在这里的意思就是模型权重之外的一切工程基础设施。</strong></p>
+  </section>
+
+  <section class="harness-section">
+    <h2>Agent 到底卡在哪</h2>
+    <ul>
+      <li><strong>需求描述模糊，agent 只能猜。</strong> "加个搜索功能"说了等于没说。搜索对象是什么？要不要分页？你没说清楚，agent 就猜，猜错了来回折腾比一开始说清楚多花好几倍时间。</li>
+      <li><strong>隐性约定没写下来，agent 无从遵守。</strong> 全组都用 SQLAlchemy 2.0，但 agent 默认写了 1.x；所有 API 端点必须走 OAuth 2.0，但这条规矩只存在于脑子里。Agent 不是不想遵守，是真没见过。</li>
+      <li><strong>环境配置有缺口，agent 把精力花在修环境上。</strong> 依赖缺了、工具版本不对，agent 把宝贵的上下文窗口花在 <code>pip install</code> 报错上，真正该干的活反而没精力做。</li>
+      <li><strong>缺少验证手段，agent 自己觉得做完了就算完成。</strong> 没有测试、没有 lint，agent 写完代码自己看了看觉得没问题就说完成了。Anthropic 还观察到"上下文焦虑"：上下文快满时，agent 会匆忙结束、跳过验证，选简单方案而非最优方案。</li>
+      <li><strong>跨会话状态丢失，每个新会话都要重新探索。</strong> 上次会话的发现全丢了，缺乏持久化状态的 agent 在超过 30 分钟的任务中失败率急剧上升。</li>
+    </ul>
+  </section>
+
+  <section class="harness-section">
+    <h2>关键术语</h2>
+    <div class="harness-table-wrap"><table>
+      <thead><tr><th scope="col">术语</th><th scope="col">含义</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">能力鸿沟</th><td>模型在基准测试上的表现和真实任务表现之间的巨大落差</td></tr>
+        <tr><th scope="row">Harness 诱导失败</th><td>模型本身能力足够，但因执行环境有结构性缺陷而失败</td></tr>
+        <tr><th scope="row">验证缺口</th><td>agent 对自己输出的信心评估和实际正确性之间的偏差</td></tr>
+        <tr><th scope="row">完成定义</th><td>一组可以用命令验证的条件——测试通过、lint 无报错、类型检查通过</td></tr>
+        <tr><th scope="row">诊断循环</th><td>执行 → 观察失败 → 定位到 harness 哪一层 → 修补 → 重新执行</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="harness-section">
+    <h2>核心原则</h2>
+    <p><strong>遇到失败，先别换模型，先检查 harness。</strong> 如果同一个模型在结构良好的任务中能成功，优先假设是 harness 的问题。把每次失败归因到五层防御中的某一层——任务规范、上下文供给、执行环境、验证反馈、状态管理。养成这个习惯，"模型不行"这个结论在日志里出现得越来越少。</p>
+    <p>在仓库根目录放一个 <code>AGENTS.md</code>，告诉 agent 项目的技术栈、架构约定、验证命令——这是 harness 工程的第一步，投入产出比最高的一步。一个 <code>AGENTS.md</code> 文件可能比换一个更贵的模型更有效。</p>
+    <p>OpenAI 工程师的百万行代码实验印证了这一点：三个工程师用 Codex 写了整个产品，五个月约 100 万行代码，平均每人每天 3.5 个 PR。他们的工作不是写代码，而是设计 harness、设计环境、搭建反馈循环。</p>
+  </section>
+
+  <nav class="harness-back" aria-label="章节导航">
+    <a href="#/harness?section=sec-h-lec-00">← 课程概览</a>
+    &ensp;·&ensp;
+    <a href="#/harness?section=sec-h-lec-02">第 02 讲 →</a>
+  </nav>
+</section>

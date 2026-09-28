@@ -1,0 +1,95 @@
+
+.llm-m-evaluation .module-wrapper *, .llm-m-evaluation .module-wrapper *::before, .llm-m-evaluation .module-wrapper *::after { box-sizing: border-box; margin: 0; padding: 0; }
+.llm-m-evaluation h1 { font-size: 1.875rem; text-align: left; margin: 0 0 0.75rem;  font-weight: 700; letter-spacing: -0.025em; line-height: 1.3; }
+.llm-m-evaluation h1 + .subtitle { text-align: left;  font-size: 1.1rem; margin-bottom: 2rem; line-height: 1.6; }
+.llm-m-evaluation h2 { font-size: 1.5rem;  margin: 2.5rem 0 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--lc-border); display: block; font-weight: 700; letter-spacing: -0.015em; line-height: 1.4; }
+.llm-m-evaluation h3 { font-size: 1.2rem;  margin: 2rem 0 0.5rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.4; }
+.llm-m-evaluation h4 { font-size: 1.05rem;  margin: 1.5rem 0 0.5rem; font-weight: 600; }
+.llm-m-evaluation p { margin: 0.75rem 0;  line-height: 1.75; }
+.llm-m-evaluation strong { font-weight: 600; }
+.llm-m-evaluation a { text-decoration: none; transition: color 0.15s ease; }
+.llm-m-evaluation a:hover { text-decoration: underline; }
+.llm-m-evaluation ul, .llm-m-evaluation ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+.llm-m-evaluation li { margin: 0.25rem 0;  line-height: 1.75; }
+.llm-m-evaluation .hero { border-radius: 16px; padding: 2rem;
+      margin: 2rem 0; text-align: left;
+      border: 1px solid var(--lc-border); }
+.llm-m-evaluation .hero h4 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.llm-m-evaluation .section { border-radius: 16px; padding: 2rem 2.5rem;
+      margin: 2rem 0;  border: 1px solid var(--lc-border);
+      transition: opacity 0.5s ease, transform 0.5s ease; }
+.llm-m-evaluation .section.visible { opacity: 1; }
+.llm-m-evaluation .callout { border-radius: 12px; padding: 1rem 1.25rem; margin: 1.25rem 0;
+      position: relative; padding-left: 2.75rem; font-size: 0.93rem;
+      border: 1px solid; }
+.llm-m-evaluation .callout::before { position: absolute; left: 0.85rem; top: 1rem; font-size: 1.1rem; }
+.llm-m-evaluation .callout-tip::before { content: '💡'; }
+.llm-m-evaluation .callout-warn::before { content: '⚠️'; }
+.llm-m-evaluation .callout-analogy::before { content: '🎯'; }
+.llm-m-evaluation .callout-key::before { content: '🔑'; }
+.llm-m-evaluation .callout-info::before { content: '📖'; }
+.llm-m-evaluation .callout-practice { border-width: 2px; }
+.llm-m-evaluation .callout-practice::before { content: '✏️'; }
+.llm-m-evaluation .practice-header { display: flex; align-items: center; gap: 0.5rem;
+      font-size: 1rem; font-weight: 700; 
+      margin-bottom: 0.75rem; letter-spacing: -0.01em; }
+.llm-m-evaluation .practice-header .badge { display: inline-flex; align-items: center; gap: 0.25rem;
+       
+      font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.5rem;
+      border-radius: 9999px; letter-spacing: 0.03em; }
+.llm-m-evaluation .practice- .practice-body p { margin: 0.4rem 0; font-size: 0.93rem; }
+.llm-m-evaluation .practice-hint { margin-top: 0.75rem; padding: 0.6rem 0.9rem;
+       border-radius: 8px;
+      font-size: 0.85rem;  border: 1px dashed #86efac; }
+.llm-m-evaluation .code-block-wrapper { position: relative; margin: 1rem 0; border-radius: 12px;
+      overflow: visible; border: 1px solid #313244; }
+.llm-m-evaluation .code-header { display: flex; align-items: center; justify-content: space-between;
+       padding: 0.5rem 1rem; border-bottom: 1px solid #313244; }
+.llm-m-evaluation .code-lang { font-size: 0.75rem;  font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      font-family: 'JetBrains Mono', monospace; }
+.llm-m-evaluation .copy-btn { display: flex; align-items: center; gap: 0.4rem;
+       border: 1px solid #45475a; border-radius: 6px;
+       font-size: 0.75rem; padding: 0.25rem 0.65rem;
+      cursor: pointer; transition: all 0.15s ease; font-family: inherit; }
+.llm-m-evaluation pre { border-radius: 0;
+      padding: 1.15rem 1.25rem; overflow-x: auto; margin: 0;
+      font-size: 0.87rem; line-height: 1.65;
+      font-family: 'JetBrains Mono', monospace; }
+.llm-m-evaluation pre code { font-family: inherit; }
+.llm-m-evaluation p code, .llm-m-evaluation li code, .llm-m-evaluation td code { padding: 0.15rem 0.35rem; border-radius: 4px;
+      font-size: 0.88em;  font-family: 'JetBrains Mono', monospace;
+      border: 1px solid var(--lc-border); }
+.llm-m-evaluation .cmt { font-style: italic; }
+.llm-m-evaluation table { width: 100%; border-collapse: collapse; margin: 1.25rem 0;
+      font-size: 0.92rem; border-radius: 12px; overflow: visible;
+      border: 1px solid var(--lc-border); }
+.llm-m-evaluation th { padding: 0.6rem 1rem;
+      text-align: left; font-weight: 600; border-bottom: 1px solid var(--lc-border); }
+.llm-m-evaluation td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--lc-border-light); }
+.llm-m-evaluation tr:last-child td { border-bottom: none; }
+.llm-m-evaluation .diagram { border: 1px solid var(--lc-border); border-radius: 16px;
+      padding: 1.5rem; margin: 1.5rem 0; text-align: center; overflow-x: auto; }
+.llm-m-evaluation .diagram .caption { font-size: 0.85rem;  margin-top: 0.8rem; font-style: italic; }
+.llm-m-evaluation .step { display: flex; align-items: flex-start; gap: 1rem;
+      margin: 0.75rem 0; padding: 0.85rem 1.15rem;
+       border-radius: 12px;
+      border: 1px solid var(--lc-border); }
+.llm-m-evaluation .step-num { width: 1.75rem; height: 1.75rem; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; flex-shrink: 0; font-size: 0.8rem; }
+.llm-m-evaluation .step-content { flex: 1; }
+.llm-m-evaluation .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.25rem 0; }
+.llm-m-evaluation .compare-card { border-radius: 12px; padding: 1.25rem;
+      border: 1px solid var(--lc-border); }
+.llm-m-evaluation .compare-card h4 { margin: 0 0 0.75rem; text-align: center; }
+.llm-m-evaluation .footer { text-align: center;  font-size: 0.85rem;
+      margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--lc-border); }
+@media (max-width: 600px) {
+.llm-m-evaluation h1 { font-size: 1.5rem; }
+.llm-m-evaluation .compare { grid-template-columns: 1fr; }
+.llm-m-evaluation pre { font-size: 0.8rem; padding: 1rem; }
+.llm-m-evaluation .section { padding: 1.25rem; border-radius: 12px; }
+.llm-m-evaluation .hero { padding: 1.25rem; border-radius: 12px; }
+.llm-m-evaluation .step { padding: 0.75rem 1rem; }
+}

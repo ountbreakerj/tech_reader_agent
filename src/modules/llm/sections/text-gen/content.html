@@ -1,0 +1,231 @@
+<section class="llm-mod llm-m-text-gen" id="llm-text-gen"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#ea580c;">
+  <h1>✨ 项目2：文本生成</h1>
+  <p>GPT-2微调实战 - 训练自己的文本生成模型</p>
+</div>
+
+<div class="section" id="llm-text-gen-s1">
+  <h2>项目概述</h2>
+
+  <h3>目标</h3>
+  <p>微调一个中文GPT-2模型，能够根据给定的主题生成连贯的文本。</p>
+
+  <h3>技术栈</h3>
+  <table>
+    <tr><th>组件</th><th>选择</th><th>说明</th></tr>
+    <tr><td>预训练模型</td><td>GPT-2 Chinese</td><td>中文GPT-2</td></tr>
+    <tr><td>训练方式</td><td>因果语言建模（CLM）</td><td>自回归生成</td></tr>
+    <tr><td>推理框架</td><td>Transformers</td><td>标准推理</td></tr>
+  </table>
+</div>
+
+<div class="section" id="llm-text-gen-s2">
+  <h2>数据准备</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">from</span> datasets <span class="kw">import</span> load_dataset
+
+<span class="cmt"># 加载数据集</span>
+dataset = load_dataset(<span class="str">"json"</span>, data_files={<span class="str">"train"</span>: <span class="str">"data/train.jsonl"</span>})
+
+<span class="cmt"># 数据格式示例</span>
+<span class="cmt"># {"text": "机器学习是人工智能的一个分支，它使计算机..."}</span>
+
+<span class="cmt"># 分词</span>
+<span class="kw">from</span> transformers <span class="kw">import</span> GPT2Tokenizer
+
+tokenizer = GPT2Tokenizer.<span class="fn">from_pretrained</span>(<span class="str">"uer/gpt2-chinese-cluecorpussmall"</span>)
+<span class="cmt"># ⚠️ 不要用 eos_token 作为 pad_token，否则模型会把填充当作真实内容学习</span>
+tokenizer.add_special_tokens({<span class="str">"pad_token"</span>: <span class="str">"[PAD]"</span>})
+
+<span class="kw">def</span> <span class="fn">tokenize_function</span>(examples):
+    <span class="kw">return</span> tokenizer(
+        examples[<span class="str">"text"</span>],
+        truncation=<span class="kw">True</span>,
+        max_length=<span class="num">512</span>,
+        padding=<span class="str">"max_length"</span>
+    )
+
+tokenized_dataset = dataset.<span class="fn">map</span>(tokenize_function, batched=<span class="kw">True</span>)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-text-gen-s3">
+  <h2>模型微调</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> transformers <span class="kw">import</span> GPT2LMHeadModel, TrainingArguments, Trainer
+
+<span class="cmt"># 加载模型</span>
+model = GPT2LMHeadModel.<span class="fn">from_pretrained</span>(<span class="str">"uer/gpt2-chinese-cluecorpussmall"</span>)
+<span class="cmt"># 调整词表大小以匹配新增的 [PAD] token</span>
+model.resize_token_embeddings(<span class="fn">len</span>(tokenizer))
+
+<span class="cmt"># 训练参数</span>
+training_args = TrainingArguments(
+    output_dir=<span class="str">"./gpt2-chinese"</span>,
+    num_train_epochs=<span class="num">3</span>,
+    per_device_train_batch_size=<span class="num">8</span>,
+    learning_rate=<span class="num">5e-5</span>,
+    warmup_steps=<span class="num">100</span>,
+    logging_steps=<span class="num">50</span>,
+    save_strategy=<span class="str">"epoch"</span>,
+    eval_strategy=<span class="str">"epoch"</span>,
+    load_best_model_at_end=<span class="kw">True</span>,
+    metric_for_best_model=<span class="str">"eval_loss"</span>,
+)
+
+<span class="cmt"># 创建Trainer</span>
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized_dataset[<span class="str">"train"</span>],
+    eval_dataset=tokenized_dataset[<span class="str">"validation"</span>],
+)
+
+<span class="cmt"># 开始训练</span>
+trainer.<span class="fn">train</span>()</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-text-gen-s4">
+  <h2>生成效果测试</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> transformers <span class="kw">import</span> pipeline
+<span class="kw">import</span> torch
+
+<span class="cmt"># 设备管理</span>
+device = <span class="str">"cuda"</span> <span class="kw">if</span> torch.cuda.is_available() <span class="kw">else</span> <span class="str">"cpu"</span>
+
+<span class="cmt"># load_best_model_at_end=True 时，最佳模型保存在 output_dir 根目录</span>
+generator = pipeline(
+    <span class="str">"text-generation"</span>,
+    model=<span class="str">"./gpt2-chinese"</span>,
+    tokenizer=tokenizer,
+    device=device
+)
+
+<span class="cmt"># 测试生成</span>
+prompts = [
+    <span class="str">"机器学习的主要方法包括"</span>,
+    <span class="str">"深度学习在自然语言处理中的应用"</span>,
+    <span class="str">"人工智能的未来发展趋势"</span>,
+]
+
+<span class="kw">for</span> prompt <span class="kw">in</span> prompts:
+    result = generator(
+        prompt,
+        max_new_tokens=<span class="num">200</span>,
+        num_return_sequences=<span class="num">1</span>,
+        temperature=<span class="num">0.7</span>,
+        do_sample=<span class="kw">True</span>,
+        top_k=<span class="num">50</span>,
+        top_p=<span class="num">0.95</span>
+    )
+    <span class="fn">print</span>(<span class="str">f"提示：{prompt}"</span>)
+    <span class="fn">print</span>(<span class="str">f"生成：{result[0]['generated_text']}"</span>)
+    <span class="fn">print</span>(<span class="str">"---"</span>)</code></pre>
+  </div>
+
+  <h3>生成参数说明</h3>
+
+  <table>
+    <tr><th>参数</th><th>说明</th><th>推荐值</th></tr>
+    <tr><td><code>temperature</code></td><td>控制随机性，越高越随机</td><td>0.7</td></tr>
+    <tr><td><code>top_k</code></td><td>只从概率最高的K个词中采样</td><td>50</td></tr>
+    <tr><td><code>top_p</code></td><td>nucleus sampling，累计概率阈值</td><td>0.95</td></tr>
+    <tr><td><code>max_new_tokens</code></td><td>最多生成的新token数（替代已废弃的 max_length）</td><td>200</td></tr>
+  </table>
+</div>
+
+<div class="section" id="llm-text-gen-s5">
+  <h2>API部署</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> fastapi <span class="kw">import</span> FastAPI
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel
+<span class="kw">from</span> transformers <span class="kw">import</span> pipeline
+<span class="kw">import</span> torch
+
+app = FastAPI()
+
+<span class="cmt"># GPU/设备管理</span>
+device = <span class="str">"cuda"</span> <span class="kw">if</span> torch.cuda.is_available() <span class="kw">else</span> <span class="str">"cpu"</span>
+generator = pipeline(<span class="str">"text-generation"</span>, model=<span class="str">"./gpt2-chinese"</span>, device=device)
+
+<span class="kw">class</span> <span class="cls">GenerateRequest</span>(BaseModel):
+    prompt: <span class="cls">str</span>
+    max_new_tokens: <span class="cls">int</span> = <span class="num">200</span>
+    temperature: <span class="cls">float</span> = <span class="num">0.7</span>
+
+<span class="dec">@app.post</span>(<span class="str">"/generate"</span>)
+<span class="kw">async def</span> <span class="fn">generate</span>(request: GenerateRequest):
+    result = generator(
+        request.prompt,
+        max_new_tokens=request.max_new_tokens,
+        temperature=request.temperature,
+        do_sample=<span class="kw">True</span>
+    )
+    <span class="kw">return</span> {<span class="str">"text"</span>: result[<span class="num">0</span>][<span class="str">"generated_text"</span>]}
+
+<span class="cmt"># 启动：uvicorn api:app --reload</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-text-gen-s6">
+  <h2>现代替代方案</h2>
+
+  <div class="callout callout-tip">
+    <strong>2026年推荐：</strong>以下方案在效率和效果上都优于原始 GPT-2 微调。
+  </div>
+
+  <h3>1. PEFT/LoRA — 参数高效微调</h3>
+  <p>对于 GPT-2 这类自回归模型，LoRA 可以将训练参数量减少 90% 以上：</p>
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> peft <span class="kw">import</span> LoraConfig, get_peft_model, TaskType
+
+config = LoraConfig(
+    task_type=TaskType.CAUSAL_LM,
+    r=<span class="num">16</span>,
+    lora_alpha=<span class="num">32</span>,
+    lora_dropout=<span class="num">0.05</span>,
+    target_modules=[<span class="str">"c_attn"</span>, <span class="str">"c_proj"</span>],
+)
+model = <span class="fn">get_peft_model</span>(model, config)</code></pre>
+  </div>
+
+  <h3>2. 更新的基座模型</h3>
+  <p>2026 年有更强大的中文生成模型可供选择：</p>
+  <table>
+    <tr><th>模型</th><th>参数量</th><th>特点</th></tr>
+    <tr><td>Qwen3-8B</td><td>7B</td><td>中文能力极强，社区活跃</td></tr>
+    <tr><td>Llama 3.1-8B</td><td>8B</td><td>多语言均衡，生态丰富</td></tr>
+    <tr><td>Qwen3-1.7B</td><td>1.5B</td><td>轻量级，适合边缘部署</td></tr>
+  </table>
+
+  <h3>3. Unsloth — 加速训练</h3>
+  <p>Unsloth 可将 LoRA 微调速度提升 2~5 倍，显存减少 60%：</p>
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> unsloth <span class="kw">import</span> FastLanguageModel
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name=<span class="str">"unsloth/Qwen3-8B"</span>,
+    max_seq_length=<span class="num">2048</span>,
+)
+model = FastLanguageModel.get_peft_model(model, r=<span class="num">16</span>)</code></pre>
+  </div>
+</div>
+
+
+</div>
+
+</section>

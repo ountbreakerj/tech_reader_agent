@@ -1,0 +1,251 @@
+<section class="llm-mod llm-m-db-selection" id="llm-db-selection"><div class="module-wrapper">
+<!-- 侧边栏导航 -->
+
+
+
+
+
+<!-- 主内容区 -->
+
+
+
+<!-- Hero Banner -->
+<div class="hero-banner">
+  <h1>📊 数据库选型指南</h1>
+  <p>根据需求选择最适合的数据库，避免技术选型踩坑</p>
+</div>
+
+<!-- ==================== SECTION 1 ==================== -->
+<div class="section" id="llm-db-selection-s1">
+  <h2>数据库类型概览</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>选择数据库就像选择交通工具——去近的地方骑自行车（简单快速），去远的地方开车（功能强大），运大量货物用货车（高吞吐）。不同的场景需要不同的工具。
+  </div>
+
+  <h3>主流数据库分类</h3>
+
+  <table>
+    <tr><th>类型</th><th>代表产品</th><th>数据模型</th><th>适用场景</th></tr>
+    <tr><td><strong>关系型数据库</strong></td><td>MySQL, PostgreSQL, Oracle</td><td>表格、行、列</td><td>结构化数据，复杂查询，事务</td></tr>
+    <tr><td><strong>文档数据库</strong></td><td>MongoDB, CouchDB</td><td>JSON文档</td><td>灵活的数据结构，快速开发</td></tr>
+    <tr><td><strong>键值数据库</strong></td><td>Redis, Memcached</td><td>Key-Value</td><td>缓存、会话管理、配置存储</td></tr>
+    <tr><td><strong>列族数据库</strong></td><td>Cassandra, HBase</td><td>列族</td><td>海量数据写入，时间序列</td></tr>
+    <tr><td><strong>图数据库</strong></td><td>Neo4j, ArangoDB</td><td>节点、边</td><td>社交网络、推荐系统、知识图谱</td></tr>
+    <tr><td><strong>时序数据库</strong></td><td>InfluxDB, TimescaleDB</td><td>时间戳+值</td><td>监控、IoT、日志</td></tr>
+    <tr><td><strong>向量数据库</strong></td><td>Milvus, FAISS, Pinecone</td><td>向量</td><td>相似度搜索、RAG、推荐</td></tr>
+    <tr><td><strong>向量扩展</strong></td><td>pgvector (PostgreSQL), MySQL 9.x VECTOR</td><td>向量（嵌入关系型）</td><td>已有PG/MySQL团队、中小规模向量检索</td></tr>
+  </table>
+
+  <div class="callout callout-info">
+    <strong>📖 扩展知识：</strong>现代应用往往需要多种数据库协同工作（多库架构）。例如：MySQL存用户数据 + Milvus存向量 + Redis做缓存。此外，越来越多的数据库开始<strong>原生支持混合搜索</strong>（向量+全文检索），如 PostgreSQL 的 pgvector + tsvector 组合、Milvus 2.5+ 内置的 BM25 全文检索等，使得单库即可完成多种检索任务。
+  </div>
+</div>
+
+<!-- ==================== SECTION 2 ==================== -->
+<div class="section" id="llm-db-selection-s2">
+  <h2>关系型数据库选型</h2>
+
+  <h3>MySQL vs PostgreSQL对比</h3>
+
+  <table>
+    <tr><th>维度</th><th>MySQL</th><th>PostgreSQL</th><th>推荐</th></tr>
+    <tr><td><strong>易用性</strong></td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>MySQL（更简单）</td></tr>
+    <tr><td><strong>功能丰富度</strong></td><td>⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>PostgreSQL（JSONB、窗口函数等）</td></tr>
+    <tr><td><strong>扩展性</strong></td><td>⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>PostgreSQL（丰富的扩展）</td></tr>
+    <tr><td><strong>性能</strong></td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>PostgreSQL（复杂查询更强）</td></tr>
+    <tr><td><strong>社区支持</strong></td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>MySQL（历史更久）</td></tr>
+    <tr><td><strong>云服务</strong></td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>平手（都很好）</td></tr>
+  </table>
+
+  <div class="decision-tree">
+    <h3>🔍 选型决策树</h3>
+    <pre>
+你的项目是否需要...
+
+├── 复杂的JSON文档处理？ → PostgreSQL
+├── 全文搜索？ → PostgreSQL
+├── 地理空间数据？ → PostgreSQL (PostGIS)
+├── 向量搜索（已有PG）？ → PostgreSQL + pgvector
+├── 物化视图？ → PostgreSQL
+├── 简单的Web应用？ → MySQL
+├── 已有MySQL生态？ → MySQL
+├── 向量搜索（已有MySQL）？ → MySQL 9.x（实验性）/ 搭配Milvus
+└── 团队MySQL经验丰富？ → MySQL
+    </pre>
+  </div>
+
+  <h3>性能基准对比</h3>
+
+  <table>
+    <tr><th>操作</th><th>MySQL 8.4 LTS</th><th>PostgreSQL 18（截至 2026-08）</th><th>说明</th></tr>
+    <tr><td>简单SELECT</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>MySQL略快</td></tr>
+    <tr><td>复杂JOIN查询</td><td>⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>PostgreSQL更强</td></tr>
+    <tr><td>大量写入</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>平手</td></tr>
+    <tr><td>JSON查询</td><td>⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>PostgreSQL JSONB远胜</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>💡 我的建议：</strong>如果是新项目且没有历史包袱，推荐PostgreSQL。它的功能更全面，长期来看更不容易遇到瓶颈。
+  </div>
+</div>
+
+<!-- ==================== SECTION 3 ==================== -->
+<div class="section" id="llm-db-selection-s3">
+  <h2>向量数据库选型</h2>
+
+  <h3>主流向量数据库对比</h3>
+
+  <table>
+    <tr><th>数据库</th><th>类型</th><th>易用性</th><th>性能</th><th>扩展性</th><th>适用场景</th></tr>
+    <tr><td><strong>Milvus</strong></td><td>分布式</td><td>⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>生产环境，大规模数据</td></tr>
+    <tr><td><strong>FAISS</strong></td><td>库</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐</td><td>研究、原型、单机</td></tr>
+    <tr><td><strong>Chroma</strong></td><td>嵌入式</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐</td><td>⭐⭐</td><td>小型项目、快速原型</td></tr>
+    <tr><td><strong>Weaviate</strong></td><td>数据库</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>多模态检索</td></tr>
+    <tr><td><strong>Pinecone</strong></td><td>云服务</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>全托管、快速上线</td></tr>
+    <tr><td><strong>Qdrant</strong></td><td>数据库</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>过滤搜索、Rust实现</td></tr>
+    <tr><td><strong>pgvector</strong></td><td>PG扩展</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>已有PG团队、中小规模、混合查询</td></tr>
+  </table>
+
+  <h3>选型决策</h3>
+
+  <div class="compare">
+    <div class="compare-card left">
+      <h4>✅ 选择Milvus</h4>
+      <ul>
+        <li>需要分布式支持</li>
+        <li>数据量超过1亿向量</li>
+        <li>需要高可用和容灾</li>
+        <li>愿意投入运维成本</li>
+      </ul>
+    </div>
+    <div class="compare-card right">
+      <h4>✅ 选择FAISS/Chroma</h4>
+      <ul>
+        <li>数据量较小（<1000万）</li>
+        <li>快速原型开发</li>
+        <li>不需要分布式</li>
+        <li>学习和实验</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 pgvector：已有PostgreSQL团队的最佳选择</strong>
+    <ul style="margin-top: 0.5rem;">
+      <li>pgvector 是 PostgreSQL 的向量检索扩展，安装后即可在熟悉的 PG 实例中存储和查询向量</li>
+      <li>无需额外部署和运维独立的向量数据库，降低架构复杂度</li>
+      <li>支持 IVFFlat、HNSW 索引，千万级向量数据性能表现良好</li>
+      <li>可与 PostgreSQL 的 SQL 能力无缝结合——在同一查询中同时做向量检索和结构化过滤</li>
+      <li>适合中小规模 RAG 项目、需要向量+关系数据联合查询的场景</li>
+    </ul>
+  </div>
+
+  <div class="callout callout-info">
+    <strong>📖 MySQL 9.x VECTOR 类型（实验性）</strong>
+    <p style="margin-top: 0.3rem;">MySQL 9.0+ 开始引入原生 <code>VECTOR</code> 数据类型和向量距离函数，标志着 MySQL 也在向量检索领域发力。目前该特性仍处于实验性阶段，功能和索引支持远不如 pgvector 成熟。如果你的团队使用 MySQL 且对向量检索需求较轻，可以持续关注其演进；生产环境仍建议搭配 Milvus 或 pgvector。</p>
+  </div>
+
+  <h3>性能基准对比（向量检索）</h3>
+
+  <table>
+    <tr><th>指标</th><th>Milvus</th><th>FAISS</th><th>Chroma</th></tr>
+    <tr><td>100万向量索引构建</td><td>~2分钟</td><td>~30秒</td><td>~1分钟</td></tr>
+    <tr><td>单次搜索延迟</td><td>~5ms</td><td>~2ms</td><td>~10ms</td></tr>
+    <tr><td>QPS（每秒查询数）</td><td>~1000</td><td>~2000</td><td>~500</td></tr>
+    <tr><td>内存占用（100万×128维）</td><td>~500MB</td><td>~500MB</td><td>~600MB</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 4 ==================== -->
+<div class="section" id="llm-db-selection-s4">
+  <h2>混合数据库架构</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>混合数据库架构就像一个完整的公司——MySQL是财务部（处理结构化交易数据），Milvus是市场部（处理用户行为向量），Redis是前台（快速响应请求）。每个部门专注自己的领域，通过协作完成整体目标。
+  </div>
+
+  <h3>典型的多库架构</h3>
+
+  <div class="diagram">
+    <pre class="mermaid">
+graph TB
+    App[应用程序] --> API[API层]
+    API --> MySQL[(MySQL<br/>用户/订单数据)]
+    API --> Milvus[(Milvus<br/>向量数据)]
+    API --> Redis[(Redis<br/>缓存)]
+    MySQL --> Sync[数据同步]
+    Sync --> Milvus
+    </pre>
+    <div class="caption">典型多库架构</div>
+  </div>
+
+  <h3>数据分片策略</h3>
+
+  <table>
+    <tr><th>策略</th><th>说明</th><th>适用场景</th></tr>
+    <tr><td><strong>水平分片</strong></td><td>同一表的数据分散到多个数据库</td><td>数据量超大，单机无法存储</td></tr>
+    <tr><td><strong>垂直分片</strong></td><td>不同业务的表放在不同数据库</td><td>业务逻辑清晰分离</td></tr>
+    <tr><td><strong>功能分片</strong></td><td>不同类型的数据用不同数据库</td><td>关系数据 + 向量数据 + 缓存</td></tr>
+  </table>
+
+  <h3>数据一致性方案</h3>
+
+  <table>
+    <tr><th>方案</th><th>一致性</th><th>延迟</th><th>复杂度</th><th>适用场景</th></tr>
+    <tr><td><strong>强一致</strong></td><td>最高</td><td>高</td><td>高</td><td>金融交易</td></tr>
+    <tr><td><strong>最终一致</strong></td><td>中</td><td>低</td><td>中</td><td>大多数Web应用</td></tr>
+    <tr><td><strong>弱一致</strong></td><td>低</td><td>最低</td><td>低</td><td>非关键数据</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>💡 实践建议：</strong>大多数RAG应用采用最终一致性方案即可。用户数据存MySQL，向量数据存Milvus，通过CDC或双写保持同步，允许几秒钟的延迟。
+  </div>
+
+  <div class="callout callout-info">
+    <strong>📖 混合搜索新趋势：</strong>传统架构需要 MySQL + Milvus 两套系统分别负责关键词检索和向量检索。随着技术演进，<strong>混合搜索正逐渐走向原生化</strong>：PostgreSQL 通过 pgvector + tsvector 可在单库内同时完成语义搜索和全文搜索；Milvus 2.5+ 内置了 BM25 全文检索能力，不再需要为关键词搜索单独维护一个 MySQL。对于新建项目，简化架构、减少数据同步复杂度是一个值得考虑的方向。
+  </div>
+</div>
+
+<!-- ==================== SECTION 5 ==================== -->
+<div class="section" id="llm-db-selection-s5">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：电商平台数据库设计 <span class="badge">综合</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>为一个电商平台设计完整的多库架构。</p>
+      <p><strong>需求：</strong></p>
+      <p>① 用户管理（注册、登录、个人信息）</p>
+      <p>② 商品管理（商品信息、分类、价格）</p>
+      <p>③ 订单管理（下单、支付、物流）</p>
+      <p>④ 商品推荐（基于用户行为的相似商品推荐）</p>
+      <p>⑤ 缓存层（热门商品、用户会话）</p>
+      <p><strong>要求：</strong></p>
+      <p>① 画出系统架构图</p>
+      <p>② 说明每个数据库的选择理由</p>
+      <p>③ 设计数据同步方案</p>
+      <p>④ 给出数据库Schema设计</p>
+    </div>
+  </div>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习2：技术选型报告 <span class="badge">进阶</span></div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>针对一个具体场景写技术选型报告。</p>
+      <p><strong>场景（三选一）：</strong></p>
+      <p>A. 企业知识库问答系统</p>
+      <p>B. 电商商品搜索和推荐</p>
+      <p>C. 社交媒体内容分析</p>
+      <p><strong>要求：</strong></p>
+      <p>① 分析场景的数据特点和查询模式</p>
+      <p>② 对比至少3种数据库方案</p>
+      <p>③ 给出推荐方案和理由</p>
+      <p>④ 画出架构图</p>
+      <p>⑤ 评估成本和风险</p>
+    </div>
+  </div>
+</div>
+
+<!-- 底部导航 -->
+</div></section>

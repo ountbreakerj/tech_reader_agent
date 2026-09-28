@@ -1,0 +1,235 @@
+<section class="llm-mod llm-m-sentiment" id="llm-sentiment"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>💭 项目1：情感分析</h1>
+  <p>BERT微调实战 - 从数据到部署</p>
+</div>
+
+<div class="section" id="llm-sentiment-s1">
+  <h2>项目概述</h2>
+
+  <h3>目标</h3>
+  <p>构建一个中文情感分析系统，能够判断文本的情感倾向（正面/负面/中性）。</p>
+
+  <h3>技术栈</h3>
+  <table>
+    <tr><th>组件</th><th>选择</th><th>说明</th></tr>
+    <tr><td>预训练模型</td><td>BERT-base-chinese</td><td>中文BERT</td></tr>
+    <tr><td>微调框架</td><td>HuggingFace Transformers</td><td>标准微调</td></tr>
+    <tr><td>部署框架</td><td>FastAPI</td><td>REST API</td></tr>
+  </table>
+
+  <h3>项目结构</h3>
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">目录</span></div>
+    <pre><code>sentiment_analysis/
+├── data/                 <span class="cmt"># 数据集</span>
+│   ├── train.csv
+│   └── test.csv
+├── models/               <span class="cmt"># 保存的模型</span>
+├── src/                  <span class="cmt"># 源代码</span>
+│   ├── train.py          <span class="cmt"># 训练脚本</span>
+│   ├── evaluate.py       <span class="cmt"># 评估脚本</span>
+│   └── api.py            <span class="cmt"># API服务</span>
+├── requirements.txt
+└── README.md</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-sentiment-s2">
+  <h2>数据准备</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span>
+      
+    </div>
+    <pre><code><span class="kw">import</span> pandas <span class="kw">as</span> pd
+<span class="kw">from</span> sklearn.model_selection <span class="kw">import</span> train_test_split
+
+<span class="cmt"># 加载数据</span>
+df = pd.read_csv(<span class="str">"data/train.csv"</span>)
+<span class="fn">print</span>(<span class="str">f"数据量：<span class="var">{len(df)}</span>"</span>)
+<span class="fn">print</span>(<span class="str">f"标签分布：\n<span class="var">{df['label'].value_counts()}</span>"</span>)
+
+<span class="cmt"># 划分训练集和验证集</span>
+train_df, val_df = train_test_split(
+    df, test_size=<span class="num">0.2</span>, random_state=<span class="num">42</span>, stratify=df[<span class="str">"label"</span>]
+)
+
+<span class="fn">print</span>(<span class="str">f"训练集：<span class="var">{len(train_df)}</span> 条"</span>)
+<span class="fn">print</span>(<span class="str">f"验证集：<span class="var">{len(val_df)}</span> 条"</span>)</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-sentiment-s3">
+  <h2>模型构建</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> transformers <span class="kw">import</span> BertTokenizer, BertForSequenceClassification
+<span class="kw">from</span> torch.utils.data <span class="kw">import</span> Dataset
+
+<span class="cmt"># 加载分词器和模型</span>
+tokenizer = BertTokenizer.<span class="fn">from_pretrained</span>(<span class="str">"bert-base-chinese"</span>)
+model = BertForSequenceClassification.<span class="fn">from_pretrained</span>(
+    <span class="str">"bert-base-chinese"</span>,
+    num_labels=<span class="num">3</span>  <span class="cmt"># 正面、负面、中性</span>
+)
+
+<span class="cmt"># 自定义Dataset</span>
+<span class="kw">class</span> <span class="cls">SentimentDataset</span>(Dataset):
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, texts, labels, tokenizer, max_length=<span class="num">128</span>):
+        self.texts = texts
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    <span class="kw">def</span> <span class="fn">__len__</span>(self):
+        <span class="kw">return</span> <span class="fn">len</span>(self.texts)
+
+    <span class="kw">def</span> <span class="fn">__getitem__</span>(self, idx):
+        encoding = self.tokenizer(
+            self.texts[idx],
+            truncation=<span class="kw">True</span>,
+            padding=<span class="str">"max_length"</span>,
+            max_length=self.max_length,
+            return_tensors=<span class="str">"pt"</span>
+        )
+        <span class="kw">return</span> {
+            <span class="str">"input_ids"</span>: encoding[<span class="str">"input_ids"</span>].squeeze(),
+            <span class="str">"attention_mask"</span>: encoding[<span class="str">"attention_mask"</span>].squeeze(),
+            <span class="str">"labels"</span>: self.labels[idx]
+        }</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-sentiment-s4">
+  <h2>训练与评估</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> transformers <span class="kw">import</span> TrainingArguments, Trainer
+<span class="kw">from</span> sklearn.metrics <span class="kw">import</span> accuracy_score, f1_score
+
+<span class="kw">def</span> <span class="fn">compute_metrics</span>(pred):
+    labels = pred.label_ids
+    preds = pred.predictions.argmax(-<span class="num">1</span>)
+    <span class="kw">return</span> {
+        <span class="str">"accuracy"</span>: accuracy_score(labels, preds),
+        <span class="str">"f1"</span>: f1_score(labels, preds, average=<span class="str">"weighted"</span>)
+    }
+
+<span class="cmt"># 训练参数</span>
+training_args = TrainingArguments(
+    output_dir=<span class="str">"./output"</span>,
+    num_train_epochs=<span class="num">3</span>,
+    per_device_train_batch_size=<span class="num">16</span>,
+    per_device_eval_batch_size=<span class="num">32</span>,
+    learning_rate=<span class="num">2e-5</span>,
+    eval_strategy=<span class="str">"epoch"</span>,
+    save_strategy=<span class="str">"epoch"</span>,
+    load_best_model_at_end=<span class="kw">True</span>,
+)
+
+<span class="cmt"># 开始训练</span>
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
+    compute_metrics=compute_metrics,
+)
+
+trainer.<span class="fn">train</span>()</code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-sentiment-s5">
+  <h2>API部署</h2>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> fastapi <span class="kw">import</span> FastAPI
+<span class="kw">from</span> pydantic <span class="kw">import</span> BaseModel
+<span class="kw">import</span> torch
+
+app = FastAPI()
+model = BertForSequenceClassification.<span class="fn">from_pretrained</span>(<span class="str">"./output/best_model"</span>)
+tokenizer = BertTokenizer.<span class="fn">from_pretrained</span>(<span class="str">"bert-base-chinese"</span>)
+
+<span class="cmt"># GPU/设备管理</span>
+device = torch.device(<span class="str">"cuda"</span> <span class="kw">if</span> torch.cuda.is_available() <span class="kw">else</span> <span class="str">"cpu"</span>)
+model.<span class="fn">to</span>(device)
+
+<span class="kw">class</span> <span class="cls">SentimentRequest</span>(BaseModel):
+    text: <span class="cls">str</span>
+
+<span class="dec">@app.post</span>(<span class="str">"/predict"</span>)
+<span class="kw">async def</span> <span class="fn">predict</span>(request: SentimentRequest):
+    inputs = tokenizer(request.text, return_tensors=<span class="str">"pt"</span>, truncation=<span class="kw">True</span>, max_length=<span class="num">128</span>)
+    inputs = {k: v.to(device) <span class="kw">for</span> k, v <span class="kw">in</span> inputs.items()}
+    model.<span class="fn">eval</span>()
+    <span class="kw">with</span> torch.no_grad():
+        outputs = model(**inputs)
+    pred = torch.argmax(outputs.logits, dim=-<span class="num">1</span>).item()
+
+    <span class="cmt"># 标签编码映射：0=负面, 1=中性, 2=正面</span>
+    <span class="cmt"># 需与训练时 LabelEncoder 的编码顺序一致</span>
+    labels = {<span class="num">0</span>: <span class="str">"负面"</span>, <span class="num">1</span>: <span class="str">"中性"</span>, <span class="num">2</span>: <span class="str">"正面"</span>}
+    <span class="kw">return</span> {<span class="str">"sentiment"</span>: labels[pred], <span class="str">"confidence"</span>: torch.softmax(outputs.logits, dim=-<span class="num">1</span>).max().item()}
+
+<span class="cmt"># 启动：uvicorn api:app --reload</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-sentiment-s6">
+  <h2>现代替代方案</h2>
+
+  <div class="callout callout-tip">
+    <strong>更高效的做法：</strong>以下方案可以大幅降低训练成本，适合资源有限的场景。
+  </div>
+
+  <h3>1. PEFT/LoRA — 参数高效微调</h3>
+  <p>不需要微调整个 BERT，只需训练少量参数（约 0.1%~1%），显存占用大幅降低：</p>
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> peft <span class="kw">import</span> LoraConfig, get_peft_model, TaskType
+
+config = LoraConfig(
+    task_type=TaskType.SEQUENCE_CLASSIFICATION,
+    r=<span class="num">8</span>,
+    lora_alpha=<span class="num">32</span>,
+    lora_dropout=<span class="num">0.1</span>,
+    target_modules=[<span class="str">"query"</span>, <span class="str">"value"</span>],
+)
+model = <span class="fn">get_peft_model</span>(model, config)
+<span class="fn">print</span>(<span class="str">f"可训练参数：{model.print_trainable_parameters()}"</span>)</code></pre>
+  </div>
+
+  <h3>2. HuggingFace Pipeline — 最简基线</h3>
+  <p>如果不需要自定义训练，直接用预训练好的 pipeline 即可获得不错的效果：</p>
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> transformers <span class="kw">import</span> pipeline
+
+classifier = pipeline(<span class="str">"sentiment-analysis"</span>,
+    model=<span class="str">"lxyuan/distilbert-base-multilingual-cased-sentiments-student"</span>)
+result = classifier(<span class="str">"这个产品非常好用！"</span>)
+<span class="cmt"># [{'label': 'positive', 'score': 0.98}]</span></code></pre>
+  </div>
+
+  <h3>3. SetFit — 少样本场景</h3>
+  <p>仅需几十条标注数据即可达到不错效果，无需大规模标注数据集：</p>
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="kw">from</span> setfit <span class="kw">import</span> SetFitModel
+
+model = SetFitModel.from_pretrained(<span class="str">"sentence-transformers/paraphrase-mpnet-base-v2"</span>)
+<span class="cmt"># 仅需每类 8~32 条样本即可微调</span>
+model.fit(train_texts, train_labels)</code></pre>
+  </div>
+</div>
+
+
+</div>
+
+</section>

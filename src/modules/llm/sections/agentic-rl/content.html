@@ -1,0 +1,2523 @@
+<section class="llm-mod llm-m-happy-source llm-agentic-rl" id="llm-agentic-rl"><div class="module-wrapper"><div class="llm-hero" style="--hero-a:#0f766e;--hero-b:#2563eb;"><h1>🎯 Happy-LLM：Agentic RL 实践</h1><p>GRPO、OPD、Search-R1 与 ReTool 的训练机制和工程边界</p><div class="source-meta">来源：Datawhale China · Happy-LLM（本地离线融合）</div></div><div class="callout callout-info"><p>📌 本节保留 Happy-LLM 原教程的概念、公式、代码与图示，并按 Tech Reader 的单文件离线规范转换。外部图片已复制并登记为本地资源。</p></div><div class="happy-source-file"><div class="source-file-label">来源文件 · docs/chapter8/第八章 大模型强化学习.md</div><p>在第四章中，我们从人类反馈强化学习（Reinforcement Learning from Human Feedback，RLHF）出发，介绍了奖励模型、近端策略优化（Proximal Policy Optimization，PPO）以及指令对齐的基本流程。第六章进一步给出了大模型训练的工程基础，第七章则让模型拥有了规划、记忆与调用工具的能力。</p>
+<p>当 Agent 真正进入搜索、代码执行等环境后，仅靠监督微调已经很难覆盖所有可能的交互轨迹。模型需要自己尝试动作，根据最终结果判断一条轨迹是否有效，再把成功经验更新到策略中。大模型强化学习由此从“让回答更符合偏好”，逐步走向“让模型在环境中学会行动”。</p>
+<p>本章围绕四个彼此衔接的主题展开。首先介绍当前大模型强化学习中使用广泛的 Group Relative Policy Optimization（GRPO），建立 rollout、reward、advantage 与策略更新的完整认识；随后介绍 On-Policy Distillation（OPD），观察 Student 如何在自己的状态分布上持续获得 Teacher 的逐 token 指导；最后以 Search-R1 和 ReTool 为例，把同一套训练框架扩展到搜索引擎与代码解释器，完成两条可以运行的 Agentic RL 实践。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/8-images/8-1-chapter-roadmap-64675d8865.png" alt="第八章内容结构" width="90%">
+    <p>图 8.1 第八章内容结构</p>
+</div>
+<p>本章全部示例均使用 PyTRIO 0.2.6。PyTRIO 将本地的数据处理、环境交互和训练控制，与远端的模型采样、前向反向传播和权重管理连接起来。四个示例虽然任务不同，核心链路始终可以概括为：</p>
+<ol>
+<li>使用当前策略生成一条或一组轨迹；</li>
+<li>根据结果或 Teacher 反馈计算训练信号；</li>
+<li>将 prompt、response、旧策略 logprob 和 advantage 对齐为 <code>Datum</code>；</li>
+<li>调用 <code>forward_backward()</code> 与 <code>optim_step()</code> 更新策略；</li>
+<li>刷新采样客户端，让下一轮 rollout 使用新权重。</li>
+</ol>
+<p>配套代码位于 <code>docs/chapter8</code>。从仓库根目录安装公共依赖：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>uv venv --python 3.13
+source .venv/bin/activate
+uv pip install -r docs/chapter8/requirements.txt
+trio login</code></pre></div>
+<p>PyTRIO 服务支持的模型会持续更新，正式实验前可以使用下面的代码查看当前列表：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import pytrio as trio
+
+service_client = trio.ServiceClient()
+print(service_client.get_supported_models())</code></pre></div>
+<blockquote><strong>扩展阅读：</strong> 如果你希望继续了解更多 Agentic RL 算法与可运行实践，可以阅读作者维护的另一个开源项目 <a href="https://github.com/KMnO4-zx/agentic-rl-lab" target="_blank" rel="noreferrer">agentic-rl-lab</a>。除本章介绍的内容外，该仓库还包含 OPSD、DAPO、GSPO、ALFWorld 等算法与环境的原理拆解、训练代码和实验记录。</blockquote>
+<blockquote>注：作者选择 PyTrio 而不是 Verl 作为本章示例，意在希望降低 Agentic RL 的工程门槛与实验成本。按照文中的最小试跑配置，作者力争将四个示例的基础实验预算控制在 200 元以内，让读者亲手跑通 rollout、reward、advantage 与策略更新闭环。实际费用会随模型、采样长度、训练步数和评测规模变化。</blockquote>
+<div class="section" id="llm-agentic-rl-src1-s1"><h2>8.1 GRPO</h2>
+<blockquote><strong>代码来源：</strong> 本节依据作者开源仓库 <a href="https://github.com/KMnO4-zx/agentic-rl-lab/tree/main/01-grpo" target="_blank" rel="noreferrer">agentic-rl-lab/01-grpo</a> 中的 <code>01-demo-sync.py</code> 与 <code>02-demo-async.py</code> 整理。正文逐段讲解同步版 <code>01-demo-sync.py</code>，异步版作为完整配套实现保留。</blockquote>
+<p>GRPO 最早在 DeepSeekMath 中被系统提出。它保留了 PPO 的 on-policy 更新思想，同时使用同一道题的一组采样结果估计相对优势，从而省去单独训练 Value Model 的过程。对于具有可验证答案的数学、代码和逻辑任务，这种方法能够直接利用结果奖励，已经成为大模型强化学习最常见的基础算法之一。</p>
+<h3>8.1.1 从语言模型到强化学习策略</h3>
+<p>自回归语言模型接收 prompt <span class="math" role="math" aria-label="数学公式">x</span>，并依次生成 token 序列 <span class="math" role="math" aria-label="数学公式">y=(y<sub>1</sub>,y<sub>2</sub>,…,y<sub>T</sub>)</span>。从概率建模的角度看，完整回答的概率可以写为：</p>
+<div class="math-display" role="math" aria-label="数学公式">π<sub>θ</sub>(y| x) = ∏<sub>t=1</sub><sup>T</sup> π<sub>θ</sub>(y<sub>t</sub>| x,y<sub>lt t</sub>),</div>
+<p>其中， <span class="math" role="math" aria-label="数学公式">π<sub>θ</sub></span> 表示参数为 <span class="math" role="math" aria-label="数学公式">θ</span> 的语言模型策略。将语言模型放入强化学习框架后，可以得到表 8.1 所示的对应关系。</p>
+<table><thead><tr><th>强化学习概念</th><th>大语言模型中的含义</th></tr></thead><tbody><tr><td>状态 <span class="math" role="math" aria-label="数学公式">s<sub>t</sub></span></td><td>prompt 与已经生成的 token</td></tr><tr><td>动作 <span class="math" role="math" aria-label="数学公式">a<sub>t</sub></span></td><td>下一个 token</td></tr><tr><td>策略 <span class="math" role="math" aria-label="数学公式">π<sub>θ</sub>(a<sub>t</sub>| s<sub>t</sub>)</span></td><td>模型对下一个 token 的概率分布</td></tr><tr><td>轨迹 <span class="math" role="math" aria-label="数学公式">τ</span></td><td>一段完整回答，或包含工具调用的多轮交互</td></tr><tr><td>环境</td><td>数据集判题器、搜索引擎、代码解释器等</td></tr><tr><td>奖励 <span class="math" role="math" aria-label="数学公式">R(τ)</span></td><td>答案正确性、格式、工具执行结果等反馈</td></tr></tbody></table>
+<p>一次模型生成通常称为一次 rollout。训练的目标，是提高高奖励轨迹中动作出现的概率，同时降低低奖励轨迹中动作出现的概率。最直观的策略梯度形式为：</p>
+<div class="math-display" role="math" aria-label="数学公式">∇<sub>θ</sub> J(θ) = <span class="mbb">E</span><sub>τ∼π<sub>θ</sub></sub> [ A(τ) ∇<sub>θ</sub> log π<sub>θ</sub>(τ) ],</div>
+<p>其中， <span class="math" role="math" aria-label="数学公式">A(τ)</span> 是优势函数。优势为正，说明这条轨迹相对值得鼓励；优势为负，说明当前策略需要减少类似行为。</p>
+<p>大模型的动作空间是整个词表，一段回答又可能包含数百到数千个 token。训练时还要控制新旧策略的变化幅度，防止一次更新破坏模型已有能力。因此，真正困难的部分通常集中在两个问题上：如何得到稳定的 advantage，以及如何安全地使用这些 advantage 更新策略。</p>
+<h3>8.1.2 从 PPO 到 GRPO</h3>
+<p>PPO 通常使用一个 Value Model 估计状态价值 <span class="math" role="math" aria-label="数学公式">V<sub>φ</sub>(s<sub>t</sub>)</span>，再结合回报计算 advantage。大模型场景中的 Value Model 往往与策略模型规模接近，它会带来额外的显存、训练和同步成本。价值估计误差也会进一步传递到策略更新。</p>
+<p>GRPO 改用组内相对比较。对于一个问题 <span class="math" role="math" aria-label="数学公式">x</span>，先从旧策略 <span class="math" role="math" aria-label="数学公式">π<sub>θ<sub><span class="mtext">old</span></sub></sub></span> 中采样 <span class="math" role="math" aria-label="数学公式">G</span> 个回答：</p>
+<div class="math-display" role="math" aria-label="数学公式">{y<sub>1</sub>,y<sub>2</sub>,…,y<sub>G</sub>} ∼ π<sub>θ<sub><span class="mtext">old</span></sub></sub>(·| x).</div>
+<p>判题器分别给出奖励 <span class="math" role="math" aria-label="数学公式">r<sub>1</sub>,r<sub>2</sub>,…,r<sub>G</sub></span>。经典 GRPO 使用组内均值和标准差对奖励进行标准化：</p>
+<div class="math-display" role="math" aria-label="数学公式">A<sub>i</sub> = <span class="mfrac"><span class="mnum">r<sub>i</sub>-<span class="mtext">mean</span>(r<sub>1</sub>,…,r<sub>G</sub>)</span><span class="mden"><span class="mtext">std</span>(r<sub>1</sub>,…,r<sub>G</sub>)+ϵ</span></span>.</div>
+<p>这样一来，同一道题中的高分回答获得正 advantage，低分回答获得负 advantage。问题本身的难度被组内基线抵消，策略可以更专注地学习“在相同条件下，哪些生成方式更好”。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/8-images/8-2-grpo-0bde8229c0.png" alt="GRPO 的分组采样与策略更新" width="90%">
+    <p>图 8.2 GRPO 的分组采样与策略更新</p>
+</div>
+<p>例如，对同一道数学题采样 4 个回答，规则判题器得到奖励 <span class="math" role="math" aria-label="数学公式">[1,0,0,1]</span>。组内均值为 <span class="math" role="math" aria-label="数学公式">0.5</span>，只做均值中心化时，4 个 advantage 分别为：</p>
+<div class="math-display" role="math" aria-label="数学公式">[0.5,-0.5,-0.5,0.5].</div>
+<p>两个正确回答会被鼓励，两个错误回答会被抑制。本章代码为了直接展示组内基线，默认采用：</p>
+<div class="math-display" role="math" aria-label="数学公式">A<sub>i</sub>=r<sub>i</sub>-<span class="math-overline">r</span>.</div>
+<p>完整实验也可以加入标准差归一化。两种写法表达了相同的组内相对思想，但梯度尺度不同，比较实验时应固定 advantage 的计算方式。</p>
+<p>这里还有一个容易忽略的退化情形。当一组回答全部正确，或者全部错误时，每个 <span class="math" role="math" aria-label="数学公式">A<sub>i</sub></span> 都等于 0，这组数据不会产生有效策略梯度。若训练日志中退化组比例长期很高，通常需要调整题目难度、采样温度、基础模型能力或 group size。</p>
+<h3>8.1.3 奖励与可验证强化学习</h3>
+<p>GRPO 只负责把组内奖励转换为相对优势，奖励质量仍然决定了模型最终学到什么。数学和代码任务通常能够使用确定性的规则判题器，这类训练也被称为 Reinforcement Learning with Verifiable Rewards（RLVR）。</p>
+<p>本章以 GSM8K 为例，要求模型将最终数值写在 <code>\boxed{}</code> 中。最小判题逻辑如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def extract_boxed(text: str) -&gt; str | None:
+    matches = re.findall(r&quot;\\boxed\{([^}]+)\}&quot;, text)
+    if not matches:
+        return None
+    return matches[-1].strip()
+
+
+def normalize_answer(text: str) -&gt; str:
+    return text.replace(&quot;,&quot;, &quot;&quot;).strip().rstrip(&quot;.&quot;)
+
+
+def grade_answer(response: str, ground_truth: str) -&gt; float:
+    answer = extract_boxed(response)
+    if answer is None:
+        return 0.0
+    return 1.0 if normalize_answer(answer) == normalize_answer(ground_truth) else 0.0</code></pre></div>
+<p>规则奖励简单、便宜，并且可以重复计算。不过，规则一旦存在漏洞，模型就可能学习利用漏洞获得高分。设计 reward 时应至少检查以下内容：</p>
+<ul>
+<li><strong>答案抽取是否稳健</strong>：同一个正确答案可能出现整数、小数、分数或带逗号数字等形式；</li>
+<li><strong>格式奖励是否压过正确性</strong>：格式只能作为辅助约束，不能让格式正确的错误答案获得主要奖励；</li>
+<li><strong>参考答案是否可靠</strong>：错误标签会给模型提供方向相反的训练信号；</li>
+<li><strong>判题器是否泄露信息</strong>：模型不应通过 prompt 或工具输出直接读到标准答案；</li>
+<li><strong>奖励是否具有区分度</strong>：大量全 0 或全 1 的组都会让 GRPO 失去相对比较信号。</li>
+</ul>
+<p>正式训练前，可以先把基础模型 rollout 保存下来，离线人工检查一批“回答—抽取结果—reward”三元组。这个步骤往往比直接调学习率更早发现问题。</p>
+<h3>8.1.4 策略比率与更新损失</h3>
+<p>rollout 由旧策略生成，参数更新发生在当前策略上。对第 <span class="math" role="math" aria-label="数学公式">i</span> 条回答的第 <span class="math" role="math" aria-label="数学公式">t</span> 个 token，定义新旧策略概率比：</p>
+<div class="math-display" role="math" aria-label="数学公式">ρ<sub>i,t</sub>(θ) = <span class="mfrac"><span class="mnum">π<sub>θ</sub>(y<sub>i,t</sub>| x,y<sub>i,lt t</sub>)</span><span class="mden">π<sub>θ<sub><span class="mtext">old</span></sub></sub>(y<sub>i,t</sub>| x,y<sub>i,lt t</sub>)</span></span> = exp(logπ<sub>θ</sub>-logπ<sub>θ<sub><span class="mtext">old</span></sub></sub>).</div>
+<p>最直接的 importance sampling 目标可以写为：</p>
+<div class="math-display" role="math" aria-label="数学公式">J<sub><span class="mtext">IS</span></sub>(θ) = <span class="mbb">E</span><sub>i,t</sub> [ρ<sub>i,t</sub>(θ)A<sub>i</sub>].</div>
+<p>如果概率比偏离 1 太远，少数 token 可能主导梯度。PPO 使用截断目标限制单次更新幅度：</p>
+<div class="math-display" role="math" aria-label="数学公式">J<sub><span class="mtext">PPO</span></sub>(θ) = <span class="mbb">E</span><sub>i,t</sub> [min(ρ<sub>i,t</sub>A<sub>i</sub>, <span class="mtext">clip</span>(ρ<sub>i,t</sub>,1-ε,1+ε)A<sub>i</sub>)].</div>
+<p>DeepSeekMath 中的经典 GRPO 目标采用了 PPO 风格的 clipping，并加入与参考策略之间的 KL 约束。本章的同步版 <code>01-demo-sync.py</code> 默认选择 PyTRIO 内置的 <code>importance_sampling</code>，便于观察 <code>old_logprobs</code>、<code>advantages</code> 和当前策略之间的数据关系；将命令行参数改为 <code>--loss-fn ppo</code>，即可使用内置 PPO loss。</p>
+<p>因此，GRPO 与 PPO 需要放在不同层次理解：</p>
+<ul>
+<li>GRPO 描述如何对同题分组采样，并由组内奖励得到 advantage；</li>
+<li>importance sampling 或 PPO 描述如何把 advantage 转换为策略梯度。</li>
+</ul>
+<h3>8.1.5 从头实现同步版 GRPO</h3>
+<p>本节按照同步版脚本的执行顺序，把一份完整的 GRPO 训练代码拆开说明。配套目录提供两个可以独立运行的文件：</p>
+<table><thead><tr><th>文件</th><th>执行方式</th><th>用途</th></tr></thead><tbody><tr><td><code>01-demo-sync.py</code></td><td>同步</td><td>正文逐段讲解的教学主线</td></tr><tr><td><code>02-demo-async.py</code></td><td>异步</td><td>并发处理同一 batch 中不同 prompt 的 rollout</td></tr></tbody></table>
+<p>两个文件使用相同的数据、reward、advantage、Datum 和 loss。下面只展开同步版，读者先沿着线性的控制流理解一次完整更新。</p>
+<p><strong>（1）定义训练配置与 rollout 数据</strong></p>
+<p>脚本只保留 PyTRIO 直接提供的 <code>importance_sampling</code> 和 <code>ppo</code> 两种策略更新 loss：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>LOSS_FNS = (&quot;importance_sampling&quot;, &quot;ppo&quot;)</code></pre></div>
+<p><code>GRPOConfig</code> 集中保存模型、采样、优化器和 SwanLab 参数。<code>RolloutSample</code> 保存一条 completion 后续训练需要的全部信息：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>@dataclass
+class RolloutSample:
+    &quot;&quot;&quot;一条采样结果，以及构造 importance_sampling 所需的旧策略 logprobs。&quot;&quot;&quot;
+
+    tokens: list[int]
+    logprobs: list[float]
+    text: str
+    reward: float
+    advantage: float</code></pre></div>
+<p>这里的 <code>logprobs</code> 必须来自 rollout 时的 Student。策略更新之后重新计算得到的是新策略 logprob，不能替代旧策略概率。<code>parse_args()</code> 将命令行参数转换为 <code>GRPOConfig</code>，并通过 <code>choices=LOSS_FNS</code> 限定只使用这两个内置 loss。</p>
+<p><strong>（2）加载 GSM8K 并构造 prompt</strong></p>
+<p>GSM8K 的标准答案位于 <code>####</code> 后面。模型输出则要求把最终数字写在 <code>\boxed{}</code> 中。代码对两侧答案做相同的轻量归一化：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def extract_boxed(text: str) -&gt; str | None:
+    &quot;&quot;&quot;取最后一个 \\boxed{...} 作为模型最终答案。&quot;&quot;&quot;
+    matches = re.findall(r&quot;\\boxed\{([^}]+)\}&quot;, text)
+    if not matches:
+        return None
+    return matches[-1].strip()
+
+
+def normalize_answer(text: str) -&gt; str:
+    &quot;&quot;&quot;GSM8K 答案只做轻量归一化，避免 1,000 和 1000 被判成不同。&quot;&quot;&quot;
+    return text.replace(&quot;,&quot;, &quot;&quot;).strip().rstrip(&quot;.&quot;)
+
+
+def grade_answer(response: str, ground_truth: str) -&gt; float:
+    &quot;&quot;&quot;boxed answer 与标准答案完全一致时给 1，否则给 0。&quot;&quot;&quot;
+    answer = extract_boxed(response)
+    if answer is None:
+        return 0.0
+    return 1.0 if normalize_answer(answer) == normalize_answer(ground_truth) else 0.0
+
+
+def extract_gsm8k_answer(answer_text: str) -&gt; str:
+    &quot;&quot;&quot;GSM8K 的最终答案位于 `####` 后面。&quot;&quot;&quot;
+    match = re.search(r&quot;####\s*(.+)&quot;, answer_text)
+    if match is None:
+        raise ValueError(f&quot;No GSM8K final answer found: {answer_text!r}&quot;)
+    return normalize_answer(match.group(1))</code></pre></div>
+<p><code>build_prompt()</code> 将一个 few-shot 示例与当前问题交给模型自己的 chat template，再编码成 token：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def build_prompt(tokenizer: Any, question: str) -&gt; list[int]:
+    messages = [
+        *FEWSHOT_PREFIX,
+        {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question + QUESTION_SUFFIX},
+    ]
+    prompt_text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+    prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=False)
+    if not prompt_tokens:
+        raise ValueError(&quot;Prompt tokens are empty&quot;)
+    return prompt_tokens</code></pre></div>
+<p>训练集通过 <code>load_dataset(&quot;openai/gsm8k&quot;, &quot;main&quot;, split=&quot;train&quot;)</code> 加载。<code>pick_batch()</code> 在小步试跑时允许数据回绕；打开 <code>--all-data</code> 后，每条训练样本最多使用一次。</p>
+<p><strong>（3）对同一道题采样一组回答</strong></p>
+<p><code>run_rollout_group()</code> 是 GRPO rollout 的核心。一次 <code>sample()</code> 接收一个 prompt，并通过 <code>num_samples=group_size</code> 返回同题的一组 completion：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def run_rollout_group(
+    sampling_client: Any,
+    tokenizer: Any,
+    prompt_tokens: list[int],
+    ground_truth: str,
+    sampling_params: trio.SamplingParams,
+    group_size: int,
+) -&gt; list[RolloutSample]:
+    result = sampling_client.sample(
+        prompt=trio.ModelInput.from_ints(prompt_tokens),
+        num_samples=group_size,
+        sampling_params=sampling_params,
+        return_text=True,
+    ).result()
+
+    rewards: list[float] = []
+    raw_samples: list[tuple[list[int], list[float], str]] = []
+
+    for sequence in result.sequences:
+        text = sequence.text
+        if text is None:
+            text = tokenizer.decode(sequence.tokens, skip_special_tokens=True)
+
+        tokens = list(sequence.tokens)
+        logprobs = [float(value) for value in sequence.logprobs]
+        if len(tokens) != len(logprobs):
+            raise ValueError(
+                f&quot;Generated token/logprob length mismatch: &quot;
+                f&quot;{len(tokens)} != {len(logprobs)}&quot;
+            )
+
+        reward = grade_answer(text, ground_truth)
+        rewards.append(reward)
+        raw_samples.append((tokens, logprobs, text))
+
+    mean_reward = sum(rewards) / len(rewards)
+    return [
+        RolloutSample(
+            tokens=tokens,
+            logprobs=logprobs,
+            text=text,
+            reward=reward,
+            advantage=reward - mean_reward,
+        )
+        for (tokens, logprobs, text), reward
+        in zip(raw_samples, rewards, strict=True)
+    ]</code></pre></div>
+<p>这段代码依次完成四件事：</p>
+<ol>
+<li>保存 completion token；</li>
+<li>保存采样时旧策略对每个 completion token 的 logprob；</li>
+<li>使用规则判题器得到 0 或 1 的 reward；</li>
+<li>计算 <code>advantage = reward - mean_reward</code>。</li>
+</ol>
+<p>同组回答全部正确或全部错误时，每条 advantage 都为 0。主循环会把这种 group 记为退化组并跳过，避免提交没有训练信号的 Datum。</p>
+<p><strong>（4）构造右移对齐的 PyTRIO Datum</strong></p>
+<p>自回归模型用当前位置 token 预测下一个 token。设 prompt 长度为 <span class="math" role="math" aria-label="数学公式">m</span>，completion 长度为 <span class="math" role="math" aria-label="数学公式">T</span>，脚本构造的四个数组长度均为 <span class="math" role="math" aria-label="数学公式">m+T-1</span>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def build_grpo_datum(
+    prompt_tokens: list[int],
+    sample: RolloutSample,
+) -&gt; trio.Datum:
+    if not sample.tokens:
+        raise ValueError(&quot;Cannot train on an empty completion&quot;)
+
+    observation_len = len(prompt_tokens) - 1
+    input_tokens = prompt_tokens + sample.tokens[:-1]
+    target_tokens = [0] * observation_len + sample.tokens
+    padded_logprobs = [0.0] * observation_len + sample.logprobs
+    padded_advantages = (
+        [0.0] * observation_len
+        + [sample.advantage] * len(sample.tokens)
+    )
+
+    if not (
+        len(input_tokens)
+        == len(target_tokens)
+        == len(padded_logprobs)
+        == len(padded_advantages)
+    ):
+        raise ValueError(&quot;GRPO datum fields must have the same token length&quot;)
+
+    return trio.Datum(
+        model_input=trio.ModelInput.from_ints(input_tokens),
+        loss_fn_inputs={
+            &quot;target_tokens&quot;: np.asarray(target_tokens, dtype=np.int64),
+            &quot;logprobs&quot;: np.asarray(padded_logprobs, dtype=np.float32),
+            &quot;advantages&quot;: np.asarray(padded_advantages, dtype=np.float32),
+        },
+    )</code></pre></div>
+<p>prompt 区间只提供上下文，因此 <code>target_tokens</code>、<code>logprobs</code> 和 <code>advantages</code> 使用 0 占位。completion 区间放入真实目标 token、旧策略 logprob 和整条回答共享的组内 advantage。</p>
+<p>以 3 个 prompt token 和 2 个 completion token 为例：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>prompt       = [x1, x2, x3]
+completion   = [y1, y2]
+
+model_input  = [x1, x2, x3, y1]
+target       = [ 0,  0, y1, y2]
+old_logprob  = [ 0,  0, l1, l2]
+advantage    = [ 0,  0,  A,  A]</code></pre></div>
+<p>最后一个 prompt token <code>x3</code> 对应的位置开始预测 <code>y1</code>，因此 prompt mask 的长度是 <code>len(prompt_tokens) - 1</code>。</p>
+<p><strong>（5）选择 importance sampling 或 PPO</strong></p>
+<p><code>importance_sampling</code> 与 <code>ppo</code> 复用同一批 GRPO Datum，只需切换 <code>loss_fn</code>。两个 loss 都由 PyTRIO 内置实现：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>fwd_bwd_future = training_client.forward_backward(
+    datums,
+    loss_fn=config.loss_fn,
+)</code></pre></div>
+<p>选择 <code>importance_sampling</code> 时，训练直接使用新旧策略概率比乘以 advantage。选择 <code>ppo</code> 时，PyTRIO 在相同数据上应用 PPO clipping。GRPO 的 rollout、reward 与组内 advantage 构造保持不变。</p>
+<p><strong>（6）串联一轮同步训练</strong></p>
+<p><code>main()</code> 先创建训练客户端、采样参数与优化器：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>service_client = trio.ServiceClient()
+training_client = service_client.create_lora_training_client(
+    base_model=config.base_model,
+    rank=config.lora_rank,
+)
+tokenizer = training_client.get_tokenizer()
+
+sampling_params = trio.SamplingParams(
+    max_tokens=config.max_tokens,
+    temperature=config.temperature,
+    top_p=config.top_p,
+    stop=get_stop_sequences(tokenizer),
+)
+adam_params = trio.AdamParams(
+    learning_rate=config.learning_rate,
+    beta1=config.beta1,
+    beta2=config.beta2,
+)</code></pre></div>
+<p>每个 step 都先从当前训练权重创建新的 sampler，然后按题目顺序完成 rollout：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>for step in range(effective_steps):
+    batch_rows = pick_batch(
+        train_data,
+        step,
+        config.batch_size,
+        config.all_data,
+    )
+    sampling_client = (
+        training_client.save_weights_and_get_sampling_client()
+    )
+
+    datums: list[trio.Datum] = []
+    prompt_mean_rewards: list[float] = []
+    rollout_lengths: list[int] = []
+    n_degenerate = 0
+
+    for row in tqdm(
+        batch_rows,
+        desc=f&quot;GRPO step {step}&quot;,
+        unit=&quot;prompt&quot;,
+    ):
+        prompt_tokens = build_prompt(tokenizer, row[&quot;question&quot;])
+        ground_truth = extract_gsm8k_answer(row[&quot;answer&quot;])
+        rollout_samples = run_rollout_group(
+            sampling_client=sampling_client,
+            tokenizer=tokenizer,
+            prompt_tokens=prompt_tokens,
+            ground_truth=ground_truth,
+            sampling_params=sampling_params,
+            group_size=config.group_size,
+        )
+
+        rewards = [sample.reward for sample in rollout_samples]
+        prompt_mean_rewards.append(sum(rewards) / len(rewards))
+        rollout_lengths.extend(
+            len(sample.tokens) for sample in rollout_samples
+        )
+
+        if all(
+            sample.advantage == 0.0
+            for sample in rollout_samples
+        ):
+            n_degenerate += 1
+            continue
+
+        for sample in rollout_samples:
+            datums.append(
+                build_grpo_datum(prompt_tokens, sample)
+            )</code></pre></div>
+<p>采样器的刷新位置体现了 on-policy 约束：第 <span class="math" role="math" aria-label="数学公式">k</span> 步更新完成后，第 <span class="math" role="math" aria-label="数学公式">k+1</span> 步用新权重重新生成轨迹。同步版在提交前向反向与优化任务后显式等待结果：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>optim_future = training_client.optim_step(adam_params)
+fwd_bwd_result = fwd_bwd_future.result()
+optim_future.result()
+loss_metrics = dict(fwd_bwd_result.metrics)</code></pre></div>
+<p>脚本最后统计 batch 平均 reward、退化组比例、平均生成长度、有效训练 token 数与 <code>loss_mean</code>，并保存可用于采样的 LoRA 权重：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>final_weights = training_client.save_weights_for_sampler(
+    name=run_name
+).result()
+print(
+    f&quot;Saved weights name: {run_name}, &quot;
+    f&quot;path: {final_weights.path}&quot;
+)</code></pre></div>
+<h3>8.1.6 运行同步版与异步版</h3>
+<p>先登录 TRIO，再从仓库根目录运行同步版的一步试验：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>trio login
+
+python docs/chapter8/grpo/01-demo-sync.py \
+    --steps 1 \
+    --batch-size 1 \
+    --group-size 4 \
+    --max-tokens 512 \
+    --loss-fn importance_sampling \
+    --swanlab-mode disabled</code></pre></div>
+<p>异步版使用完全相同的训练参数：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/grpo/02-demo-async.py \
+    --steps 1 \
+    --batch-size 4 \
+    --group-size 4 \
+    --max-tokens 512 \
+    --loss-fn importance_sampling \
+    --swanlab-mode disabled</code></pre></div>
+<p>异步版的算法数据没有变化，执行方式发生了以下变化：</p>
+<table><thead><tr><th>训练环节</th><th>同步版</th><th>异步版</th></tr></thead><tbody><tr><td>单题 rollout</td><td><code>sample(...).result()</code></td><td><code>await sample_async(...)</code></td></tr><tr><td>batch 内多题</td><td>依次处理</td><td><code>asyncio.gather()</code> 并发处理</td></tr><tr><td>刷新 sampler</td><td>同步返回</td><td><code>await save_weights_and_get_sampling_client_async()</code></td></tr><tr><td>前向反向</td><td><code>forward_backward()</code> 后 <code>.result()</code></td><td><code>forward_backward_async()</code> 后再次 <code>await</code> future</td></tr><tr><td>优化器</td><td><code>optim_step()</code> 后 <code>.result()</code></td><td><code>optim_step_async()</code> 后再次 <code>await</code> future</td></tr><tr><td>程序入口</td><td><code>main(config)</code></td><td><code>asyncio.run(main(config))</code></td></tr></tbody></table>
+<p>正文使用同步版建立算法直觉。异步版适合 batch 中含有多个独立 prompt 的正式实验，它通过并发远程请求减少串行等待时间。</p>
+<p>训练时应优先观察代码真实记录的指标：</p>
+<table><thead><tr><th>指标</th><th>含义</th><th>异常现象</th></tr></thead><tbody><tr><td><code>reward</code></td><td>batch 内各 prompt 平均正确率的均值</td><td>长期不升时检查 reward、数据难度和学习率</td></tr><tr><td><code>frac_degenerate</code></td><td>全对或全错 group 的比例</td><td>过高时有效相对优势不足</td></tr><tr><td><code>rollout/avg_gen_len</code></td><td>completion 平均 token 数</td><td>接近 <code>max_tokens</code> 时检查截断</td></tr><tr><td><code>train_tokens</code></td><td>advantage 非零的 completion token 数</td><td>为 0 时当前 step 没有训练信号</td></tr><tr><td><code>loss_mean</code></td><td>当前策略更新的主 loss</td><td>剧烈波动时检查学习率与概率比</td></tr></tbody></table>
+<p>至此，我们得到了本章的第一条训练主线：当前策略分组采样，规则环境给出结果奖励，组内比较产生 advantage，PyTRIO 完成策略更新。接下来的 OPD 会保留同样的 on-policy 数据流，同时把训练信号换成 Teacher 对每个 token 的反馈。</p>
+</div>
+<div class="section" id="llm-agentic-rl-src1-s2"><h2>8.2 On-Policy Distillation</h2>
+<blockquote><strong>代码来源：</strong> 本节依据作者开源仓库 <a href="https://github.com/KMnO4-zx/agentic-rl-lab/tree/main/02-opd/general-opd" target="_blank" rel="noreferrer">agentic-rl-lab/02-opd/general-opd</a> 中的 <code>01-demo-sync.py</code> 与 <code>02-demo-async.py</code> 整理。正文逐段讲解同步版 <code>01-demo-sync.py</code>，异步版作为完整配套实现保留。</blockquote>
+<p>大模型能力蒸馏通常由一个较强的 Teacher 和一个较小的 Student 组成。传统知识蒸馏使用预先收集好的数据，让 Student 拟合 Teacher 在这些固定样本上的概率分布。随着 Student 在训练中不断变化，固定数据与 Student 真正会访问的状态之间可能出现偏差。</p>
+<p>On-Policy Distillation（OPD）让 Student 使用当前策略生成回答，再由 Teacher 对 Student 已经走过的轨迹逐 token 打分。这样，每一轮监督都位于 Student 当前的状态分布上。Teacher 无需重新生成一套答案，也无需参与反向传播，它只为 Student 的动作提供稠密概率反馈。</p>
+<p>OPD 近年逐渐成为大模型训练中的重要方向。它可以用于推理能力迁移、能力恢复以及持续学习，还能够与强化学习的数据流自然结合：Student rollout 对应 on-policy 轨迹，Teacher logprob 对应逐 token 训练信号，Student 更新后再生成下一批轨迹。</p>
+<h3>8.2.1 从离线蒸馏到 On-Policy Distillation</h3>
+<p>设 Teacher 为 <span class="math" role="math" aria-label="数学公式">π<sub>T</sub></span>，Student 为 <span class="math" role="math" aria-label="数学公式">π<sub>θ</sub></span>。离线蒸馏先固定一个数据集 <span class="math" role="math" aria-label="数学公式"><span class="mcal">D</span></span>，然后在其中的状态上最小化分布差异：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mcal">L</span><sub><span class="mtext">offline</span></sub> = <span class="mbb">E</span><sub>s∼<span class="mcal">D</span></sub> [D(π<sub>T</sub>(·| s),π<sub>θ</sub>(·| s))].</div>
+<p>这种做法实现简单，效果取决于数据集能否覆盖 Student 推理时遇到的状态。假设固定数据中大多是 Teacher 的高质量轨迹，而 Student 在真实生成时较早出现了一个错误 token，它随后进入的状态可能从未出现在蒸馏数据中，Teacher 的指导便无法覆盖这段分布外轨迹。</p>
+<p>OPD 把状态采样改为当前 Student：</p>
+<div class="math-display" role="math" aria-label="数学公式">y∼π<sub>θ<sub><span class="mtext">old</span></sub></sub>(·| x),</div>
+<p>然后让 Teacher 计算同一条 Student completion 的条件概率：</p>
+<div class="math-display" role="math" aria-label="数学公式">logπ<sub>T</sub>(y<sub>t</sub>| x,y<sub>lt t</sub>).</div>
+<p>一次训练迭代可以分为三步：</p>
+<ol>
+<li><strong>Student rollout</strong>：Student 使用当前权重生成回答；</li>
+<li><strong>Teacher feedback</strong>：Teacher 在完全相同的 prompt 与 completion 上计算 logprob；</li>
+<li><strong>Student update</strong>：根据两者的概率差构造逐 token 信号并更新 Student。</li>
+</ol>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/8-images/8-3-opd-b6038659f3.png" alt="OPD 在 Student 自身轨迹上获得 Teacher 反馈" width="90%">
+    <p>图 8.3 OPD 在 Student 自身轨迹上获得 Teacher 反馈</p>
+</div>
+<p>图 8.3 中，Teacher 只进行前向计算。Student 的采样动作也不参与反向传播，梯度从构造好的训练目标回到当前 Student 参数。这种停止梯度的边界使 OPD 可以直接复用现有 rollout 与策略优化基础设施。</p>
+<h3>8.2.2 Reverse KL 与逐 token 训练信号</h3>
+<p>OPD 可以选择不同的分布散度。本章使用 reverse KL：</p>
+<div class="math-display" role="math" aria-label="数学公式">D<sub><span class="mtext">KL</span></sub>(π<sub>θ</sub>,|,π<sub>T</sub>) = <span class="mbb">E</span><sub>y∼π<sub>θ</sub></sub> [logπ<sub>θ</sub>(y| x)-logπ<sub>T</sub>(y| x)].</div>
+<p>对于 Student 实际采样到的第 <span class="math" role="math" aria-label="数学公式">t</span> 个 token，可以得到一个 Monte Carlo 估计：</p>
+<div class="math-display" role="math" aria-label="数学公式">d<sub>t</sub> = logπ<sub>θ<sub><span class="mtext">old</span></sub></sub>(y<sub>t</sub>| x,y<sub>lt t</sub>)-logπ<sub>T</sub>(y<sub>t</sub>| x,y<sub>lt t</sub>).</div>
+<p>当 <span class="math" role="math" aria-label="数学公式">d<sub>t</sub>&gt;0</span> 时，Student 对这个 token 的偏好高于 Teacher；当 <span class="math" role="math" aria-label="数学公式">d<sub>t</sub>&lt;0</span> 时，Teacher 给出的概率更高。为了最小化 reverse KL，本章将训练 advantage 写为：</p>
+<div class="math-display" role="math" aria-label="数学公式">A<sub>t</sub>=-β d<sub>t</sub>,</div>
+<p>其中， <span class="math" role="math" aria-label="数学公式">β</span> 控制蒸馏强度。这样，每个 completion token 都能获得独立的训练信号，信号密度远高于只在回答结束时给出一个 0/1 reward。</p>
+<p>reverse KL 具有较强的 mode-seeking 特性。Student 会优先集中到 Teacher 已经赋予较高概率的区域，适合将 Teacher 的高置信行为压缩到小模型中。与此同时，Teacher 与 Student 的能力差距、推理风格和 tokenizer 兼容性都会影响蒸馏效果。更大的 Teacher 只是候选条件，Teacher 还需要在 Student 当前轨迹上提供有价值且可学习的新信号。</p>
+<p>表 8.2 对比了 GRPO 与本章 OPD 示例的数据来源。</p>
+<table><thead><tr><th>项目</th><th>GRPO</th><th>OPD</th></tr></thead><tbody><tr><td>轨迹来源</td><td>当前策略</td><td>当前 Student</td></tr><tr><td>反馈来源</td><td>环境或规则判题器</td><td>Teacher 概率分布</td></tr><tr><td>信号粒度</td><td>常见为整条轨迹 reward</td><td>逐 completion token</td></tr><tr><td>是否需要标准答案</td><td>通常需要可验证结果</td><td>prompt-only 数据即可</td></tr><tr><td>是否需要额外模型</td><td>可省去 Value Model</td><td>需要 Teacher 前向计算</td></tr><tr><td>主要风险</td><td>reward hacking、退化组</td><td>Teacher 不兼容、能力差距不合适</td></tr></tbody></table>
+<h3>8.2.3 Teacher 必须评价同一条 Student 轨迹</h3>
+<p>OPD 的关键数据约束，是 Teacher 与 Student 必须在相同前缀下评价相同目标 token。Teacher 自己生成一条回答，再让 Student 学习这条回答，会退回到常见的合成数据蒸馏流程。</p>
+<p>在 PyTRIO 中，可以先把 prompt 和 Student completion 拼接起来，再调用 Teacher 的 <code>compute_logprobs()</code>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def completion_teacher_logprobs(
+    teacher_client,
+    prompt_ids: list[int],
+    completion_ids: list[int],
+):
+    all_ids = prompt_ids + completion_ids
+    all_logprobs = teacher_client.compute_logprobs(
+        trio.ModelInput.from_ints(all_ids)
+    ).result()
+
+    start = len(prompt_ids)
+    end = start + len(completion_ids)
+    return [float(x) for x in all_logprobs[start:end]]</code></pre></div>
+<p>不同 SDK 对 logprob 的位置定义可能存在一位偏移，因此不能仅凭数组长度猜测切片。最稳妥的方法是构造一个很短的已知序列，确认返回值中每个位置究竟表示“当前 token 的 logprob”还是“下一个 token 的 logprob”，再完成 prompt 与 completion 的边界测试。本章代码已经按照 PyTRIO 0.2.6 的返回约定完成对齐。</p>
+<p>Teacher 和 Student 还需要共享可兼容的 tokenizer。若同一组 token id 在两个模型中代表不同字符串，即使数组长度相同，概率差也没有正确语义。正式训练前应验证：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>text = &quot;A short tokenizer alignment test.&quot;
+student_ids = student_tokenizer.encode(text, add_special_tokens=False)
+teacher_ids = teacher_tokenizer.encode(text, add_special_tokens=False)
+
+assert student_ids == teacher_ids</code></pre></div>
+<p>对于同系列但 chat template 不同的模型，应由 Student tokenizer 渲染一次完整 prompt，然后让 Teacher 直接评价对应 token 序列。不要分别套用两份 chat template，否则两边看到的上下文已经发生变化。</p>
+<h3>8.2.4 从头实现同步版 OPD</h3>
+<p>OPD 配套目录同样提供同步和异步两个独立脚本：</p>
+<table><thead><tr><th>文件</th><th>执行方式</th><th>用途</th></tr></thead><tbody><tr><td><code>01-demo-sync.py</code></td><td>同步</td><td>正文逐段讲解的教学主线</td></tr><tr><td><code>02-demo-async.py</code></td><td>异步</td><td>并发处理 Student rollout 与 Teacher logprob 请求</td></tr></tbody></table>
+<p>下面按照 <code>01-demo-sync.py</code> 的代码顺序，实现从 DeepMath prompt 到 Student 更新的一轮完整 OPD。</p>
+<p><strong>（1）准备参数与 DeepMath 数据</strong></p>
+<p>脚本默认把数据下载到当前代码目录下的 <code>datasets/DeepMath-103K</code>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_DATA_DIR = SCRIPT_DIR / &quot;datasets&quot; / &quot;DeepMath-103K&quot;
+DEEPMATH_SHARDS = 10</code></pre></div>
+<p><code>parse_args()</code> 的参数可以分成四组：</p>
+<ul>
+<li>数据参数：<code>dataset_repo</code>、<code>dataset_dir</code>、<code>num_shards</code>、<code>sample_size</code>；</li>
+<li>模型参数：Student 基座、LoRA rank、Teacher 基座或 Teacher 权重路径；</li>
+<li>训练参数：step、batch、group、采样长度、KL 系数与优化器参数；</li>
+<li>记录参数：SwanLab 项目、实验名和日志模式。</li>
+</ul>
+<p>DeepMath-103K 在 ModelScope 上包含 10 个 parquet 分片。<code>shard_name()</code> 生成远端文件名，<code>modelscope_file_url()</code> 生成下载地址，<code>download_if_needed()</code> 先写入临时文件再原子替换，避免中断时留下不完整分片。</p>
+<p>数据加载函数把本地 parquet 交给 Hugging Face Datasets，只保留训练需要的 <code>question</code> 字段：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def load_deepmath(args: argparse.Namespace):
+    shard_paths = []
+
+    for index in range(args.num_shards):
+        remote_path = shard_name(index)
+        local_path = args.dataset_dir / remote_path
+        download_if_needed(
+            modelscope_file_url(
+                args.dataset_repo,
+                args.dataset_revision,
+                remote_path,
+            ),
+            local_path,
+            args.force_download,
+        )
+        shard_paths.append(str(local_path))
+
+    dataset = load_dataset(
+        &quot;parquet&quot;,
+        data_files=shard_paths,
+        split=&quot;train&quot;,
+        cache_dir=str(
+            args.dataset_dir / &quot;.datasets_cache&quot;
+        ),
+    )
+
+    if &quot;question&quot; not in dataset.column_names:
+        raise ValueError(
+            &quot;DeepMath must contain &#39;question&#39;, &quot;
+            f&quot;got {dataset.column_names}&quot;
+        )
+
+    dataset = dataset.shuffle(seed=args.seed)
+    if args.sample_size &gt; 0:
+        dataset = dataset.select(
+            range(min(args.sample_size, len(dataset)))
+        )
+    return dataset</code></pre></div>
+<p><code>--num-shards 1</code> 适合第一次联调，<code>--num-shards 10</code> 会覆盖完整数据集。<code>--sample-size</code> 控制加载后实际参与 prompt pool 的样本数。</p>
+<p><strong>（2）把问题渲染成 Student prompt</strong></p>
+<p>OPD 使用 prompt-only 数据，不读取 DeepMath 的参考推理过程。<code>build_prompt()</code> 把问题和输出要求交给 Student tokenizer：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def build_prompt(
+    tokenizer,
+    question: str,
+    suffix: str,
+    enable_thinking: bool,
+) -&gt; list[int]:
+    content = (
+        question.strip()
+        if not suffix
+        else f&quot;{question.strip()}\n\n{suffix}&quot;
+    )
+    messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: content}]
+    prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=enable_thinking,
+    )
+    return tokenizer.encode(
+        prompt,
+        add_special_tokens=False,
+    )</code></pre></div>
+<p>prompt 只渲染一次。Teacher 随后直接评价同一组 token，从而保持两边上下文完全一致。</p>
+<p><strong>（3）创建 Student 与 Teacher</strong></p>
+<p>Student 使用 LoRA training client，Teacher 使用只做前向计算的 sampling client：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>service_client = trio.ServiceClient()
+
+training_client = (
+    service_client.create_lora_training_client(
+        base_model=args.base_model,
+        rank=args.lora_rank,
+        seed=args.seed,
+    )
+)
+tokenizer = training_client.get_tokenizer()
+
+teacher_client = service_client.create_sampling_client(
+    base_model=(
+        args.teacher_base_model
+        or args.base_model
+    ),
+    model_path=args.teacher_model_path,
+)</code></pre></div>
+<p><code>teacher_model_path</code> 可以指向已经保存的 sampler 权重。Teacher 不调用 <code>forward_backward()</code> 或 <code>optim_step()</code>，它的参数在 OPD 过程中保持固定。</p>
+<p><strong>（4）让 Teacher 评价 Student 的同一条轨迹</strong></p>
+<p>Student rollout 返回 completion token 与旧策略 logprob。Teacher 需要看到 <code>prompt_ids + completion_ids</code>，再从返回结果中切出 completion 区间：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def completion_teacher_logprobs(
+    teacher_client,
+    prompt_ids: list[int],
+    completion_ids: list[int],
+):
+    all_ids = prompt_ids + completion_ids
+    all_logprobs = teacher_client.compute_logprobs(
+        trio.ModelInput.from_ints(all_ids)
+    ).result()
+
+    completion_logprobs = all_logprobs[
+        len(prompt_ids):
+    ]
+
+    if (
+        len(completion_logprobs)
+        != len(completion_ids)
+        or any(
+            value is None
+            for value in completion_logprobs
+        )
+    ):
+        raise ValueError(
+            &quot;Invalid teacher logprobs &quot;
+            &quot;for completion tokens&quot;
+        )
+
+    return [
+        float(value)
+        for value in completion_logprobs
+    ]</code></pre></div>
+<p>长度检查与 <code>None</code> 检查用于保护 token 对齐。通过检查后，第 <span class="math" role="math" aria-label="数学公式">t</span> 个 Student completion token、Student 旧 logprob 和 Teacher logprob 才能组成同一个训练位置。</p>
+<p><strong>（5）构造逐 token OPD Datum</strong></p>
+<p>OPD 与 GRPO 使用相同的 <code>importance_sampling</code> schema，差异位于 advantage。GRPO 为整条 completion 复制一个组内 advantage，OPD 为每个 completion token 写入独立的 reverse-KL advantage：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def build_opd_datum(
+    prompt_ids: list[int],
+    completion_ids: list[int],
+    old_logprobs,
+    advantages,
+):
+    prompt_loss_len = len(prompt_ids) - 1
+
+    input_ids = (
+        prompt_ids
+        + completion_ids[:-1]
+    )
+    target_ids = (
+        [0] * prompt_loss_len
+        + completion_ids
+    )
+    padded_logprobs = (
+        [0.0] * prompt_loss_len
+        + list(old_logprobs)
+    )
+    padded_advantages = (
+        [0.0] * prompt_loss_len
+        + list(advantages)
+    )
+
+    if not (
+        len(input_ids)
+        == len(target_ids)
+        == len(padded_logprobs)
+        == len(padded_advantages)
+    ):
+        raise ValueError(
+            &quot;OPD datum fields must &quot;
+            &quot;have the same length&quot;
+        )
+
+    return trio.Datum(
+        model_input=trio.ModelInput.from_ints(
+            input_ids
+        ),
+        loss_fn_inputs={
+            &quot;target_tokens&quot;: np.asarray(
+                target_ids,
+                dtype=np.int64,
+            ),
+            &quot;logprobs&quot;: np.asarray(
+                padded_logprobs,
+                dtype=np.float32,
+            ),
+            &quot;advantages&quot;: np.asarray(
+                padded_advantages,
+                dtype=np.float32,
+            ),
+        },
+    )</code></pre></div>
+<p>右移规则与 GRPO 完全一致。prompt 区间的三个 loss 输入继续使用 0 占位，completion 区间一一放入 Student token、Student old logprob 和该 token 的 OPD advantage。</p>
+<p><strong>（6）生成 Student 轨迹并计算 reverse KL</strong></p>
+<p>每个 step 开始时，代码按 <code>sampler_refresh_steps</code> 刷新 Student sampler。默认值为 1，因此每一步都使用最新 Student 权重：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>if (
+    student_sampler is None
+    or step % args.sampler_refresh_steps == 0
+):
+    student_sampler = (
+        training_client
+        .save_weights_and_get_sampling_client()
+    )</code></pre></div>
+<p>同步版依次处理当前 batch 的问题。对每个 prompt，Student 先生成 <code>group_size</code> 条轨迹，Teacher 再对每条非空 completion 打分：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>result = student_sampler.sample(
+    prompt=trio.ModelInput.from_ints(
+        prompt_ids
+    ),
+    num_samples=args.group_size,
+    sampling_params=sampling_params,
+    return_text=False,
+).result()
+
+for sequence in result.sequences:
+    completion_ids = sequence.tokens
+    if not completion_ids:
+        continue
+
+    student_lps = [
+        float(value)
+        for value in sequence.logprobs
+    ]
+    teacher_lps = completion_teacher_logprobs(
+        teacher_client,
+        prompt_ids,
+        completion_ids,
+    )
+
+    reverse_kl = (
+        np.asarray(student_lps)
+        - np.asarray(teacher_lps)
+    )
+    advantages = (
+        -args.kl_penalty_coef
+        * reverse_kl
+    )
+
+    datums.append(
+        build_opd_datum(
+            prompt_ids,
+            completion_ids,
+            student_lps,
+            advantages,
+        )
+    )
+    reverse_kls.extend(reverse_kl.tolist())
+    completion_token_counts.append(
+        len(completion_ids)
+    )</code></pre></div>
+<p><code>group_size</code> 在这里扩大同一 prompt 下的 Student 状态覆盖范围。每条轨迹独立得到 Teacher 信号，不进行 GRPO 式的组内中心化。</p>
+<p><strong>（7）更新 Student、记录指标并保存权重</strong></p>
+<p>收集完整个 batch 后，代码执行一次前向反向和一次优化器更新：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>if not datums:
+    raise RuntimeError(
+        &quot;No OPD datums were built&quot;
+    )
+
+fwd_bwd = training_client.forward_backward(
+    datums,
+    loss_fn=&quot;importance_sampling&quot;,
+)
+optim = training_client.optim_step(adam)
+
+fwd_bwd_result = fwd_bwd.result()
+optim.result()</code></pre></div>
+<p>一次 OPD step 的 <code>tokens/s</code> 使用 completion token 总数除以整个 step 的耗时。这个耗时同时包含 Student 采样、Teacher logprob、Student 前向反向、优化器更新以及必要的 sampler 刷新：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>completion_tokens_total = int(
+    sum(completion_token_counts)
+)
+metrics = {
+    &quot;data/datums&quot;: len(datums),
+    &quot;data/completion_tokens_mean&quot;: float(
+        np.mean(completion_token_counts)
+    ),
+    &quot;data/completion_tokens_total&quot;: (
+        completion_tokens_total
+    ),
+    &quot;data/completion_tokens_per_second&quot;: (
+        completion_tokens_total
+        / step_elapsed_time
+    ),
+    &quot;opd/reverse_kl_mean&quot;: float(
+        np.mean(reverse_kls)
+    ),
+    &quot;opd/reverse_kl_std&quot;: float(
+        np.std(reverse_kls)
+    ),
+    &quot;train/learning_rate&quot;: args.learning_rate,
+    &quot;time/step_elapsed_time&quot;: step_elapsed_time,
+}</code></pre></div>
+<p>训练结束后保存 Student 的 sampler 权重：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>save_result = (
+    training_client
+    .save_weights_for_sampler(
+        args.save_weights_name
+    )
+    .result()
+)
+print(f&quot;Saved weights: {save_result.path}&quot;)</code></pre></div>
+<h3>8.2.5 运行同步版与异步版</h3>
+<p>同步版的一步试验会自动下载一个 DeepMath 分片，并从中抽取最多 20 个 prompt：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/opd/01-demo-sync.py \
+    --steps 1 \
+    --batch-size 1 \
+    --group-size 1 \
+    --max-tokens 512 \
+    --sample-size 20 \
+    --num-shards 1 \
+    --swanlab-mode disabled</code></pre></div>
+<p>异步版使用相同的算法与参数：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/opd/02-demo-async.py \
+    --steps 1 \
+    --batch-size 4 \
+    --group-size 2 \
+    --max-tokens 512 \
+    --sample-size 20 \
+    --num-shards 1 \
+    --swanlab-mode disabled</code></pre></div>
+<p>异步 OPD 同时利用两层并发：</p>
+<table><thead><tr><th>训练环节</th><th>同步版</th><th>异步版</th></tr></thead><tbody><tr><td>创建 Student / Teacher</td><td>同步 client 接口</td><td><code>create_lora_training_client_async()</code> 与 <code>create_sampling_client_async()</code></td></tr><tr><td>Student rollout</td><td>逐 prompt 调用 <code>sample().result()</code></td><td>batch 内并发 <code>sample_async()</code></td></tr><tr><td>Teacher 打分</td><td>逐 completion 调用 <code>compute_logprobs().result()</code></td><td>同一 prompt 内并发 <code>compute_logprobs_async()</code></td></tr><tr><td>汇总 batch</td><td>顺序追加 Datum</td><td>两层 <code>asyncio.gather()</code> 后统一汇总</td></tr><tr><td>Student 更新</td><td>同步 future + <code>.result()</code></td><td>async API 提交后再次 <code>await</code> future</td></tr><tr><td>程序入口</td><td><code>main(args)</code></td><td><code>asyncio.run(main(args))</code></td></tr></tbody></table>
+<p>正文只展开同步版，因为它能直接呈现“Student 采样 → Teacher 打分 → reverse KL → Student 更新”的因果顺序。异步版保留同样的 token 对齐、advantage 和优化目标。</p>
+<p>示例默认使用 <code>Qwen/Qwen3.5-4B</code> 作为 Student，使用 <code>Qwen/Qwen3.6-27B</code> 作为 Teacher。实际可用模型应以当前 PyTRIO 服务返回的支持列表为准。训练时应同步观察：</p>
+<ul>
+<li><code>opd/reverse_kl_mean</code>：Student 采样 token 与 Teacher 概率的平均差异；</li>
+<li><code>opd/reverse_kl_std</code>：不同 token 蒸馏信号的离散程度；</li>
+<li><code>data/completion_tokens_total</code>：本 step 完成 Teacher 打分的 token 总量；</li>
+<li><code>data/completion_tokens_per_second</code>：整步 OPD 的有效 completion token 吞吐；</li>
+<li><code>trainer/*</code>：PyTRIO 返回的训练指标；</li>
+<li>独立任务评测与通用能力评测：确认蒸馏后的真实能力变化。</li>
+</ul>
+<p>reverse KL 下降说明 Student 的采样分布正在接近 Teacher。任务正确率仍需通过固定的 held-out 评测确认。出现 loss 波动或能力下降时，应依次检查 token 对齐、Teacher 质量、KL 系数、学习率、sampler 刷新频率和 completion 截断比例。</p>
+<p>GRPO 和 OPD 到这里都发生在“模型生成一段回答，外部模块提供训练信号”的单轮结构中。下一节的 Search-R1 会进一步改变轨迹形态：模型在完成回答前可以暂停生成、调用搜索环境、读取 observation，再继续决定下一步动作。</p>
+</div>
+<div class="section" id="llm-agentic-rl-src1-s3"><h2>8.3 Search-R1</h2>
+<blockquote><strong>代码来源：</strong> 本节依据作者开源仓库 <a href="https://github.com/KMnO4-zx/agentic-rl-lab/tree/main/03-search-r1" target="_blank" rel="noreferrer">agentic-rl-lab/03-search-r1</a> 中的完整多文件实现整理。正文按照 <code>prepare_data.py</code>、<code>protocol.py</code>、<code>search.py</code>、<code>rollout.py</code>、<code>reward.py</code>、<code>train.py</code>、<code>eval.py</code> 与 <code>analyse.py</code> 的真实调用链展开。</blockquote>
+<p>大语言模型内部存储了大量知识，但这些知识受训练数据时间范围、参数容量和长尾覆盖率限制。检索增强生成（Retrieval-Augmented Generation，RAG）通常由系统预先检索文档，再把结果交给模型回答。Search-R1 将搜索决策交给模型：模型可以判断何时搜索、搜索什么、是否需要根据新证据继续搜索，以及何时结束并给出答案。</p>
+<p>这项变化使一次回答成为多轮轨迹：</p>
+<div class="math-display" role="math" aria-label="数学公式">τ=(x,a<sub>1</sub>,o<sub>1</sub>,a<sub>2</sub>,o<sub>2</sub>,…,a<sub>T</sub>),</div>
+<p>其中， <span class="math" role="math" aria-label="数学公式">a<sub>t</sub></span> 是模型生成的搜索调用或最终回答， <span class="math" role="math" aria-label="数学公式">o<sub>t</sub></span> 是搜索环境返回的 observation。模型只有在完成整条轨迹后才能获得结果奖励，GRPO 再把成功搜索路径与失败路径区分开。</p>
+<p>配套实现不是一个孤立的训练脚本，而是一条由 9 个文件共同组成的执行链。阅读代码时，可以先抓住下面这条主线：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>prepare_data.py / data.py
+        ↓ 读取问题与参考答案
+protocol.py
+        ↓ 构造 prompt、解析 search 调用
+search.py
+        ↓ 执行检索并返回 observation
+rollout.py
+        ↓ 生成完整多轮轨迹、reward 与组内 advantage
+train.py
+        ↓ observation mask、Datum、importance_sampling、optim_step
+eval.py / analyse.py
+        ↓ 固定环境评测与结果汇总</code></pre></div>
+<p>真正被训练的是语言模型生成的 Assistant token。<code>search.py</code> 负责的搜索服务属于环境，<code>protocol.py</code> 负责把模型动作和环境 observation 接成连续轨迹，<code>rollout.py</code> 负责调度两者，<code>train.py</code> 最后才把轨迹转换成 PyTRIO 可以更新的 <code>Datum</code>。下面按照这条真实调用链展开代码。</p>
+<h3>8.3.1 从固定检索到自主搜索</h3>
+<p>Search-R1 的训练样本只包含问题和参考答案，不包含人工编写的搜索词，也不包含标准搜索轨迹。<code>prepare_data.py</code> 将 NQ 与 HotpotQA 的原始字段统一为下面的 JSONL 结构：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">json</span></div><pre><code>{&quot;id&quot;:&quot;...&quot;,&quot;question&quot;:&quot;...&quot;,&quot;answers&quot;:[&quot;...&quot;],&quot;data_source&quot;:&quot;nq&quot;}</code></pre></div>
+<p>清洗逻辑只保留可用于结果奖励的字段：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def normalize_row(row: dict[str, Any]) -&gt; dict[str, Any] | None:
+    question = str(row.get(&quot;question&quot;) or &quot;&quot;).strip()
+    answers = extract_answers(row)
+    if not question or not answers:
+        return None
+    return {
+        &quot;id&quot;: str(row.get(&quot;id&quot;) or &quot;&quot;),
+        &quot;question&quot;: question,
+        &quot;answers&quot;: answers,
+        &quot;data_source&quot;: str(
+            row.get(&quot;data_source&quot;) or &quot;unknown&quot;
+        ),
+    }</code></pre></div>
+<p><code>data.py</code> 再将每一行转换为 <code>SearchExample</code>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>@dataclass(frozen=True)
+class SearchExample:
+    id: str
+    question: str
+    answers: list[str]
+    data_source: str</code></pre></div>
+<p>这个数据边界很重要。搜索 query、搜索次数和证据使用方式都必须由当前策略在 rollout 中自己探索；如果训练集已经给出了固定检索轨迹，任务就更接近轨迹模仿，而不是本节讨论的 Search-R1。</p>
+<p>固定 RAG 与 Search Agent 的差异可以从表 8.3 中看出。</p>
+<table><thead><tr><th>环节</th><th>固定 RAG</th><th>Search-R1</th></tr></thead><tbody><tr><td>是否检索</td><td>由外部流程决定</td><td>模型根据当前状态决定</td></tr><tr><td>检索词</td><td>预设或单次生成</td><td>可根据 observation 多次改写</td></tr><tr><td>检索轮数</td><td>通常固定</td><td>由策略决定，受最大次数约束</td></tr><tr><td>训练对象</td><td>回答模型或检索器</td><td>搜索动作与最终回答的统一策略</td></tr><tr><td>奖励</td><td>常见为监督答案 loss</td><td>完整轨迹的结果奖励</td></tr></tbody></table>
+<p>例如，问题“《小王子》的作者出生在哪个国家？”需要先确定作者，再查询作者的出生地。模型可以形成下面的轨迹：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>User: What country was the author of The Little Prince born in?
+
+Assistant -&gt; search(&quot;The Little Prince author&quot;)
+Tool: Antoine de Saint-Exupéry ...
+
+Assistant -&gt; search(&quot;Antoine de Saint-Exupéry birthplace country&quot;)
+Tool: He was born in Lyon, France ...
+
+Assistant: Answer: France</code></pre></div>
+<p>第二次搜索词依赖第一次 observation，因此无法在 rollout 开始前一次性确定。训练代码需要维护环境状态，并在每个 assistant turn 后解析模型动作。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/8-images/8-4-search-r1-993f6f7d2a.png" alt="Search-R1 的多轮搜索与 observation mask" width="90%">
+    <p>图 8.4 Search-R1 的多轮搜索与 observation mask</p>
+</div>
+<p>Search-R1 论文使用 <code>&lt;search&gt;... &lt;/search&gt;</code> 和 <code>&lt;information&gt;... &lt;/information&gt;</code> 等文本标签表示动作与观察。本章使用 Qwen3.5-4B 模型，采用模型原生 function calling 模板：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>SEARCH_TOOL = {
+    &quot;type&quot;: &quot;function&quot;,
+    &quot;function&quot;: {
+        &quot;name&quot;: &quot;search&quot;,
+        &quot;description&quot;: &quot;Search the web for evidence.&quot;,
+        &quot;parameters&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+                &quot;query&quot;: {&quot;type&quot;: &quot;string&quot;},
+            },
+            &quot;required&quot;: [&quot;query&quot;],
+        },
+    },
+}</code></pre></div>
+<p>两种协议承载相同的强化学习语义：Assistant 输出可训练动作，搜索后端返回环境 observation。使用原生模板可以减少模型基础能力与工具格式之间的冲突，也能保留结构化的工具消息。</p>
+<p>定义工具以后，还必须把模型输出严格解析为三种状态：合法搜索、最终回答或非法输出。<code>protocol.py</code> 的解析器要求一轮中只能出现一次完整的 <code>search</code> 调用，并且工具调用后不能再夹带最终答案：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def parse_assistant(text: str) -&gt; ParsedAssistant:
+    matches = list(TOOL_CALL_PATTERN.finditer(text))
+    if not matches:
+        kind = (
+            &quot;invalid&quot; if &quot;&lt;tool_call&gt;&quot; in text else &quot;answer&quot;
+        )
+        return ParsedAssistant(
+            kind=kind,
+            content=text.strip(),
+        )
+
+    if len(matches) != 1 or text[matches[0].end():].strip():
+        return ParsedAssistant(
+            kind=&quot;invalid&quot;,
+            content=text.strip(),
+        )
+
+    query = matches[0].group(1).strip()
+    if not query or &quot;&lt;&quot; in query or &quot;&gt;&quot; in query:
+        return ParsedAssistant(
+            kind=&quot;invalid&quot;,
+            content=text.strip(),
+        )
+
+    content = text[:matches[0].start()].strip()
+    return ParsedAssistant(
+        kind=&quot;tool&quot;,
+        content=content,
+        query=query,
+    )</code></pre></div>
+<p>这里没有单独定义“停止”动作。只要输出中不存在合法工具调用，本轮就作为最终回答结束；之后由 <code>reward.py</code> 检查它是否符合 <code>Answer: &lt;short answer&gt;</code>。包含残缺 <code>&lt;tool_call&gt;</code> 的输出会被标记为 <code>invalid</code>，同样结束轨迹并得到格式惩罚。</p>
+<h3>8.3.2 搜索后端怎样变成环境 observation</h3>
+<p><code>search.py</code> 提供 DeepSeek Search、Wikipedia 和知乎三个后端。rollout 不直接依赖任何 HTTP 响应格式，而只依赖统一的 <code>SearchResult</code>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>@dataclass(frozen=True)
+class SearchItem:
+    title: str
+    content: str
+    source: str | None = None
+    url: str | None = None
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    ok: bool
+    items: list[SearchItem]
+    latency: float
+    status: int | None = None
+    error: str | None = None</code></pre></div>
+<p>训练入口根据命令行参数创建后端，后面的状态机始终调用同一个 <code>search(query)</code> 接口：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def create_search_client(
+    backend: str,
+    env_path: str | Path | None = None,
+    *,
+    model: str = &quot;deepseek-v4-flash&quot;,
+    timeout: float | None = None,
+) -&gt; SearchClient:
+    resolved_timeout = resolve_search_timeout(
+        backend, timeout
+    )
+    if backend == &quot;deepseek&quot;:
+        return DeepSeekSearchClient.from_env(
+            env_path,
+            model=model,
+            timeout=resolved_timeout,
+        )
+    if backend == &quot;wikipedia&quot;:
+        return WikipediaSearchClient(
+            timeout=resolved_timeout
+        )
+    if backend == &quot;zhihu&quot;:
+        return ZhihuSearchClient.from_env(
+            env_path,
+            timeout=resolved_timeout,
+        )
+    raise ValueError(f&quot;不支持的搜索后端: {backend}&quot;)</code></pre></div>
+<p>以无需密钥的 Wikipedia 后端为例，真正的检索发生在 <code>_request()</code> 中。一次 API 请求同时完成全文搜索，并取回前三个页面的标题、正文摘要和 URL：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def _request(
+    self,
+    query: str,
+    started: float,
+) -&gt; SearchResult:
+    params = urllib.parse.urlencode(
+        {
+            &quot;action&quot;: &quot;query&quot;,
+            &quot;format&quot;: &quot;json&quot;,
+            &quot;formatversion&quot;: 2,
+            &quot;generator&quot;: &quot;search&quot;,
+            &quot;gsrsearch&quot;: query,
+            &quot;gsrlimit&quot;: 3,
+            &quot;prop&quot;: &quot;extracts|info&quot;,
+            &quot;explaintext&quot;: 1,
+            &quot;exintro&quot;: 1,
+            &quot;exchars&quot;: 1200,
+            &quot;inprop&quot;: &quot;url&quot;,
+            &quot;redirects&quot;: 1,
+            &quot;utf8&quot;: 1,
+        }
+    )
+    request = urllib.request.Request(
+        f&quot;{WIKIPEDIA_SEARCH_ENDPOINT}?{params}&quot;,
+        headers={
+            &quot;Accept&quot;: &quot;application/json&quot;,
+            &quot;Accept-Encoding&quot;: &quot;gzip&quot;,
+            &quot;User-Agent&quot;: WIKIPEDIA_USER_AGENT,
+        },
+    )
+    with urllib.request.urlopen(
+        request,
+        timeout=self.timeout,
+    ) as response:
+        body = response.read()
+        if response.headers.get(
+            &quot;Content-Encoding&quot;
+        ) == &quot;gzip&quot;:
+            body = gzip.decompress(body)
+        payload = json.loads(body.decode(&quot;utf-8&quot;))
+        pages = payload.get(&quot;query&quot;, {}).get(
+            &quot;pages&quot;, []
+        )
+        if not isinstance(pages, list):
+            raise TypeError(
+                &quot;Wikipedia 搜索响应 pages 不是列表&quot;
+            )
+        if any(
+            not isinstance(page, dict)
+            for page in pages
+        ):
+            raise TypeError(
+                &quot;Wikipedia 搜索响应 page 不是对象&quot;
+            )
+        ordered_pages = sorted(
+            pages,
+            key=lambda page: int(
+                page.get(&quot;index&quot;, 1_000_000)
+            ),
+        )
+        items = [
+            SearchItem(
+                title=str(
+                    page.get(&quot;title&quot;) or &quot;Untitled&quot;
+                ).strip(),
+                content=str(
+                    page.get(&quot;extract&quot;) or &quot;&quot;
+                ).strip(),
+                source=&quot;Wikipedia&quot;,
+                url=str(
+                    page.get(&quot;fullurl&quot;) or &quot;&quot;
+                ).strip(),
+            )
+            for page in ordered_pages
+            if str(page.get(&quot;extract&quot;) or &quot;&quot;).strip()
+        ]
+        return SearchResult(
+            ok=True,
+            items=items,
+            latency=time.perf_counter() - started,
+            status=response.status,
+        )</code></pre></div>
+<p>外层 <code>search()</code> 还负责请求限速、timeout、429 与 5xx 的有限重试，并累计成功率和 latency。重试后仍失败时，它不会让整个 rollout 抛异常退出，而是返回 <code>SearchResult(ok=False, error=...)</code>。<code>rollout.py</code> 会把错误文本也作为 observation 交给模型，因此模型可以继续回答或改写 query。</p>
+<p>不同后端的结果最终都被格式化为可读证据：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>[1] Title: ...
+    Content: ...
+    Source: ...
+    URL: ...</code></pre></div>
+<p>只返回标题或链接通常不够，因为模型真正需要的是能够支持下一步推理的 <code>content</code>。<code>max_tool_response_tokens</code> 和 <code>max_trajectory_tokens</code> 会在 observation 接入轨迹前再次限制证据长度。</p>
+<h3>8.3.3 多轮 rollout 状态机</h3>
+<p>单轮 GRPO 只需一次 <code>sample()</code>。Search-R1 每条轨迹都可能经历不同数量的搜索调用，训练器需要反复执行“生成—解析—调用环境—追加 observation”。</p>
+<p>本章将一条轨迹保存为 <code>Trajectory</code>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>@dataclass
+class AssistantTurn:
+    prompt_tokens: list[int]
+    completion_tokens: list[int]
+    logprobs: list[float]
+    text: str
+
+
+@dataclass
+class Trajectory:
+    example: SearchExample
+    group_index: int
+    messages: list[dict[str, Any]]
+    next_prompt_tokens: list[int] | None = None
+    question_index: int = 0
+    turns: list[AssistantTurn] = field(default_factory=list)
+    search_calls: int = 0
+    final_text: str = &quot;&quot;
+    reward: float = -0.1
+    advantage: float = 0.0
+    valid_format: bool = False
+    exact_match: bool = False
+    done: bool = False</code></pre></div>
+<p>其中，每个 <code>AssistantTurn</code> 记录本轮采样前的完整 prompt、模型生成 token 和对应旧策略 logprob。搜索结果存在 <code>messages</code> 和下一轮 prompt 中，但它没有 rollout logprob，因为这些 token 来自环境。</p>
+<p>真正向 PyTRIO 发请求的是 <code>sample_requests_async()</code>。同一轮中，不同问题或已经分叉的不同轨迹可以并发采样：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>async def sample_requests_async(
+    sampling_client: Any,
+    requests: list[SampleRequest],
+    config: RolloutConfig,
+    tokenizer: Any,
+) -&gt; list[Any]:
+    tasks = []
+    for request in requests:
+        params = trio.SamplingParams(
+            max_tokens=request.max_tokens,
+            seed=request.seed,
+            stop=stop_sequences(tokenizer),
+            temperature=config.temperature,
+            top_p=config.top_p,
+        )
+        tasks.append(
+            sampling_client.sample_async(
+                prompt=trio.ModelInput.from_ints(
+                    request.prompt_tokens
+                ),
+                num_samples=request.num_samples,
+                sampling_params=params,
+                return_text=True,
+            )
+        )
+    return list(await asyncio.gather(*tasks))</code></pre></div>
+<p>采样返回后，<code>consume_assistant()</code> 先保存原始 token 与 old logprob，再调用上一节的协议解析器。合法搜索会变成 <code>PendingSearch</code>；最终回答、非法格式或预算耗尽都会结束当前轨迹：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def consume_assistant(
+    trajectory: Trajectory,
+    prompt_tokens: list[int],
+    sequence: Any,
+    tokenizer: Any,
+    config: RolloutConfig,
+) -&gt; PendingSearch | None:
+    tokens, logprobs, text = read_sequence(
+        sequence, tokenizer
+    )
+    trajectory.turns.append(
+        AssistantTurn(
+            prompt_tokens,
+            tokens,
+            logprobs,
+            text,
+        )
+    )
+    parsed = parse_assistant(text)
+
+    can_search = (
+        parsed.kind == &quot;tool&quot;
+        and trajectory.search_calls
+        &lt; config.max_search_calls
+        and len(trajectory.turns)
+        &lt; config.max_assistant_turns
+    )
+    if not can_search:
+        trajectory.messages.append(
+            {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: text}
+        )
+        trajectory.final_text = text
+        trajectory.done = True
+        return None
+
+    call_id = (
+        f&quot;search-{trajectory.question_index}-&quot;
+        f&quot;{trajectory.group_index}-&quot;
+        f&quot;{trajectory.search_calls + 1}&quot;
+    )
+    messages_before_assistant = list(
+        trajectory.messages
+    )
+    trajectory.messages.append(
+        {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: text}
+    )
+    return PendingSearch(
+        trajectory=trajectory,
+        messages_before_assistant=(
+            messages_before_assistant
+        ),
+        assistant_text=text,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=tokens,
+        call_id=call_id,
+        query=parsed.query or &quot;&quot;,
+    )</code></pre></div>
+<p><code>resolve_searches()</code> 使用线程池并发调用不同轨迹的搜索后端，再按原顺序把结果和待处理轨迹配对：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def resolve_searches(
+    pending_searches: list[PendingSearch],
+    search_client: SearchClient,
+    tokenizer: Any,
+    config: RolloutConfig,
+) -&gt; int:
+    if not pending_searches:
+        return 0
+    workers = min(
+        config.search_concurrency,
+        len(pending_searches),
+    )
+    with ThreadPoolExecutor(
+        max_workers=workers
+    ) as pool:
+        results = list(
+            pool.map(
+                search_client.search,
+                [
+                    pending.query
+                    for pending in pending_searches
+                ],
+            )
+        )
+    return sum(
+        finish_search(
+            pending,
+            result,
+            tokenizer,
+            config,
+        )
+        for pending, result in zip(
+            pending_searches,
+            results,
+            strict=True,
+        )
+    )</code></pre></div>
+<p>每个结果随后由 <code>finish_search()</code> 写回原来的轨迹：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def finish_search(
+    pending: PendingSearch,
+    result: SearchResult,
+    tokenizer: Any,
+    config: RolloutConfig,
+) -&gt; bool:
+    fitted = fit_tool_content(
+        tokenizer,
+        pending.messages_before_assistant,
+        pending.assistant_text,
+        pending.prompt_tokens,
+        pending.completion_tokens,
+        pending.call_id,
+        result,
+        config,
+    )
+    if fitted is None:
+        pending.trajectory.final_text = (
+            pending.assistant_text
+        )
+        pending.trajectory.done = True
+        return True
+
+    content, next_prompt_tokens = fitted
+    pending.trajectory.messages.append(
+        tool_message(pending.call_id, content)
+    )
+    pending.trajectory.next_prompt_tokens = (
+        next_prompt_tokens
+    )
+    pending.trajectory.search_calls += 1
+    return False</code></pre></div>
+<p><code>fit_tool_content()</code> 会逐条加入搜索证据。只要 observation 超过单次工具预算或完整轨迹预算，就停止加入后续证据；如果连一条结果都放不下，轨迹会直接结束。这样，搜索服务返回多少文本和模型实际能看到多少文本是两个明确分开的边界。</p>
+<p>一组 GRPO 轨迹在第一轮共享完全相同的 prompt。代码用一次请求生成 <code>group_size</code> 个分支：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>first_requests: list[SampleRequest] = []
+for index, trajectory in enumerate(roots):
+    request = make_request(
+        tokenizer,
+        trajectory,
+        index,
+        config.group_size,
+        config.seed + index,
+        config,
+    )
+    if request:
+        first_requests.append(request)</code></pre></div>
+<p>采样响应中的每条 sequence 都从根轨迹深拷贝出一个独立分支，随后再分别解析其搜索动作：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>responses = asyncio.run(
+    sample_requests_async(
+        sampling_client,
+        first_requests,
+        config,
+        tokenizer,
+    )
+)
+pending_searches: list[PendingSearch] = []
+for request, response in zip(
+    first_requests,
+    responses,
+    strict=True,
+):
+    root = roots[request.trajectory_index]
+    if len(response.sequences) != config.group_size:
+        raise ValueError(
+            &quot;首轮采样数量与 group_size 不一致&quot;
+        )
+
+    for group_index, sequence in enumerate(
+        response.sequences
+    ):
+        branch = copy.deepcopy(root)
+        branch.group_index = group_index
+        pending = consume_assistant(
+            branch,
+            request.prompt_tokens,
+            sequence,
+            tokenizer,
+            config,
+        )
+        trajectories.append(branch)
+        if pending is not None:
+            pending_searches.append(pending)
+
+resolve_searches(
+    pending_searches,
+    search_client,
+    tokenizer,
+    config,
+)</code></pre></div>
+<p>不同分支执行搜索后，observation 与历史动作已经不同。后续轮次对每条未结束轨迹分别设置 <code>num_samples=1</code>：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>while any(not item.done for item in trajectories):
+    requests: list[SampleRequest] = []
+    for index, trajectory in enumerate(trajectories):
+        if trajectory.done:
+            continue
+        request = make_request(
+            tokenizer,
+            trajectory,
+            index,
+            1,
+            (
+                config.seed
+                + index
+                + len(trajectory.turns) * 10_000
+            ),
+            config,
+        )
+        if request:
+            requests.append(request)
+
+    if not requests:
+        break
+    responses = asyncio.run(
+        sample_requests_async(
+            sampling_client,
+            requests,
+            config,
+            tokenizer,
+        )
+    )
+
+    pending_searches = []
+    for request, response in zip(
+        requests, responses, strict=True
+    ):
+        if len(response.sequences) != 1:
+            raise ValueError(
+                &quot;后续轮次必须只采样一个分支&quot;
+            )
+        trajectory = trajectories[
+            request.trajectory_index
+        ]
+        pending = consume_assistant(
+            trajectory,
+            request.prompt_tokens,
+            response.sequences[0],
+            tokenizer,
+            config,
+        )
+        if pending is not None:
+            pending_searches.append(pending)
+
+    resolve_searches(
+        pending_searches,
+        search_client,
+        tokenizer,
+        config,
+    )</code></pre></div>
+<p>这种“共享根节点、随后分叉”的实现同时满足两个条件：同题轨迹能够进行 GRPO 组内比较，每条分支又能根据自己的搜索结果继续行动。多个 PyTRIO 采样请求和搜索请求都可以并发执行，从而减少多轮环境交互带来的等待时间。</p>
+<p>状态机还必须设置明确边界：</p>
+<ul>
+<li><code>max_search_calls</code>：一条轨迹最多调用多少次搜索；</li>
+<li><code>max_assistant_turns</code>：最多生成多少轮 Assistant 消息；</li>
+<li><code>max_assistant_tokens</code>：单轮动作的 token 上限；</li>
+<li><code>max_tool_response_tokens</code>：单次 observation 的 token 上限；</li>
+<li><code>max_trajectory_tokens</code>：整条上下文的总 token 上限；</li>
+<li>搜索 timeout 和 concurrency：限制外部服务等待时间与并发压力。</li>
+</ul>
+<p>这些限制既控制训练成本，也定义了 Agent 可以访问的环境范围。评测时必须保持相同配置，否则更高的搜索预算本身就可能提高答案正确率。</p>
+<h3>8.3.4 工具协议与 token 连续性</h3>
+<p>多轮训练最容易出现的问题，是重新渲染 chat template 后的 token 与真实采样 token 不一致。tokenizer 可能清理空格、规范工具调用文本，或自动补充轮次结束符。如果训练阶段重新编码模型文本，旧 logprob 将无法和目标 token 一一对应。</p>
+<p>本章遵循两个原则：</p>
+<ol>
+<li>Assistant 动作始终保留 sampler 返回的原始 token；</li>
+<li>只通过 chat template 计算新加入的结束符与 tool observation token。</li>
+</ol>
+<p><code>build_next_prompt()</code> 的完整职责，是从 chat template 中只提取“Assistant 结束符 + 新 observation”这一段增量 token，再接到 sampler 返回的真实 completion 后面：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def build_next_prompt(
+    tokenizer: Any,
+    messages_before_assistant: list[dict[str, Any]],
+    assistant_text: str,
+    previous_prompt_tokens: list[int],
+    completion_tokens: list[int],
+    next_tool_message: dict[str, Any],
+) -&gt; list[int]:
+    canonical_prompt = build_prompt(
+        tokenizer,
+        messages_before_assistant,
+    )
+
+    empty_assistant_end = _render_chat(
+        tokenizer,
+        [
+            *messages_before_assistant,
+            {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;&quot;},
+        ],
+        add_generation_prompt=False,
+    )
+    if empty_assistant_end[
+        :len(canonical_prompt)
+    ] != canonical_prompt:
+        raise ValueError(
+            &quot;chat template 无法从空 assistant 提取结束边界&quot;
+        )
+    assistant_closing_tokens = empty_assistant_end[
+        len(canonical_prompt):
+    ]
+
+    assistant_message = {
+        &quot;role&quot;: &quot;assistant&quot;,
+        &quot;content&quot;: assistant_text,
+    }
+    messages_with_assistant = [
+        *messages_before_assistant,
+        assistant_message,
+    ]
+    canonical_assistant_end = _render_chat(
+        tokenizer,
+        messages_with_assistant,
+        add_generation_prompt=False,
+    )
+    canonical_next_prompt = build_prompt(
+        tokenizer,
+        [*messages_with_assistant, next_tool_message],
+    )
+    if canonical_next_prompt[
+        :len(canonical_assistant_end)
+    ] != canonical_assistant_end:
+        raise ValueError(
+            &quot;加入 tool observation 后 chat template 改写了历史消息&quot;
+        )
+
+    observation_tokens = canonical_next_prompt[
+        len(canonical_assistant_end):
+    ]
+    overlap = _suffix_prefix_overlap(
+        completion_tokens,
+        assistant_closing_tokens,
+    )
+    return [
+        *previous_prompt_tokens,
+        *completion_tokens,
+        *assistant_closing_tokens[overlap:],
+        *observation_tokens,
+    ]</code></pre></div>
+<p><code>overlap</code> 用来处理 sampler 已经返回部分 Assistant 结束符的情况，避免重复补 token。<code>messages</code> 负责协议记录与调试，<code>next_prompt_tokens</code> 才是下一轮真正提交给 sampler 的模型输入；两者不能混为一谈。</p>
+<p>到下一轮训练数据构造时，还会再次验证：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>if turn.prompt_tokens[:len(full_tokens)] != full_tokens:
+    raise ValueError(
+        &quot;下一轮 prompt 不是已有轨迹的前缀扩展&quot;
+    )</code></pre></div>
+<p>这两层校验能够尽早发现模板改写、结束符重复和 observation 拼接错误。对于 Agentic RL，token 连续性属于算法正确性的一部分；轨迹在文本层面看起来合理，仍可能因 token 边界错位而产生错误梯度。</p>
+<h3>8.3.5 Reward、组内优势与 observation mask</h3>
+<p>本章使用 NQ 和 HotpotQA 的短答案任务。模型最终需要输出唯一一行：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>Answer: &lt;short answer&gt;</code></pre></div>
+<p>规则奖励分为三档：</p>
+<div class="math-display" role="math" aria-label="数学公式">R(τ)=<span class="math-environment math-cases"><span class="math-delim">{</span><table class="math-matrix math-cases"><tbody><tr><td>1,</td><td><span class="mtext">格式正确且答案精确匹配</span>,</td></tr><tr><td>0,</td><td><span class="mtext">格式正确但答案错误</span>,</td></tr><tr><td>-0.1,</td><td><span class="mtext">最终格式无效</span>.</td></tr></tbody></table></span></div>
+<p><code>reward.py</code> 先抽取唯一一行最终答案，再统一大小写、标点、英文冠词和空格：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def normalize_answer(text: str) -&gt; str:
+    lowered = text.lower()
+    without_punctuation = &quot;&quot;.join(
+        char
+        for char in lowered
+        if not unicodedata.category(char).startswith(&quot;P&quot;)
+    )
+    without_articles = ARTICLE_PATTERN.sub(
+        &quot; &quot;, without_punctuation
+    )
+    return &quot; &quot;.join(without_articles.split())
+
+
+def extract_answer(text: str) -&gt; str | None:
+    matches = ANSWER_PATTERN.findall(text)
+    if len(matches) != 1:
+        return None
+    answer = matches[0].strip()
+    return answer or None
+
+
+def score_answer(
+    text: str,
+    references: list[str],
+) -&gt; RewardResult:
+    answer = extract_answer(text)
+    if answer is None:
+        return RewardResult(
+            -0.1, False, False, None
+        )
+    normalized = normalize_answer(answer)
+    exact_match = any(
+        normalized == normalize_answer(reference)
+        for reference in references
+    )
+    return RewardResult(
+        float(exact_match),
+        True,
+        exact_match,
+        answer,
+    )</code></pre></div>
+<p>这段代码只评价最终任务结果，没有为“搜了几次”或“query 看起来不错”增加额外分数。对同一道问题的 <span class="math" role="math" aria-label="数学公式">G</span> 条完整轨迹，仍然使用 GRPO 组内基线：</p>
+<div class="math-display" role="math" aria-label="数学公式">A<sub>i</sub>=R(τ<sub>i</sub>)-<span class="mfrac"><span class="mnum">1</span><span class="mden">G</span></span>∑<sub>j=1</sub><sup>G</sup>R(τ<sub>j</sub>).</div>
+<p>Search-R1 论文同时讨论了 PPO 与 GRPO 等优化方式。本章选择 GRPO 的同题分组方案，让 Search-R1 与 8.1 节使用同一种 advantage 构造方法。</p>
+<p><code>rollout_batch()</code> 必须等整组轨迹全部结束后，才能执行下面的函数：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def assign_group_advantages(
+    trajectories: list[Trajectory],
+) -&gt; int:
+    groups: dict[int, list[Trajectory]] = {}
+    for trajectory in trajectories:
+        groups.setdefault(
+            trajectory.question_index, []
+        ).append(trajectory)
+
+    degenerate = 0
+    for group in groups.values():
+        mean_reward = sum(
+            item.reward for item in group
+        ) / len(group)
+        for item in group:
+            item.advantage = (
+                item.reward - mean_reward
+            )
+        if all(
+            item.advantage == 0.0 for item in group
+        ):
+            degenerate += 1
+    return degenerate</code></pre></div>
+<p>整组 reward 完全相同时，所有 advantage 都为 0，这一组不会产生有效梯度。训练代码会跳过这些轨迹，并记录退化组比例。组内均值不能等拆成 micro-batch 后再计算，否则比较基线已经被改变。</p>
+<p>这个 advantage 会分配给轨迹中每一轮 Assistant 生成的 token。搜索 observation 只构成下一步决策所需的状态，不是策略做出的动作，因此 observation token 的 logprob 和 advantage 都设为 0：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>full_tokens.extend(delta_observation)
+old_logprobs_by_token.extend(
+    [0.0] * len(delta_observation)
+)
+advantages_by_token.extend(
+    [0.0] * len(delta_observation)
+)
+
+full_tokens.extend(turn.completion_tokens)
+old_logprobs_by_token.extend(turn.logprobs)
+advantages_by_token.extend(
+    [trajectory.advantage]
+    * len(turn.completion_tokens)
+)</code></pre></div>
+<p>这种 observation mask 有两个作用。首先，训练器不会要求模型预测搜索引擎返回的文本；其次，observation 仍然保留在上下文中，后续 Assistant token 可以对这些证据进行条件建模。</p>
+<p>搜索调用和最终回答共享一个轨迹级 advantage。若最终答案正确，导致成功的查询规划、搜索词和答案 token 都会得到鼓励；若最终答案错误，整条动作链都会被抑制。这正是 outcome reward 能够训练工具使用策略的原因。</p>
+<h3>8.3.6 构造多轮 PyTRIO Datum</h3>
+<p><code>train.py</code> 的 <code>build_datum()</code> 把前面几节的 token 连续性和 observation mask 汇合到一起。下面是完整的核心实现：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def build_datum(
+    trajectory: Trajectory,
+) -&gt; TrainingDatum:
+    if not trajectory.turns:
+        raise ValueError(
+            &quot;不能用没有 assistant turn 的轨迹构造训练 Datum&quot;
+        )
+
+    full_tokens: list[int] = []
+    old_logprobs_by_token: list[float] = []
+    advantages_by_token: list[float] = []
+    assistant_token_count = 0
+
+    for turn_index, turn in enumerate(
+        trajectory.turns
+    ):
+        if len(turn.completion_tokens) != len(
+            turn.logprobs
+        ):
+            raise ValueError(
+                f&quot;第 {turn_index + 1} 个 assistant turn &quot;
+                &quot;的 token 与 logprob 长度不一致&quot;
+            )
+
+        if turn_index == 0:
+            delta_observation = turn.prompt_tokens
+        elif turn.prompt_tokens[
+            :len(full_tokens)
+        ] == full_tokens:
+            delta_observation = turn.prompt_tokens[
+                len(full_tokens):
+            ]
+        else:
+            raise ValueError(
+                f&quot;第 {turn_index + 1} 个 assistant turn &quot;
+                &quot;的 prompt 不是已有轨迹的前缀扩展，&quot;
+                &quot;无法安全对齐采样 logprob&quot;
+            )
+
+        full_tokens.extend(delta_observation)
+        full_tokens.extend(turn.completion_tokens)
+        old_logprobs_by_token.extend(
+            [0.0] * len(delta_observation)
+        )
+        old_logprobs_by_token.extend(turn.logprobs)
+        advantages_by_token.extend(
+            [0.0] * len(delta_observation)
+        )
+        advantages_by_token.extend(
+            [trajectory.advantage]
+            * len(turn.completion_tokens)
+        )
+        assistant_token_count += len(
+            turn.completion_tokens
+        )
+
+    if assistant_token_count == 0:
+        raise ValueError(
+            &quot;不能用没有 assistant token 的轨迹构造训练 Datum&quot;
+        )
+    if not (
+        len(full_tokens)
+        == len(old_logprobs_by_token)
+        == len(advantages_by_token)
+    ):
+        raise ValueError(
+            &quot;完整轨迹的 token、logprob 和 advantage 长度不一致&quot;
+        )
+
+    input_tokens = full_tokens[:-1]
+    target_tokens = full_tokens[1:]
+    old_logprobs = old_logprobs_by_token[1:]
+    advantages = advantages_by_token[1:]
+    if not (
+        len(input_tokens)
+        == len(target_tokens)
+        == len(old_logprobs)
+        == len(advantages)
+    ):
+        raise ValueError(
+            &quot;Datum 的 input、target、logprobs 和 advantages 长度不一致&quot;
+        )
+    if len(input_tokens) &gt; MAX_TRAIN_CONTEXT_TOKENS:
+        raise ValueError(
+            f&quot;Datum 超过 {MAX_TRAIN_CONTEXT_TOKENS} token&quot;
+        )
+
+    datum = trio.Datum(
+        model_input=trio.ModelInput.from_ints(
+            input_tokens
+        ),
+        loss_fn_inputs={
+            &quot;target_tokens&quot;: np.asarray(
+                target_tokens,
+                dtype=np.int64,
+            ),
+            &quot;logprobs&quot;: np.asarray(
+                old_logprobs,
+                dtype=np.float32,
+            ),
+            &quot;advantages&quot;: np.asarray(
+                advantages,
+                dtype=np.float32,
+            ),
+        },
+    )
+    return TrainingDatum(datum, len(input_tokens))</code></pre></div>
+<p>第一轮的 <code>delta_observation</code> 是 system prompt、工具定义和用户问题；后续轮次的 <code>delta_observation</code> 是上一轮结束符、搜索结果以及新一轮 Assistant 前缀。它们都保留真实 target token，但 old logprob 与 advantage 为 0。只有 sampler 真正生成的 Assistant token 携带 rollout old logprob 和轨迹 advantage。</p>
+<p>完整 group 的 reward 必须全部计算完毕，才能得到正确的组内均值。不能在单条轨迹结束后立刻更新策略，因为同组其他分支的奖励还未知。</p>
+<p>多轮轨迹长度差异很大，直接把所有数据放入一个 padded batch 会浪费大量 token。配套代码根据样本长度把 <code>Datum</code> 装入多个 micro-batch，并按每批轨迹数占完整 rollout 轨迹数的比例重新加权 loss。这样可以在保持全局样本平均梯度语义的同时控制单批 padding 大小。</p>
+<h3>8.3.7 从 rollout 到一次参数更新</h3>
+<p><code>train.py</code> 的外层循环把前面的模块串成一个完整训练 step。关键顺序不能交换：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>batch = take_batch(
+    examples,
+    step * args.questions_per_batch,
+    args.questions_per_batch,
+)
+
+sampling_client = (
+    training_client
+    .save_weights_and_get_sampling_client()
+)
+
+trajectories = rollout_batch(
+    sampling_client=sampling_client,
+    tokenizer=tokenizer,
+    search_client=search_client,
+    examples=batch,
+    config=rollout_config,
+)
+
+datums = build_training_datums(trajectories)
+micro_batches = pack_micro_batches(datums)
+
+trainer_results = []
+for micro_batch in micro_batches:
+    weighted_datums = (
+        weight_micro_batch_for_global_mean(
+            micro_batch,
+            total_samples=len(trajectories),
+        )
+    )
+    result = training_client.forward_backward(
+        weighted_datums,
+        loss_fn=&quot;importance_sampling&quot;,
+    ).result()
+    trainer_results.append(result)
+
+if micro_batches:
+    training_client.optim_step(
+        adam_params
+    ).result()</code></pre></div>
+<p>第一，<code>save_weights_and_get_sampling_client()</code> 在每个 step 开始时导出当前 LoRA 权重，因此 old logprob 来自本次更新前的当前策略。第二，<code>rollout_batch()</code> 内部已经完成整组 reward 和 advantage，<code>build_training_datums()</code> 会跳过 advantage 全为 0 的轨迹。第三，所有 micro-batch 只累计梯度，整个 logical batch 最后只调用一次 <code>optim_step()</code>。</p>
+<p>PyTRIO 会对一次 <code>forward_backward()</code> 内的样本取平均。如果第 <span class="math" role="math" aria-label="数学公式">k</span> 个 micro-batch 有 <span class="math" role="math" aria-label="数学公式">n<sub>k</sub></span> 条轨迹，而完整 rollout batch 有 <span class="math" role="math" aria-label="数学公式">N</span> 条轨迹，代码会先把该批 advantage 乘以 <span class="math" role="math" aria-label="数学公式">n<sub>k</sub>/N</span>：</p>
+<div class="math-display" role="math" aria-label="数学公式">∑<sub>k</sub><span class="mfrac"><span class="mnum">n<sub>k</sub></span><span class="mden">N</span></span><span class="mtext">mean</span>(<span class="mcal">L</span><sub>k</sub>)=<span class="mtext">mean</span>(<span class="mcal">L</span><sub><span class="mtext">global</span></sub>).</div>
+<p>对应实现只重新包装 <code>Datum</code>，不修改 target token 和 old logprob：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>micro_batch_weight = np.float32(
+    len(micro_batch) / total_samples
+)
+weighted_datums = []
+for item in micro_batch:
+    loss_inputs = item.datum.loss_fn_inputs
+    weighted_datums.append(
+        trio.Datum(
+            model_input=item.datum.model_input,
+            loss_fn_inputs={
+                &quot;target_tokens&quot;: (
+                    loss_inputs[&quot;target_tokens&quot;]
+                    .to_numpy()
+                ),
+                &quot;logprobs&quot;: (
+                    loss_inputs[&quot;logprobs&quot;]
+                    .to_numpy()
+                ),
+                &quot;advantages&quot;: (
+                    loss_inputs[&quot;advantages&quot;]
+                    .to_numpy()
+                    * micro_batch_weight
+                ),
+            },
+        )
+    )</code></pre></div>
+<p>因此，动态拆批只改变执行时的 padding 和显存占用，不改变逻辑 batch 的样本平均梯度。</p>
+<h3>8.3.8 运行、评测与实验边界</h3>
+<p>Search-R1 代码按数据、协议、环境、rollout 和训练职责拆分：</p>
+<table><thead><tr><th>文件</th><th>作用</th></tr></thead><tbody><tr><td><code>prepare_data.py</code></td><td>准备 NQ 与 HotpotQA 数据</td></tr><tr><td><code>data.py</code></td><td>加载统一 JSONL 样本</td></tr><tr><td><code>protocol.py</code></td><td>定义搜索工具与多轮消息协议</td></tr><tr><td><code>search.py</code></td><td>封装搜索后端并统一结果格式</td></tr><tr><td><code>rollout.py</code></td><td>执行多轮搜索状态机</td></tr><tr><td><code>reward.py</code></td><td>抽取短答案并计算规则奖励</td></tr><tr><td><code>train.py</code></td><td>构造 observation mask、micro-batch 并更新策略</td></tr><tr><td><code>eval.py</code></td><td>在同一环境中评测 Base Model 或 checkpoint</td></tr><tr><td><code>analyse.py</code></td><td>汇总评测输出</td></tr></tbody></table>
+<p>评测没有另写一套简化的搜索逻辑，而是复用同一个 <code>rollout_batch()</code>。主要区别是每道题只保留一条轨迹，不再需要训练阶段的组内比较：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>config = RolloutConfig(
+    group_size=1,
+    max_search_calls=args.max_search_calls,
+    max_assistant_turns=args.max_assistant_turns,
+    max_trajectory_tokens=(
+        args.max_trajectory_tokens
+    ),
+    max_assistant_tokens=args.max_assistant_tokens,
+    max_tool_response_tokens=(
+        args.max_tool_response_tokens
+    ),
+    search_concurrency=args.search_concurrency,
+    temperature=args.temperature,
+    top_p=args.top_p,
+    seed=args.seed,
+)
+
+batch_trajectories = rollout_batch(
+    sampling_client,
+    tokenizer,
+    search_client,
+    batch,
+    config,
+)</code></pre></div>
+<p><code>model_path</code> 留空时，<code>eval.py</code> 创建 Base Model sampler；传入 <code>save_weights_for_sampler()</code> 返回的路径时，则评测训练后的 checkpoint。两种模型仍使用相同的协议、搜索后端、预算、题集与答案判定器。</p>
+<p>首先准备数据：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/search-r1/prepare_data.py</code></pre></div>
+<p>Wikipedia 后端无需 API Key，适合验证完整链路：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/search-r1/train.py \
+    --max-steps 1 \
+    --questions-per-batch 1 \
+    --group-size 4 \
+    --max-search-calls 2 \
+    --search-backend wikipedia \
+    --search-concurrency 3 \
+    --swanlab-mode disabled</code></pre></div>
+<p>使用同一个 Wikipedia 环境评测 Base Model：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/search-r1/eval.py \
+    --search-backend wikipedia \
+    --batch-size 8 \
+    --output docs/chapter8/search-r1/eval_result/base.jsonl</code></pre></div>
+<p>评测训练后的 sampler weights 时，保持其余参数不变，只增加 checkpoint 路径：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/search-r1/eval.py \
+    --search-backend wikipedia \
+    --batch-size 8 \
+    --model-path &#39;trio://runxxxxxxxxxx&#39; \
+    --output docs/chapter8/search-r1/eval_result/checkpoint.jsonl</code></pre></div>
+<p>确认流程后，再逐步扩大问题数、group size、搜索次数与轨迹预算。实验至少应记录：</p>
+<ul>
+<li>最终答案 exact match；</li>
+<li>有效答案格式比例；</li>
+<li>平均搜索调用次数与零搜索比例；</li>
+<li>搜索失败率、超时率和 observation 截断率；</li>
+<li>平均轨迹长度与每步有效训练 token；</li>
+<li>退化组比例；</li>
+<li>rollout、搜索和训练各阶段耗时。</li>
+</ul>
+<p>搜索结果具有外部依赖。在线页面会更新，搜索服务的排序也可能变化。比较 Base Model 与训练 checkpoint 时，应固定题集、搜索后端、搜索预算、sampling 参数和评测时间窗口。若需要严格可复现的论文实验，可以将检索语料与索引固定为只读快照。</p>
+<p>本章只更新语言模型策略，搜索后端保持固定。若检索器本身也参与学习，就需要额外定义检索动作空间、索引版本和跨模块 credit assignment，这已经超出本节示例范围。</p>
+<p>Search-R1 展示了如何把 GRPO 的组内相对优势扩展到包含外部 observation 的多轮搜索轨迹。下一节的 ReTool 会保留同样的多轮 rollout 与 observation mask，将环境从搜索引擎换成代码解释器，并使用 PyTRIO 内置的 PPO 更新策略。</p>
+</div>
+<div class="section" id="llm-agentic-rl-src1-s4"><h2>8.4 ReTool</h2>
+<blockquote><strong>代码来源：</strong> 本节依据作者开源仓库 <a href="https://github.com/KMnO4-zx/agentic-rl-lab/tree/main/05-retool" target="_blank" rel="noreferrer">agentic-rl-lab/05-retool</a> 中的完整多文件实现整理。正文按照 <code>prepare_data.py</code>、<code>protocol.py</code>、<code>sandbox.py</code>、<code>rollout.py</code>、<code>reward.py</code>、<code>train.py</code>、<code>eval.py</code> 与 <code>analysis.py</code> 的真实调用链展开。</blockquote>
+<p>搜索工具帮助模型获取外部知识，代码解释器则帮助模型完成精确计算、符号操作与枚举验证。模型已经能在提示词或监督数据的引导下调用 Python 工具，但“会调用”还不等于“会在合适的时机调用”。有些问题口算更快，有些问题适合编写短程序，还有些代码执行失败后需要根据错误信息修正。</p>
+<p>ReTool 使用强化学习训练这种策略性工具使用能力。模型自主决定是否调用代码解释器、编写什么代码、如何读取执行结果，以及何时给出最终答案。环境只根据最终数学答案提供结果奖励，成功轨迹中的工具决策会随整条轨迹共同得到强化。</p>
+<blockquote><strong>安全提示：</strong> 配套 <code>sandbox.py</code> 只是带资源限制的本地 subprocess，不是可信安全沙箱。模型生成的代码仍能读取当前账号可访问的文件、继承环境变量并访问网络。真实训练应放在一次性容器、低权限虚拟机或专用沙箱服务中，并移除 PyTRIO、SwanLab、SSH 和云服务凭证。</blockquote>
+<p>ReTool 的代码链路与 Search-R1 结构相似，但环境从搜索服务换成了 Python 进程：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>prepare_data.py / data.py
+        ↓ 读取数学题与参考答案
+protocol.py
+        ↓ 解析 code_interpreter 调用
+sandbox.py
+        ↓ 执行代码，返回 stdout / stderr / timeout
+rollout.py
+        ↓ 追加执行结果并继续生成
+reward.py
+        ↓ 检查最后一个 \boxed{}
+train.py
+        ↓ feedback mask、PPO、optim_step
+eval.py / analysis.py
+        ↓ text-only 与 ReTool 对照评测</code></pre></div>
+<p>下面仍然顺着实际函数调用解释，而不是只看工具调用的文本格式。</p>
+<h3>8.4.1 从工具调用格式到工具使用策略</h3>
+<p>一次典型 ReTool 轨迹如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>User: 计算满足条件的整数解数量。
+
+Assistant -&gt; code_interpreter(
+    &quot;count = ...\nprint(count)&quot;
+)
+Tool: 37
+
+Assistant: 根据枚举结果，答案为 \boxed{37}</code></pre></div>
+<p>如果代码出现错误，模型还可以利用 traceback 自我修正：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">text</span></div><pre><code>Assistant -&gt; code_interpreter(&quot;print(sum(values))&quot;)
+Tool: NameError: name &#39;values&#39; is not defined
+
+Assistant -&gt; code_interpreter(
+    &quot;values = [...]\nprint(sum(values))&quot;
+)
+Tool: 128
+
+Assistant: \boxed{128}</code></pre></div>
+<p>从强化学习角度看，代码、执行错误、数值结果和最终回答共同构成轨迹。代码解释器是环境，Assistant 生成的工具调用与自然语言答案都是动作，stdout 或 stderr 是 observation。</p>
+<div align='center'>
+    <img src="@asset/happy-llm/docs/images/8-images/8-5-retool-60716ed0c6.png" alt="ReTool 的多轮代码执行与结果奖励" width="90%">
+    <p>图 8.5 ReTool 的多轮代码执行与结果奖励</p>
+</div>
+<p>ReTool 不需要为“调用了工具”单独加分。最终答案 reward 会通过轨迹级 advantage 传递到前面的代码动作。这样，只有真正帮助任务成功的工具使用方式会得到正向信号，冗余或误导性的调用会随失败轨迹受到抑制。</p>
+<h3>8.4.2 Cold-start、训练数据与工具协议</h3>
+<p>原始 ReTool 包含两个阶段：</p>
+<ol>
+<li><strong>Cold-start SFT</strong>：使用带代码调用与执行反馈的轨迹，让模型先掌握协议和基本交互形式；</li>
+<li><strong>Reinforcement Learning</strong>：模型自主 rollout，通过最终答案 reward 学习何时以及如何使用工具。</li>
+</ol>
+<p>Cold-start 的作用是让初始策略产生一定比例的有效工具调用。如果基础模型完全不会输出工具协议，早期轨迹几乎全部失败，GRPO 很难从组内比较中获得有意义的探索信号。</p>
+<p>本章代码选择已经具备原生 function calling 能力的 Qwen3.5，并直接展示第二阶段的 PyTRIO 训练，因此没有附带一条专门的 Cold-start SFT 流程。这是教学实现与原论文设置之间的重要边界。更换为缺少工具调用能力的基础模型时，应先准备 SFT 数据，验证合法调用率达到可训练水平，再启动 RL。</p>
+<p>RL 数据来自 DAPO-Math-17k。原始题目外面带有要求 <code>Answer: $Answer</code> 的统一模板，它会与本节要求的 <code>\boxed{}</code> 格式冲突，因此 <code>prepare_data.py</code> 先剥掉外层模板，再只保留题目和参考答案：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def normalize_row(
+    index: int,
+    row: dict[str, Any],
+) -&gt; dict[str, Any] | None:
+    prompt = row.get(&quot;prompt&quot;)
+    if not isinstance(prompt, list) or not prompt:
+        return None
+
+    question = strip_dapo_template(
+        str(prompt[0].get(&quot;content&quot;) or &quot;&quot;)
+    )
+    reward_model = row.get(&quot;reward_model&quot;) or {}
+    ground_truth = (
+        reward_model.get(&quot;ground_truth&quot;)
+        if isinstance(reward_model, dict)
+        else None
+    )
+    if isinstance(ground_truth, list):
+        ground_truth = (
+            ground_truth[0] if ground_truth else None
+        )
+    answer = str(ground_truth or &quot;&quot;).strip()
+    if not question or not answer:
+        return None
+
+    return {
+        &quot;id&quot;: str(
+            row.get(&quot;extra_info&quot;, {}).get(&quot;index&quot;)
+            or index
+        ),
+        &quot;question&quot;: question,
+        &quot;answer&quot;: answer,
+        &quot;data_source&quot;: str(
+            row.get(&quot;data_source&quot;) or &quot;dapo_math&quot;
+        ),
+    }</code></pre></div>
+<p>和 Search-R1 一样，训练样本不含标准代码和工具调用次数。策略必须自己探索是否调用解释器以及生成什么代码。</p>
+<p>代码解释器使用结构化工具定义：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>CODE_TOOL = {
+    &quot;type&quot;: &quot;function&quot;,
+    &quot;function&quot;: {
+        &quot;name&quot;: &quot;code_interpreter&quot;,
+        &quot;description&quot;: (
+            &quot;Run Python code and return printed output. &quot;
+            &quot;Each execution starts fresh.&quot;
+        ),
+        &quot;parameters&quot;: {
+            &quot;type&quot;: &quot;object&quot;,
+            &quot;properties&quot;: {
+                &quot;code&quot;: {&quot;type&quot;: &quot;string&quot;},
+            },
+            &quot;required&quot;: [&quot;code&quot;],
+        },
+    },
+}</code></pre></div>
+<p><code>protocol.py</code> 对工具调用同样采用严格解析。Python 代码可以包含比较符、引号和多行文本，因此这里只校验调用数量、调用位置以及代码是否为空：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def parse_assistant(text: str) -&gt; ParsedAssistant:
+    matches = list(TOOL_CALL_PATTERN.finditer(text))
+    if not matches:
+        kind = (
+            &quot;invalid&quot; if &quot;&lt;tool_call&gt;&quot; in text else &quot;answer&quot;
+        )
+        return ParsedAssistant(
+            kind=kind,
+            content=text.strip(),
+        )
+
+    if len(matches) != 1 or text[matches[0].end():].strip():
+        return ParsedAssistant(
+            kind=&quot;invalid&quot;,
+            content=text.strip(),
+        )
+
+    code = matches[0].group(1).strip()
+    if not code:
+        return ParsedAssistant(
+            kind=&quot;invalid&quot;,
+            content=text.strip(),
+        )
+
+    content = text[:matches[0].start()].strip()
+    return ParsedAssistant(
+        kind=&quot;tool&quot;,
+        content=content,
+        code=code,
+    )</code></pre></div>
+<p>合法输出只允许三种去向：<code>tool</code> 进入代码执行环境，<code>answer</code> 结束轨迹并接受结果奖励，<code>invalid</code> 结束轨迹并按错误答案处理。系统不为格式接近但不完整的工具调用做猜测性修复，否则训练环境中的动作定义会变得不稳定。</p>
+<p>rollout 状态机与 Search-R1 相似，只是环境动作从 <code>search(query)</code> 换成 <code>code_interpreter(code)</code>。每条轨迹都受到以下预算约束：</p>
+<ul>
+<li>最大代码调用次数；</li>
+<li>最大 Assistant 轮数；</li>
+<li>单轮生成与执行结果 token 数；</li>
+<li>完整轨迹 token 数；</li>
+<li>单次执行时间；</li>
+<li>本地执行器并发数。</li>
+</ul>
+<p>同一次代码调用不保留 Python 变量和进程状态。模型需要在每次调用中重新定义所需数据，这使轨迹语义更清楚，也减少了不同执行之间的隐式依赖。</p>
+<h3>8.4.3 执行结果怎样接回真实 token 轨迹</h3>
+<p>ReTool 也不能把 Assistant 文本 decode 后重新 tokenize。<code>protocol.py</code> 使用一个占位 Assistant 提取模板闭合 token，再把实际执行结果对应的 observation token 接到真实 completion 后：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def build_next_prompt(
+    tokenizer: Any,
+    messages_before_assistant: list[dict[str, Any]],
+    previous_prompt_tokens: list[int],
+    completion_tokens: list[int],
+    next_tool_message: dict[str, Any],
+) -&gt; list[int]:
+    canonical_prompt = build_prompt(
+        tokenizer,
+        messages_before_assistant,
+    )
+    placeholder_message = {
+        &quot;role&quot;: &quot;assistant&quot;,
+        &quot;content&quot;: &quot;x&quot;,
+    }
+    messages_with_assistant = [
+        *messages_before_assistant,
+        placeholder_message,
+    ]
+    canonical_assistant_end = _render_chat(
+        tokenizer,
+        messages_with_assistant,
+        add_generation_prompt=False,
+    )
+
+    placeholder_tokens = _encoded_text_tokens(
+        tokenizer, &quot;x&quot;
+    )
+    canonical_action = [
+        *canonical_prompt,
+        *placeholder_tokens,
+    ]
+    if canonical_assistant_end[
+        :len(canonical_action)
+    ] != canonical_action:
+        raise ValueError(
+            &quot;chat template 无法定位 assistant 结束边界&quot;
+            &quot;（占位内容也不匹配）&quot;
+        )
+    assistant_closing_tokens = canonical_assistant_end[
+        len(canonical_action):
+    ]
+
+    canonical_next_prompt = build_prompt(
+        tokenizer,
+        [*messages_with_assistant, next_tool_message],
+    )
+    if canonical_next_prompt[
+        :len(canonical_assistant_end)
+    ] != canonical_assistant_end:
+        raise ValueError(
+            &quot;加入 tool observation 后 chat template 改写了历史消息&quot;
+        )
+    observation_tokens = canonical_next_prompt[
+        len(canonical_assistant_end):
+    ]
+
+    overlap = _suffix_prefix_overlap(
+        completion_tokens,
+        assistant_closing_tokens,
+    )
+    return [
+        *previous_prompt_tokens,
+        *completion_tokens,
+        *assistant_closing_tokens[overlap:],
+        *observation_tokens,
+    ]</code></pre></div>
+<p>这里使用占位内容，是因为 Qwen chat template 可能把真实采样文本中的 reasoning 与 content 重新分段。占位消息只用于计算固定模板边界，真实模型动作仍始终来自 <code>completion_tokens</code>。下一轮 <code>prompt_tokens</code> 必须以前一轮的完整 token 为前缀，否则 <code>train.py</code> 会拒绝构造 <code>Datum</code>。</p>
+<h3>8.4.4 Outcome reward 与 interpreter feedback mask</h3>
+<p>本章从最终回答的末尾抽取最后一个 <span class="math" role="math" aria-label="数学公式"><span class="math-boxed"></span></span>，使用 <code>math_verify</code> 判断预测值与参考答案是否数学等价：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def extract_last_boxed(text: str) -&gt; str | None:
+    marker = &quot;\\boxed{&quot;
+    index = text.rfind(marker)
+    if index &lt; 0:
+        return None
+
+    start = index + len(marker)
+    depth = 1
+    for position in range(start, len(text)):
+        if text[position] == &quot;{&quot;:
+            depth += 1
+        elif text[position] == &quot;}&quot;:
+            depth -= 1
+            if depth == 0:
+                return text[start:position]
+    return None
+
+
+def answers_equivalent(
+    prediction: str,
+    reference: str,
+) -&gt; bool:
+    try:
+        return bool(
+            verify(
+                parse(f&quot;${reference}$&quot;),
+                parse(f&quot;${prediction}$&quot;),
+            )
+        )
+    except Exception:
+        return False
+
+
+def score_answer(
+    text: str,
+    reference: str,
+) -&gt; RewardResult:
+    answer = extract_last_boxed(
+        text[-ANSWER_WINDOW_CHARS:]
+    )
+    if answer is None:
+        return RewardResult(
+            -1.0, False, False, None
+        )
+
+    correct = answers_equivalent(
+        answer.strip(),
+        reference.strip(),
+    )
+    return RewardResult(
+        1.0 if correct else -1.0,
+        correct,
+        True,
+        answer,
+    )</code></pre></div>
+<p>奖励函数为：</p>
+<div class="math-display" role="math" aria-label="数学公式">R(τ)=<span class="math-environment math-cases"><span class="math-delim">{</span><table class="math-matrix math-cases"><tbody><tr><td>+1,</td><td><span class="mtext">最终答案正确</span>,</td></tr><tr><td>-1,</td><td><span class="mtext">答案错误或格式无效</span>.</td></tr></tbody></table></span></div>
+<p>再对同题轨迹计算中心化 advantage：</p>
+<div class="math-display" role="math" aria-label="数学公式">A<sub>i</sub>=R(τ<sub>i</sub>)-<span class="math-overline">R</span>.</div>
+<p>代码执行结果属于环境 observation。它应出现在模型上下文中，同时不能进入策略 loss。ReTool 论文将这一处理称为 interpreter feedback mask，本章采用与 Search-R1 相同的 token 对齐方式：</p>
+<table><thead><tr><th>token 区域</th><th>是否保留在上下文</th><th>old logprob</th><th>advantage</th></tr></thead><tbody><tr><td>初始 prompt</td><td>是</td><td>0</td><td>0</td></tr><tr><td>Assistant 推理与代码调用</td><td>是</td><td>rollout logprob</td><td>轨迹 advantage</td></tr><tr><td>stdout、stderr 或超时信息</td><td>是</td><td>0</td><td>0</td></tr><tr><td>最终答案</td><td>是</td><td>rollout logprob</td><td>轨迹 advantage</td></tr></tbody></table>
+<p>配套代码使用 PyTRIO 的 PPO loss：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>PPO_LOSS_CONFIG = {
+    &quot;clip_low_threshold&quot;: 0.8,
+    &quot;clip_high_threshold&quot;: 1.28,
+}
+
+training_client.forward_backward(
+    datums,
+    loss_fn=&quot;ppo&quot;,
+    loss_fn_config=PPO_LOSS_CONFIG,
+).result()</code></pre></div>
+<p>原始 ReTool 论文的强化学习阶段使用 PPO。本章保留多轮代码轨迹、结果奖励和 interpreter feedback mask，同时加入同题分组采样与中心化 advantage；因此，训练链路可以概括为“GRPO 构造相对优势，PPO clipping 控制策略更新”。</p>
+<p>这里采用非对称概率比边界。旧策略概率比低于 0.8 或高于 1.28 时，PPO 会限制对应更新。无论使用何种 clip 参数，rollout sampler 都需要在每个训练 step 开始前从当前权重刷新。</p>
+<h3>8.4.5 代码执行环境与安全边界</h3>
+<p>执行模型生成的代码具有真实风险。本章 <code>sandbox.py</code> 使用本地 subprocess，并加入了以下工程限制：</p>
+<ul>
+<li>使用参数列表启动 Python，不经过 shell；</li>
+<li>每次调用创建独立进程；</li>
+<li>设置 wall-clock timeout 与 CPU 时间上限；</li>
+<li>超时后终止整个子进程组；</li>
+<li>限制 BLAS 等数值库的线程数；</li>
+<li>stdout 和 stderr 写入临时文件，并限制读回长度；</li>
+<li>限制并发执行数量；</li>
+<li>清理可能破坏 chat template 的特殊标记。</li>
+</ul>
+<p>执行入口是 <code>LocalPythonSandbox.run_code()</code>。模型代码先被嵌入一个设置 CPU 限制的 bootstrap，再通过参数列表传给新的 Python 进程：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def run_code(self, code: str) -&gt; ExecResult:
+    started = time.perf_counter()
+    self.stats.calls += 1
+    bootstrap = _BOOTSTRAP.format(
+        cpu=int(self.timeout) + 5,
+        code=repr(code),
+    )
+    env = {
+        **os.environ,
+        **_CHILD_ENV_OVERRIDES,
+    }
+
+    with self._semaphore:
+        with (
+            tempfile.TemporaryFile() as stdout_file,
+            tempfile.TemporaryFile() as stderr_file,
+        ):
+            process = subprocess.Popen(
+                [
+                    self.python,
+                    &quot;-B&quot;,
+                    &quot;-c&quot;,
+                    bootstrap,
+                ],
+                stdout=stdout_file,
+                stderr=stderr_file,
+                env=env,
+                start_new_session=True,
+            )
+            timed_out = False
+            try:
+                returncode = process.wait(
+                    timeout=self.timeout
+                )
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                os.killpg(
+                    process.pid,
+                    signal.SIGKILL,
+                )
+                returncode = None
+                process.wait()
+
+            stdout = _truncate_tail(
+                _read_capped(stdout_file)
+            )
+            stderr = _truncate_tail(
+                _read_capped(stderr_file)
+            )
+
+    latency = time.perf_counter() - started
+    ok = not timed_out and returncode == 0
+    if timed_out:
+        self.stats.timeouts += 1
+    elif ok:
+        self.stats.successes += 1
+    else:
+        self.stats.errors += 1
+    self.stats.latency_total += latency
+    return ExecResult(
+        ok,
+        stdout,
+        stderr,
+        returncode,
+        timed_out,
+        latency,
+    )</code></pre></div>
+<p>stdout 和 stderr 写入临时文件而不是 <code>PIPE</code>，父进程只读取文件尾部的有限字节，因此模型即使持续打印，也不会把全部输出保存在父进程内存中。超时时使用 <code>start_new_session=True</code> 创建的独立进程组，随后由 <code>killpg()</code> 一次终止整组子进程。</p>
+<p>执行结果被统一转换为一条 tool observation：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def format_tool_content(
+    self,
+    result: ExecResult,
+) -&gt; str:
+    if result.timed_out:
+        return (
+            &quot;Error: execution timed out after &quot;
+            f&quot;{self.timeout:.0f} seconds.&quot;
+        )
+    if result.ok:
+        return sanitize_tool_content(result.stdout)
+    if result.stderr:
+        return sanitize_tool_content(result.stderr)
+    return (
+        &quot;Error: process exited with code &quot;
+        f&quot;{result.returncode}.&quot;
+    )</code></pre></div>
+<p>成功时返回 stdout，语法错误和运行时异常返回原始 stderr，超时返回固定错误文本。当前 <code>run_code()</code> 不会自动替模型补 <code>print()</code>，所以 system prompt 明确要求模型打印希望观察的值；没有打印内容时，成功 observation 就是空字符串。</p>
+<p>这些措施主要用于控制意外的死循环、输出洪水和资源消耗。它们不能构成可信安全隔离。本地子进程仍可能读取运行账号可访问的文件、访问网络、读取继承的环境变量，或利用宿主环境中的漏洞。</p>
+<p>因此，运行 ReTool 前必须遵守以下安全要求：</p>
+<ol>
+<li>不要在含有生产凭证、私钥或敏感数据的主机上直接执行模型代码；</li>
+<li>使用一次性容器、低权限虚拟机或专用沙箱服务；</li>
+<li>默认关闭网络，并设置只读文件系统与最小化可见目录；</li>
+<li>移除无关环境变量和云服务凭证；</li>
+<li>为 CPU、内存、进程数、磁盘和执行时间设置硬限制；</li>
+<li>保存代码、退出状态与资源指标，便于审计异常轨迹。</li>
+</ol>
+<p>工具描述中的“independent execution”表示每次调用不共享 Python 状态，它不代表宿主机级安全隔离。教学试跑也应先放入隔离环境。</p>
+<h3>8.4.6 多轮代码 rollout 怎样推进</h3>
+<p><code>rollout.py</code> 分开保存可训练的 Assistant 动作、完整轨迹状态和“已经生成、尚未执行”的代码调用：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>@dataclass
+class AssistantTurn:
+    prompt_tokens: list[int]
+    completion_tokens: list[int]
+    logprobs: list[float]
+    text: str
+
+
+@dataclass
+class Trajectory:
+    example: MathExample
+    group_index: int
+    messages: list[dict[str, Any]]
+    next_prompt_tokens: list[int] | None = None
+    question_index: int = 0
+    turns: list[AssistantTurn] = field(
+        default_factory=list
+    )
+    code_calls: int = 0
+    final_text: str = &quot;&quot;
+    reward: float = -1.0
+    advantage: float = 0.0
+    valid_format: bool = False
+    correct: bool = False
+    done: bool = False
+
+
+@dataclass(frozen=True)
+class PendingExecution:
+    trajectory: Trajectory
+    code: str
+    call_id: str
+    messages_before_assistant: list[dict[str, Any]]
+    assistant_text: str
+    prompt_tokens: list[int]
+    completion_tokens: list[int]</code></pre></div>
+<p><code>begin_advance()</code> 消费一次 Assistant 输出，并决定轨迹是结束还是进入执行环境：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def begin_advance(
+    trajectory: Trajectory,
+    prompt_tokens: list[int],
+    sequence: Any,
+    tokenizer: Any,
+    config: RolloutConfig,
+) -&gt; PendingExecution | None:
+    tokens, logprobs, text = read_sequence(
+        sequence, tokenizer
+    )
+    text = text.strip()
+    trajectory.turns.append(
+        AssistantTurn(
+            prompt_tokens,
+            tokens,
+            logprobs,
+            text,
+        )
+    )
+    parsed = parse_assistant(text)
+
+    can_code = (
+        parsed.kind == &quot;tool&quot;
+        and trajectory.code_calls
+        &lt; config.max_code_calls
+        and len(trajectory.turns)
+        &lt; config.max_assistant_turns
+    )
+    if not can_code:
+        trajectory.messages.append(
+            {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: text}
+        )
+        trajectory.final_text = text
+        trajectory.done = True
+        return None
+
+    call_id = (
+        f&quot;code-{trajectory.question_index}-&quot;
+        f&quot;{trajectory.group_index}-&quot;
+        f&quot;{trajectory.code_calls + 1}&quot;
+    )
+    messages_before_assistant = list(
+        trajectory.messages
+    )
+    trajectory.messages.append(
+        {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: text}
+    )
+    return PendingExecution(
+        trajectory,
+        parsed.code or &quot;&quot;,
+        call_id,
+        messages_before_assistant,
+        text,
+        prompt_tokens,
+        tokens,
+    )</code></pre></div>
+<p>同一 round 内可能有许多轨迹同时请求执行代码。它们可以并发，但每条轨迹仍必须等待自己的 observation 返回以后才能开始下一轮生成：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>async def execute_pending_async(
+    pendings: list[PendingExecution],
+    sandbox: LocalPythonSandbox,
+) -&gt; list[ExecResult]:
+    return list(
+        await asyncio.gather(
+            *(
+                sandbox.arun_code(p.code)
+                for p in pendings
+            )
+        )
+    )
+
+
+async def advance_round(
+    responses: list[Any],
+    requests: list[SampleRequest],
+    trajectories: list[Trajectory],
+    tokenizer: Any,
+    sandbox: LocalPythonSandbox,
+    config: RolloutConfig,
+    progress_callback: Callable[[int], None] | None,
+) -&gt; None:
+    pendings: list[PendingExecution] = []
+    for request, response in zip(
+        requests, responses, strict=True
+    ):
+        trajectory = trajectories[
+            request.trajectory_index
+        ]
+        pending = begin_advance(
+            trajectory,
+            request.prompt_tokens,
+            response.sequences[0],
+            tokenizer,
+            config,
+        )
+        if pending is not None:
+            pendings.append(pending)
+        elif (
+            trajectory.done
+            and progress_callback is not None
+        ):
+            progress_callback(1)
+
+    if not pendings:
+        return
+    results = await execute_pending_async(
+        pendings, sandbox
+    )
+    for pending, result in zip(
+        pendings, results, strict=True
+    ):
+        finish_advance(
+            pending,
+            result,
+            tokenizer,
+            sandbox,
+            config,
+        )
+        if (
+            pending.trajectory.done
+            and progress_callback is not None
+        ):
+            progress_callback(1)</code></pre></div>
+<p><code>finish_advance()</code> 调用上一节的 <code>format_tool_content()</code>，再用 8.4.3 节的 <code>build_next_prompt()</code> 构造连续 token。如果执行结果过长，<code>fit_tool_content()</code> 会反复保留尾部，因为 traceback 和最终数值通常位于末尾；结果仍放不进轨迹预算时，本条轨迹直接结束。</p>
+<p>首轮分支方式与 Search-R1 相同：每个问题只提交一个 prompt，并设置 <code>num_samples=group_size</code>。每条返回序列通过 <code>copy.deepcopy(root)</code> 变成独立轨迹。执行结果返回以后，各分支的 prompt 已经不同，后续请求全部设置 <code>num_samples=1</code>，直到输出最终答案或耗尽代码调用、轮次与 token 预算。</p>
+<p>所有轨迹结束以后，状态机才依次调用 <code>score_trajectory()</code> 和 <code>assign_group_advantages()</code>。因此，一条轨迹的 traceback 可以影响它后续生成的代码，却不会越过轨迹边界影响同组其他分支。</p>
+<h3>8.4.7 使用 PyTRIO 训练 ReTool</h3>
+<p>首先，使用当前权重创建采样客户端，并生成同题多轮轨迹：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>sampling_client = (
+    training_client.save_weights_and_get_sampling_client()
+)
+
+trajectories = rollout_batch(
+    sampling_client=sampling_client,
+    tokenizer=tokenizer,
+    sandbox=sandbox,
+    examples=batch,
+    config=rollout_config,
+)</code></pre></div>
+<p><code>rollout_batch()</code> 完成以下工作：</p>
+<ol>
+<li>第一轮对同一问题采样 <code>group_size</code> 个分支；</li>
+<li>解析每条分支中的 <code>code_interpreter</code> 调用；</li>
+<li>并发执行模型代码并追加 tool observation；</li>
+<li>对仍未结束的轨迹继续采样；</li>
+<li>抽取最终答案，计算 reward 与组内 advantage。</li>
+</ol>
+<p>每个训练 step 都重新调用 <code>save_weights_and_get_sampling_client()</code>，保证 rollout old logprob 来自更新前的当前策略。如果同题所有轨迹都答对或都答错，中心化 advantage 全为 0，<code>build_training_datums()</code> 会跳过这一组；没有剩余 <code>Datum</code> 时，本 step 不执行 <code>optim_step()</code>。</p>
+<p>随后，将每条完整轨迹构造为一个 <code>Datum</code>。ReTool 的 <code>build_datum()</code> 与 8.3.6 节遵循同一套前缀扩展规则，核心循环如下：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>for turn_index, turn in enumerate(trajectory.turns):
+    if turn_index == 0:
+        delta_observation = turn.prompt_tokens
+    elif turn.prompt_tokens[
+        :len(full_tokens)
+    ] == full_tokens:
+        delta_observation = turn.prompt_tokens[
+            len(full_tokens):
+        ]
+    else:
+        raise ValueError(
+            &quot;下一轮 prompt 不是已有轨迹的前缀扩展&quot;
+        )
+
+    full_tokens.extend(delta_observation)
+    full_tokens.extend(turn.completion_tokens)
+    old_logprobs_by_token.extend(
+        [0.0] * len(delta_observation)
+    )
+    old_logprobs_by_token.extend(turn.logprobs)
+    advantages_by_token.extend(
+        [0.0] * len(delta_observation)
+    )
+    advantages_by_token.extend(
+        [trajectory.advantage]
+        * len(turn.completion_tokens)
+    )
+
+input_tokens = full_tokens[:-1]
+target_tokens = full_tokens[1:]
+old_logprobs = old_logprobs_by_token[1:]
+advantages = advantages_by_token[1:]
+
+datum = trio.Datum(
+    model_input=trio.ModelInput.from_ints(
+        input_tokens
+    ),
+    loss_fn_inputs={
+        &quot;target_tokens&quot;: np.asarray(
+            target_tokens, dtype=np.int64
+        ),
+        &quot;logprobs&quot;: np.asarray(
+            old_logprobs, dtype=np.float32
+        ),
+        &quot;advantages&quot;: np.asarray(
+            advantages, dtype=np.float32
+        ),
+    },
+)</code></pre></div>
+<p><code>delta_observation</code> 中包含初始题目、Assistant 结束符以及 stdout、stderr 或 timeout 文本，它们的 advantage 全为 0；Assistant 推理、代码调用与最终答案共享轨迹 advantage。这就是 interpreter feedback mask 的实际代码形态。</p>
+<p>由于轨迹长度差异较大，代码再进行动态 micro-batch 装箱：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>datums = build_training_datums(trajectories)
+micro_batches = pack_micro_batches(datums)
+
+for micro_batch in micro_batches:
+    weighted = weight_micro_batch_for_global_mean(
+        micro_batch,
+        total_samples=len(trajectories),
+    )
+    training_client.forward_backward(
+        weighted,
+        loss_fn=&quot;ppo&quot;,
+        loss_fn_config=PPO_LOSS_CONFIG,
+    ).result()
+
+if micro_batches:
+    training_client.optim_step(adam_params).result()</code></pre></div>
+<p>PyTRIO 会对单次 <code>forward_backward()</code> 中的样本取平均。不同 micro-batch 大小不一致时，直接累积会放大小批次的权重。本章按照每个 micro-batch 样本数占全局轨迹数的比例缩放 advantage：</p>
+<div class="math-display" role="math" aria-label="数学公式">∑<sub>k</sub> <span class="mfrac"><span class="mnum">n<sub>k</sub></span><span class="mden">N</span></span><span class="mtext">mean</span>(<span class="mcal">L</span><sub>k</sub>) = <span class="mtext">mean</span>(<span class="mcal">L</span><sub><span class="mtext">global</span></sub>).</div>
+<p>这样，动态拆批只改变执行方式，不改变全局样本平均的梯度含义。</p>
+<h3>8.4.8 运行与评测 ReTool</h3>
+<p>配套目录包含以下文件：</p>
+<table><thead><tr><th>文件</th><th>作用</th></tr></thead><tbody><tr><td><code>prepare_data.py</code></td><td>准备 DAPO-Math-17k 训练集与 dev 集</td></tr><tr><td><code>data.py</code></td><td>加载统一数学样本</td></tr><tr><td><code>protocol.py</code></td><td>定义代码工具和多轮消息协议</td></tr><tr><td><code>sandbox.py</code></td><td>执行 Python 代码并记录资源指标</td></tr><tr><td><code>rollout.py</code></td><td>执行多轮“生成—运行—观察”状态机</td></tr><tr><td><code>reward.py</code></td><td>抽取 <span class="math" role="math" aria-label="数学公式"><span class="math-boxed"></span></span> 并做数学等价判定</td></tr><tr><td><code>train.py</code></td><td>构造 feedback mask、micro-batch 并执行 PPO</td></tr><tr><td><code>eval.py</code></td><td>统一评测 text-only 与 ReTool 模式</td></tr><tr><td><code>analysis.py</code></td><td>汇总不同 checkpoint 的指标</td></tr></tbody></table>
+<p><code>prepare_data.py</code> 生成的 DAPO-Math-17k <code>train.jsonl</code> 用于 RL，并另外切出 50 道 <code>dev.jsonl</code> 做快速检查。正式的 <code>eval.py</code> 使用固定 30 道 AIME 2025，避免直接在训练题上报告结果。</p>
+<p>在 ReTool 模式下，每道题的 <code>val_n</code> 条候选仍由同一个多轮状态机生成：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>config = RolloutConfig(
+    group_size=args.val_n,
+    max_code_calls=args.max_code_calls,
+    max_assistant_turns=args.max_assistant_turns,
+    max_trajectory_tokens=(
+        args.max_trajectory_tokens
+    ),
+    max_assistant_tokens=args.max_assistant_tokens,
+    max_tool_response_tokens=(
+        args.max_tool_response_tokens
+    ),
+    temperature=args.temperature,
+    top_p=args.top_p,
+    seed=args.seed,
+)
+
+trajectories = await rollout_batch_async(
+    sampling_client,
+    tokenizer,
+    sandbox,
+    examples,
+    config,
+)</code></pre></div>
+<p><code>text-only</code> 模式则不注册代码工具，直接对同一题采样 <code>val_n</code> 个单轮答案。两种模式最终都写出逐题 JSONL，并汇总：</p>
+<ul>
+<li><code>Average@N</code>：全部生成结果中的平均正确率；</li>
+<li><code>Pass@N</code>：至少有一条候选答对的问题比例；</li>
+<li><code>format_rate</code>：能够抽取合法 <code>\boxed{}</code> 的比例；</li>
+<li><code>mean_code_calls</code> 与 <code>mean_turns</code>：工具成本和轨迹长度。</li>
+</ul>
+<p>因此，比较 checkpoint 时至少需要固定题集、<code>val_n</code>、temperature、top-p、最大轨迹长度和答案抽取逻辑；比较 text-only 与 ReTool 时，还要额外报告执行延迟和代码调用数。</p>
+<p>首先准备数据：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/retool/prepare_data.py</code></pre></div>
+<p>确认代码执行器位于隔离环境后，再进行一步试跑：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/retool/train.py \
+    --max-steps 1 \
+    --questions-per-batch 1 \
+    --group-size 4 \
+    --max-code-calls 2 \
+    --sandbox-workers 2 \
+    --swanlab-mode disabled</code></pre></div>
+<p>准备好 AIME 2025 本地数据后，可以先跑无工具对照，再跑相同采样参数的 ReTool 评测：</p>
+<div class="code-block-wrapper"><div class="code-header"><span class="code-lang">bash</span></div><pre><code>python docs/chapter8/retool/eval.py \
+    --mode text-only \
+    --val-n 12 \
+    --temperature 1.0 \
+    --top-p 0.7 \
+    --output docs/chapter8/retool/eval-results/aime25-text-only-base.jsonl
+
+python docs/chapter8/retool/eval.py \
+    --mode retool \
+    --val-n 12 \
+    --temperature 1.0 \
+    --top-p 0.7 \
+    --output docs/chapter8/retool/eval-results/aime25-retool-base.jsonl</code></pre></div>
+<p>评测训练后的模型时，为两条命令增加相同的 <code>--model-path trio://...</code>。只有 Base Model、checkpoint、text-only 和 ReTool 使用同一套采样设置时，差异才可以归因于训练或工具环境。</p>
+<p>训练指标应同时覆盖任务、策略和环境三个层面：</p>
+<ul>
+<li><strong>任务结果</strong>：正确率、合法 <span class="math" role="math" aria-label="数学公式"><span class="math-boxed"></span></span> 比例、退化组比例；</li>
+<li><strong>工具行为</strong>：代码调用率、每条轨迹平均调用次数、零调用正确率；</li>
+<li><strong>自我修正</strong>：首次执行报错后重试并最终答对的比例；</li>
+<li><strong>环境状态</strong>：执行成功率、异常率、超时率、平均 latency；</li>
+<li><strong>策略稳定性</strong>：PPO probability ratio、clip fraction、response length；</li>
+<li><strong>系统效率</strong>：rollout、执行器、远端训练和 checkpoint 各阶段耗时。</li>
+</ul>
+<p>评测时可以分别运行 text-only 与 ReTool 模式。两者需要使用同一批问题、相同采样参数和相同答案判定器，才能看出工具环境带来的净收益。工具模式还应报告额外延迟与执行成本，因为准确率提升通常伴随更多环境调用。</p>
+<p>至此，我们已经从 GRPO 的单轮结果奖励、OPD 的逐 token Teacher 反馈，走到了 Search-R1 与 ReTool 的多轮环境交互。下面的本章小结会把四个模块重新收束到同一条“rollout—反馈—advantage—策略更新”数据流中。</p>
+</div>
+<div class="section" id="llm-agentic-rl-src1-s5"><h2>本章小结</h2>
+<p>本章从 GRPO 出发，逐步建立了一条可以扩展到 Agent 的大模型强化学习路径。</p>
+<p>GRPO 使用同题多次采样构造组内相对优势，省去了单独训练 Value Model 的过程。它把算法拆成清晰的三层：策略生成 rollout，环境给出 reward，更新 loss 根据新旧策略概率比优化模型。正确的 reward、token 对齐和 on-policy sampler 刷新共同决定训练是否有效。</p>
+<p>OPD 保留 on-policy rollout，将规则奖励替换为 Teacher 对 Student 轨迹的逐 token 概率反馈。reverse KL 为每个动作提供稠密信号，使小模型可以在自身会访问的状态上学习 Teacher 能力。Teacher 与 Student 的 tokenizer、推理模式和能力互补关系需要在训练前验证。</p>
+<p>Search-R1 与 ReTool 进一步把轨迹扩展为多轮环境交互。搜索结果和代码执行结果进入上下文，却通过 observation mask 排除在策略 loss 之外；模型生成的搜索词、代码、推理和最终答案共享轨迹级结果信号。两者都复用了 GRPO 的分组采样与相对优势，只替换了工具协议、环境实现和 reward。</p>
+<p>四个示例最终汇合为同一条 PyTRIO 数据流：</p>
+<div class="math-display" role="math" aria-label="数学公式"><span class="mtext">当前策略</span>→<span class="mtext">多样化 rollout</span>→<span class="mtext">环境或 Teacher 反馈</span>→<span class="mtext">token-level advantage</span>→<span class="mtext">策略更新</span>→<span class="mtext">新策略</span>.</div>
+<p>掌握这条数据流后，新的 Agentic RL 任务可以从五个问题开始设计：</p>
+<ol>
+<li>Agent 可以执行哪些动作，环境会返回什么 observation？</li>
+<li>一条轨迹在什么条件下结束，预算如何限制？</li>
+<li>reward 能否稳定反映最终任务目标？</li>
+<li>哪些 token 属于策略动作，哪些 token 必须被 mask？</li>
+<li>rollout、旧 logprob、advantage 与当前权重是否严格对齐？</li>
+</ol>
+<p>当这五个问题都有可验证的答案时，一个工具 Demo 才具备进入强化学习训练的基础。</p>
+<blockquote><strong>继续学习：</strong> 受篇幅和章节定位限制，本章集中介绍了 GRPO、OPD、Search-R1 与 ReTool，仍有许多 Agentic RL 方法和交互环境无法逐一展开。如果你希望继续学习 OPSD、DAPO、GSPO、ALFWorld 等内容，可以前往作者持续维护的 <a href="https://github.com/KMnO4-zx/agentic-rl-lab" target="_blank" rel="noreferrer">agentic-rl-lab</a>。仓库将继续整理相关算法的原理、可运行代码与真实训练过程。</blockquote>
+</div>
+<div class="section" id="llm-agentic-rl-src1-s6"><h2>参考资料</h2>
+<ol>
+<li>Shao, Z. et al. <a href="https://arxiv.org/abs/2402.03300" target="_blank" rel="noreferrer">DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models</a>. 2024.</li>
+<li>Schulman, J. et al. <a href="https://arxiv.org/abs/1707.06347" target="_blank" rel="noreferrer">Proximal Policy Optimization Algorithms</a>. 2017.</li>
+<li>Agarwal, R. et al. <a href="https://arxiv.org/abs/2306.13649" target="_blank" rel="noreferrer">On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes</a>. 2023.</li>
+<li>Li, Y. et al. <a href="https://arxiv.org/abs/2604.13016" target="_blank" rel="noreferrer">Rethinking On-Policy Distillation of Large Language Models: Phenomenology, Mechanism, and Recipe</a>. 2026.</li>
+<li>Sun, J. et al. <a href="https://arxiv.org/abs/2607.11012" target="_blank" rel="noreferrer">EasyOPD: An Easy-to-use On-Policy Distillation Framework for Large Language Models</a>. 2026.</li>
+<li>Jin, B. et al. <a href="https://arxiv.org/abs/2503.09516" target="_blank" rel="noreferrer">Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning</a>. 2025.</li>
+<li>Feng, J. et al. <a href="https://arxiv.org/abs/2504.11536" target="_blank" rel="noreferrer">ReTool: Reinforcement Learning for Strategic Tool Use in LLMs</a>. 2025.</li>
+<li>PyTRIO. <a href="https://docs.pytrio.com/docs/guide/loss_fn" target="_blank" rel="noreferrer">Loss Function Guide</a>.</li>
+<li>PyTRIO. <a href="https://docs.pytrio.com/docs/example/search-r1" target="_blank" rel="noreferrer">Search-R1 Example</a>.</li>
+<li>Agentic-RL Lab (不要葱姜蒜). <a href="https://github.com/KMnO4-zx/agentic-rl-lab" target="_blank" rel="noreferrer">agentic-rl-lab</a>.</li>
+</ol>
+</div></div><div class="footer">Happy-LLM 融合内容 · 建议结合左侧路径和术语卡交叉阅读</div></div></section>

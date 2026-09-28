@@ -1,0 +1,173 @@
+<section class="llm-mod llm-m-model-selection" id="llm-model-selection"><div class="module-wrapper">
+<div class="llm-hero" style="--hero-a:#1d4ed8;--hero-b:#7c3aed;">
+  <h1>🎯 模型选型指南</h1>
+  <p>根据需求和硬件选择最合适的模型</p>
+</div>
+
+<div class="section" id="llm-model-selection-s1">
+  <h2>选型原则</h2>
+
+  <div class="callout callout-analogy">
+    <strong>类比：</strong>选模型就像选车——日常代步选经济型（小模型），长途旅行选SUV（中等模型），赛车比赛选超跑（大模型）。没有最好的车，只有最适合你需求的车。
+  </div>
+
+  <h3>核心考虑因素</h3>
+
+  <table>
+    <tr><th>因素</th><th>说明</th><th>权重</th></tr>
+    <tr><td><strong>任务类型</strong></td><td>分类、生成、问答、摘要等</td><td>⭐⭐⭐⭐⭐</td></tr>
+    <tr><td><strong>数据规模</strong></td><td>训练数据量决定能否微调</td><td>⭐⭐⭐⭐</td></tr>
+    <tr><td><strong>计算资源</strong></td><td>GPU显存、训练时间</td><td>⭐⭐⭐⭐⭐</td></tr>
+    <tr><td><strong>延迟要求</strong></td><td>实时响应 vs 离线处理</td><td>⭐⭐⭐</td></tr>
+    <tr><td><strong>成本约束</strong></td><td>训练成本 + 推理成本</td><td>⭐⭐⭐⭐</td></tr>
+  </table>
+
+  <h3>决策流程</h3>
+
+  <div class="code-block-wrapper">
+    <div class="code-header"><span class="code-lang">Python</span></div>
+    <pre><code><span class="cmt"># 模型选型决策指南</span>
+
+<span class="cmt"># 场景1：简单分类任务 → 用BERT系列</span>
+<span class="kw">if</span> task == <span class="str">"classification"</span> <span class="kw">and</span> data_size < <span class="num">100000</span>:
+    model = <span class="str">"bert-base-chinese"</span>  <span class="cmt"># 或 roberta-base</span>
+
+<span class="cmt"># 场景2：文本生成 → 用Qwen/Llama系列</span>
+<span class="kw">elif</span> task == <span class="str">"generation"</span>:
+    <span class="kw">if</span> gpu_memory >= <span class="num">24</span>:  <span class="cmt"># GB</span>
+        model = <span class="str">"Qwen3-14B"</span>  <span class="cmt"># 或 Llama 3.1-8B</span>
+    <span class="kw">elif</span> gpu_memory >= <span class="num">16</span>:
+        model = <span class="str">"Qwen3-8B"</span>   <span class="cmt"># 或 Llama 3.1-8B (QLoRA)</span>
+    <span class="kw">else</span>:
+        model = <span class="str">"Qwen3-4B"</span>   <span class="cmt"># 或 Phi-4-mini</span>
+
+<span class="cmt"># 场景3：中文对话 → 用Qwen系列</span>
+<span class="kw">elif</span> task == <span class="str">"chat"</span> <span class="kw">and</span> lang == <span class="str">"zh"</span>:
+    model = <span class="str">"Qwen3-8B"</span></code></pre>
+  </div>
+</div>
+
+<div class="section" id="llm-model-selection-s2">
+  <h2>模型规模分类</h2>
+
+  <table>
+    <tr><th>规模</th><th>参数量</th><th>代表模型</th><th>显存需求</th><th>适用场景</th></tr>
+    <tr><td><strong>小模型</strong></td><td>&lt;1B</td><td>Qwen3-0.6B, Phi-4-mini</td><td>2-4GB</td><td>边缘设备、简单任务</td></tr>
+    <tr><td><strong>中等模型</strong></td><td>1B-10B</td><td>Llama 3.1-8B, Qwen3-8B</td><td>8-16GB</td><td>大多数应用（推荐）</td></tr>
+    <tr><td><strong>大模型</strong></td><td>10B-70B</td><td>Qwen3-14B, Phi-4 (14B), Qwen3-32B</td><td>24-80GB</td><td>复杂推理、高质量生成</td></tr>
+    <tr><td><strong>MoE模型</strong></td><td>总参数大/激活少</td><td>Llama 4 Scout (109B/17B), Mixtral 8x7B (47B/13B)</td><td>与激活参数相当</td><td>大容量+低推理成本</td></tr>
+    <tr><td><strong>超大模型</strong></td><td>参数量未公开（云端 API）</td><td>GPT-5.5, Claude Opus 5, Fable 5</td><td>云端</td><td>最复杂的任务</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>💡 推荐起点：</strong>从<strong>7B参数模型</strong>开始，这是性能和成本的最佳平衡点。在你的 RTX 4090 Laptop（16GB显存）上，可以QLoRA微调7-13B模型。新增的 <strong>DeepSeek-R1-distill</strong> 系列（蒸馏推理模型）也是高性价比选择。
+  </div>
+</div>
+
+<div class="section" id="llm-model-selection-s3">
+  <h2>硬件匹配指南</h2>
+
+  <table>
+    <tr><th>GPU显存</th><th>代表型号</th><th>可微调模型</th><th>微调方法</th></tr>
+    <tr><td><strong>8GB</strong></td><td>RTX 4060 Ti, RTX 3070</td><td>3-7B模型（4-bit量化7B约需4-5GB权重）</td><td>QLoRA (4-bit)</td></tr>
+    <tr><td><strong>16GB</strong>（你的配置）</td><td>RTX 4090 Laptop, RTX 4080, RTX 5080（16GB GDDR7，截至 2026-08）</td><td>7-13B模型</td><td>QLoRA/LoRA</td></tr>
+    <tr><td><strong>24GB</strong></td><td>RTX 4090 Desktop</td><td>7B全参微调 / 最高~30B QLoRA</td><td>Full FT / LoRA</td></tr>
+    <tr><td><strong>32GB</strong></td><td>RTX 5090 (GDDR7)</td><td>13B全参微调 / 最高~40B QLoRA</td><td>Full FT / LoRA</td></tr>
+    <tr><td><strong>40GB+</strong></td><td>A100, H100</td><td>70B模型（QLoRA）</td><td>Full FT / LoRA</td></tr>
+  </table>
+
+  <div class="callout callout-info">
+    <strong>📖 RTX 4090 Laptop (16GB) 配置建议：</strong>
+    <ul>
+      <li><strong>注意</strong>：RTX 4090 Laptop = 16GB GDDR6（不同于Desktop版的24GB GDDR6X）</li>
+      <li>最佳模型：Qwen3-8B / Llama 3.1-8B / Phi-4 (14B QLoRA)</li>
+      <li>微调方法：QLoRA（4-bit量化 + LoRA），或LoRA（16-bit）</li>
+      <li>Batch size：4-8（序列长度512时）</li>
+      <li>序列长度：512-1024</li>
+    </ul>
+  </div>
+
+  <div class="callout callout-tip">
+    <strong>💡 RTX 5090 (32GB GDDR7)：</strong>2025年发布的顶级消费级显卡，32GB显存可全参微调13B模型或QLoRA微调约40B模型，是目前消费级最强选择。
+  </div>
+
+  <h3>MoE模型：大容量低推理成本</h3>
+
+  <p>MoE（混合专家）模型的总参数量虽大，但推理时只激活一小部分参数，因此实际显存和计算需求远低于总参数量。</p>
+
+  <table>
+    <tr><th>模型</th><th>总参数</th><th>激活参数</th><th>推理显存</th><th>特点</th></tr>
+    <tr><td><strong>Mixtral 8x7B</strong></td><td>47B</td><td>~13B</td><td>~24GB (FP16)</td><td>开源MoE先驱</td></tr>
+    <tr><td><strong>Llama 4 Scout</strong></td><td>109B</td><td>17B</td><td>~32GB (FP16)</td><td>16专家，10M上下文</td></tr>
+    <tr><td><strong>Llama 4 Maverick</strong></td><td>400B</td><td>17B</td><td>~32GB (FP16)</td><td>128专家，1M上下文</td></tr>
+    <tr><td><strong>DeepSeek V4 Pro</strong></td><td>1.6T</td><td>49B</td><td>云端</td><td>MIT开源，CSA+HCA</td></tr>
+  </table>
+
+  <div class="callout callout-tip">
+    <strong>💡 边缘部署推荐：</strong>使用 <strong>GGUF量化格式</strong> + <strong>llama.cpp</strong> 或 <strong>Ollama</strong>，可以在CPU/低显存设备上运行7-14B模型。例如 <code>ollama run qwen2.5:7b</code> 即可一键部署。
+  </div>
+</div>
+
+<div class="section" id="llm-model-selection-s3b">
+  <h2>主流开源模型生态</h2>
+
+  <p>2024-2026年开源大模型百花齐放，以下是主流的开源模型家族及其特点：</p>
+
+  <h3>🇨🇳 国产开源模型</h3>
+
+  <table>
+    <tr><th>模型家族</th><th>开发者</th><th>代表版本</th><th>参数规模</th><th>核心特点</th></tr>
+    <tr><td><strong>Qwen（通义千问）</strong></td><td>阿里云</td><td>Qwen3 / 3.5 / 3.6 系列</td><td>0.6B-235B（含MoE）</td><td>中英双语能力强、工具调用优秀、Apache 2.0协议、思考/非思考双模式</td></tr>
+    <tr><td><strong>DeepSeek</strong></td><td>深度求索</td><td>DeepSeek-V3, R1</td><td>671B(MoE)/7B-67B(蒸馏)</td><td>推理能力突出、MoE架构高效、MIT开源、R1蒸馏系列性价比极高</td></tr>
+    <tr><td><strong>GLM（智谱）</strong></td><td>智谱AI</td><td>GLM-4.6 / GLM-5</td><td>355B-744B（MoE）</td><td>中英双语、Coding 对齐 Claude Sonnet 4、MIT 开源、工具调用</td></tr>
+    <tr><td><strong>Yi（零一万物）</strong></td><td>零一万物</td><td>Yi-1.5系列（已停止前沿迭代）</td><td>6B-34B</td><td>长上下文(200K)、中英均衡（2025 年起零一万物收缩基础模型投入）</td></tr>
+    <tr><td><strong>InternLM（书生）</strong></td><td>上海AI实验室</td><td>InternLM3</td><td>7B-20B</td><td>综合能力强、工具调用优秀、中文优化</td></tr>
+  </table>
+
+  <h3>🌍 国际开源模型</h3>
+
+  <table>
+    <tr><th>模型家族</th><th>开发者</th><th>代表版本</th><th>参数规模</th><th>核心特点</th></tr>
+    <tr><td><strong>Llama</strong></td><td>Meta</td><td>Llama 3.1/3.2/4</td><td>1B-405B(+MoE)</td><td>开源生态最完善、社区支持最强、Llama 4引入MoE架构</td></tr>
+    <tr><td><strong>Mistral</strong></td><td>Mistral AI</td><td>Mistral Medium 3 / Magistral / Mixtral</td><td>7B-8x22B(MoE)</td><td>欧洲团队、MoE架构先驱、推理效率高</td></tr>
+    <tr><td><strong>Phi</strong></td><td>微软</td><td>Phi-4 / Phi-4-mini</td><td>3.8B-14B</td><td>小模型性能标杆、高质量合成数据训练、边缘部署首选</td></tr>
+    <tr><td><strong>Gemma</strong></td><td>Google</td><td>Gemma 2/3</td><td>1B-27B</td><td>Google技术、多尺寸、性能均衡</td></tr>
+  </table>
+
+  <div class="callout callout-key">
+    <strong>🔑 选型建议：</strong>中文场景首选 <strong>Qwen3</strong> 或 <strong>DeepSeek</strong>；英文通用选 <strong>Llama 3.1/4</strong>；边缘部署选 <strong>Phi-4-mini</strong> 或 <strong>Qwen3-4B</strong>；追求极致推理能力选 <strong>DeepSeek-R1</strong> 蒸馏系列。
+  </div>
+
+  <h3>模型发展趋势（2024-2026）</h3>
+
+  <table>
+    <tr><th>趋势</th><th>说明</th><th>代表</th></tr>
+    <tr><td><strong>MoE架构普及</strong></td><td>总参数大但推理成本低，兼顾容量和效率</td><td>Llama 4, Mixtral, DeepSeek V3</td></tr>
+    <tr><td><strong>推理模型崛起</strong></td><td>专门优化Chain-of-Thought推理，数学/代码能力大幅提升</td><td>DeepSeek-R1, QwQ, Phi-4-reasoning</td></tr>
+    <tr><td><strong>小模型逆袭</strong></td><td>高质量数据+蒸馏技术让小模型接近大模型效果</td><td>Phi-4-mini(3.8B), Qwen3-1.7B</td></tr>
+    <tr><td><strong>多模态融合</strong></td><td>文本+视觉+音频统一架构</td><td>Qwen3-Omni, Gemma 3, Llama 4</td></tr>
+    <tr><td><strong>上下文窗口扩展</strong></td><td>支持超长文本输入（100K-10M tokens）</td><td>Llama 4 Scout(10M), Qwen3(128K)</td></tr>
+  </table>
+</div>
+
+<div class="section" id="llm-model-selection-s4">
+  <h2>动手练习</h2>
+
+  <div class="callout callout-practice">
+    <div class="practice-header">✏️ 练习1：模型对比测试</div>
+    <div class="practice-body">
+      <p><strong>目标：</strong>在相同任务上对比不同规模模型的效果。</p>
+      <p><strong>要求：</strong></p>
+      <p>① 选择3个不同规模的模型（1B, 3B, 7B）</p>
+      <p>② 在同一个分类任务上测试</p>
+      <p>③ 对比：准确率、推理速度、内存占用</p>
+      <p>④ 给出最佳性价比推荐</p>
+    </div>
+  </div>
+</div>
+
+
+
+</div>
+
+</section>

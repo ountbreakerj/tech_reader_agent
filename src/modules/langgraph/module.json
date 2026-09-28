@@ -1,0 +1,231 @@
+{
+  "key": "lg",
+  "route": "#/langgraph",
+  "scopeId": "mod-lg",
+  "title": "LangGraph Sub-Agents 实战教程",
+  "subtitle": "从零构建多 Agent 工作流",
+  "menu": {
+    "id": "lg-home",
+    "intro": "用 Python 把模型、工具和状态接成一个工作流。从 LangChain 的链式调用开始，再看 LangGraph 如何处理分支、保存进度和多 Agent 协作。"
+  },
+  "styles": [
+    "langgraph.css"
+  ],
+  "content": [
+    {
+      "id": "langgraph",
+      "file": "content.html"
+    }
+  ],
+  "toc": [
+    {
+      "id": "lg-home",
+      "t": "模块目录"
+    },
+    {
+      "id": "lg-s1",
+      "t": "LangChain 速览回顾"
+    },
+    {
+      "id": "lg-s2",
+      "t": "为什么需要 LangGraph"
+    },
+    {
+      "g": 1,
+      "t": "LangGraph 核心概念",
+      "id": "lg-menu-core",
+      "desc": "状态怎么保存，节点怎么执行，分支和人工确认怎么接起来。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "s3-1",
+          "t": "State — 共享记忆"
+        },
+        {
+          "id": "s3-2",
+          "t": "Node — 干活的人"
+        },
+        {
+          "id": "s3-3",
+          "t": "Edge & 条件分支"
+        },
+        {
+          "id": "s3-4",
+          "t": "Graph 编排"
+        },
+        {
+          "id": "s3-5",
+          "t": "持久化与 Checkpoint"
+        },
+        {
+          "id": "s3-6",
+          "t": "Human-in-the-Loop"
+        }
+      ]
+    },
+    {
+      "id": "s-cheat-lc",
+      "t": "📋 LangChain 速查表"
+    },
+    {
+      "id": "s-cheat-lg",
+      "t": "📋 LangGraph 速查表"
+    },
+    {
+      "id": "lg-s4",
+      "t": "Sub-Agent 模式详解"
+    },
+    {
+      "g": 1,
+      "t": "✏️ 动手练习",
+      "id": "lg-menu-practice",
+      "desc": "从一条 Python 调用链练到完整工作流，每一步都有对应练习。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "prac-s1",
+          "t": "P1 · LangChain 链式组合"
+        },
+        {
+          "id": "prac-s2",
+          "t": "P2 · 为什么需要 LangGraph"
+        },
+        {
+          "id": "prac-s3-1",
+          "t": "P3 · State 设计"
+        },
+        {
+          "id": "prac-s3-2",
+          "t": "P4 · Node 实现"
+        },
+        {
+          "id": "prac-s3-3",
+          "t": "P5 · 条件路由"
+        },
+        {
+          "id": "prac-s3-4",
+          "t": "P6 · Graph 组装"
+        },
+        {
+          "id": "prac-s3-5",
+          "t": "P7 · 持久化存档"
+        },
+        {
+          "id": "prac-s3-6",
+          "t": "P8 · Human-in-the-Loop"
+        },
+        {
+          "id": "prac-lc",
+          "t": "P9 · LangChain 综合"
+        },
+        {
+          "id": "prac-lg",
+          "t": "P10 · LangGraph 综合"
+        },
+        {
+          "id": "prac-s4",
+          "t": "P11 · Sub-Agent 流水线"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "实战：CodeGen Pipeline",
+      "id": "lg-menu-codegen",
+      "desc": "把代码生成、测试、审查和自动修复连成一个循环。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "s5-1",
+          "t": "架构总览"
+        },
+        {
+          "id": "s5-2",
+          "t": "定义 State"
+        },
+        {
+          "id": "s5-3",
+          "t": "Agent 1: 代码生成器"
+        },
+        {
+          "id": "s5-4",
+          "t": "Agent 2: 测试生成器"
+        },
+        {
+          "id": "s5-5",
+          "t": "Agent 3: 代码审查员"
+        },
+        {
+          "id": "s5-6",
+          "t": "Agent 4: 自动修复器"
+        },
+        {
+          "id": "s5-7",
+          "t": "构建 Graph & 路由"
+        },
+        {
+          "id": "s5-8",
+          "t": "运行 & 查看结果"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "LangGraph 高级详解",
+      "id": "lg-menu-advanced",
+      "desc": "处理子图、并行执行、状态合并、重试、流式输出和部署。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "s-adv-1",
+          "t": "Sub-Graph 子图"
+        },
+        {
+          "id": "s-adv-2",
+          "t": "并行执行 & Map-Reduce"
+        },
+        {
+          "id": "s-adv-3",
+          "t": "自定义 State Reducer"
+        },
+        {
+          "id": "s-adv-4",
+          "t": "错误处理 & 重试"
+        },
+        {
+          "id": "s-adv-5",
+          "t": "流式输出详解"
+        },
+        {
+          "id": "s-adv-6",
+          "t": "LangGraph Platform 部署"
+        }
+      ]
+    },
+    {
+      "g": 1,
+      "t": "综合实战案例",
+      "id": "lg-menu-cases",
+      "desc": "用检索问答、多模型协作和数据分析，把前面的概念串起来。",
+      "fold": 1,
+      "c": [
+        {
+          "id": "s-case-1",
+          "t": "RAG 检索增强生成"
+        },
+        {
+          "id": "s-case-2",
+          "t": "多模型协作系统"
+        },
+        {
+          "id": "s-case-3",
+          "t": "数据分析流水线"
+        }
+      ]
+    },
+    {
+      "id": "lg-s7",
+      "t": "总结 & 学习路径"
+    }
+  ]
+}
