@@ -126,7 +126,7 @@ scheduler = get_cosine_schedule_with_warmup(
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 学习率设置经验：</strong>
+    <strong>学习率设置经验：</strong>
     <ul>
       <li>预训练：1e-4 到 5e-4</li>
       <li>微调：1e-5 到 5e-5</li>
@@ -144,7 +144,7 @@ scheduler = get_cosine_schedule_with_warmup(
   </table>
 
   <div class="callout callout-info">
-    <strong>📖 WSD调度器详解：</strong>WSD（Warmup-Stable-Decay）将训练分为三个阶段——Warmup升温、Stable保持恒定学习率、Decay快速衰减。其最大优势是<strong>训练中途可灵活截断</strong>：在Stable阶段的任意时间点停止训练，都能获得一个可用的模型（只需补一个短Decay阶段）。MiniCPM和Phi-3的实践证明WSD效果不亚于Cosine Decay。
+    <strong>WSD调度器详解：</strong>WSD（Warmup-Stable-Decay）将训练分为三个阶段——Warmup升温、Stable保持恒定学习率、Decay快速衰减。其最大优势是<strong>训练中途可灵活截断</strong>：在Stable阶段的任意时间点停止训练，都能获得一个可用的模型（只需补一个短Decay阶段）。MiniCPM和Phi-3的实践证明WSD效果不亚于Cosine Decay。
   </div>
 </div>
 
@@ -188,7 +188,7 @@ scaler = GradScaler(<span class="str">"cuda"</span>)
   </table>
 
   <div class="callout callout-key">
-    <strong>🔑 BF16 vs FP16 实用区别：</strong>
+    <strong>BF16 vs FP16 实用区别：</strong>
     <ul style="margin-top: 0.5rem;">
       <li><strong>BF16</strong>（Brain Float 16）：8位指数 + 7位尾数，动态范围与FP32相同，<strong>不容易溢出</strong>，不需要loss scaling。Ampere及以后的GPU支持（RTX 30系/40系/50系）</li>
       <li><strong>FP16</strong>：5位指数 + 10位尾数，动态范围小，容易出现梯度上溢/下溢，<strong>必须配合GradScaler</strong>使用</li>
@@ -223,7 +223,7 @@ optimizer.zero_grad()
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 梯度裁剪经验：</strong>
+    <strong>梯度裁剪经验：</strong>
     <ul style="margin-top: 0.5rem;">
       <li>预训练：通常设 <code>max_norm=1.0</code></li>
       <li>微调：通常设 <code>max_norm=0.5~1.0</code></li>
@@ -264,7 +264,7 @@ model = FSDP(model)  <span class="cmt"># 自动分片参数、梯度和优化器
   </div>
 
   <div class="callout callout-info">
-    <strong>📖 选择建议：</strong>单机2-4卡用 <strong>FSDP2</strong>（PyTorch原生，配置简单）；多机大规模训练用 <strong>DeepSpeed ZeRO</strong>（更灵活）；超大模型用 <strong>Megatron-LM</strong>（张量并行性能最强）。
+    <strong>选择建议：</strong>单机2-4卡用 <strong>FSDP2</strong>（PyTorch原生，配置简单）；多机大规模训练用 <strong>DeepSpeed ZeRO</strong>（更灵活）；超大模型用 <strong>Megatron-LM</strong>（张量并行性能最强）。
   </div>
 </div>
 

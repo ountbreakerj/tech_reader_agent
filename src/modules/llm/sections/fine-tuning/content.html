@@ -87,7 +87,7 @@ model.<span class="fn">print_trainable_parameters()</span>
   <h2>QLoRA实战</h2>
 
   <div class="callout callout-info">
-    <strong>📖 什么是QLoRA：</strong>QLoRA = 4-bit量化 + LoRA。将模型量化到4-bit（大幅减少显存），然后用LoRA微调。这是在消费级GPU上微调大模型的最佳方案。
+    <strong>什么是QLoRA：</strong>QLoRA = 4-bit量化 + LoRA。将模型量化到4-bit（大幅减少显存），然后用LoRA微调。这是在消费级GPU上微调大模型的最佳方案。
   </div>
 
   <div class="code-block-wrapper">
@@ -154,7 +154,7 @@ trainer.<span class="fn">train</span>()</code></pre>
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 QLoRA显存对比（以7B模型为例）：</strong>
+    <strong>QLoRA显存对比（以7B模型为例）：</strong>
     <ul>
       <li><strong>Full Fine-Tuning（FP16）</strong>：约112GB（参数 + 梯度 + 优化器状态）</li>
       <li><strong>LoRA微调（FP16）</strong>：约28GB（冻结基座 + 可训练适配器 + 优化器）</li>
@@ -211,7 +211,7 @@ template = <span class="str">"""Below is an instruction that describes a task. W
   <h2>LoRA变体（2025-2026前沿）</h2>
 
   <div class="callout callout-info">
-    <strong>📖 LoRA的演进：</strong>原始LoRA发布后，研究者提出了多种改进变体，分别解决了不同的局限性。以下是2025-2026年最值得关注的几种。
+    <strong>LoRA的演进：</strong>原始LoRA发布后，研究者提出了多种改进变体，分别解决了不同的局限性。以下是2025-2026年最值得关注的几种。
   </div>
 
   <table>
@@ -265,7 +265,7 @@ optimizer = GaLoreAdamW(
   <h2>对齐训练（Alignment Training）</h2>
 
   <div class="callout callout-key">
-    <strong>🔑 为什么需要对齐训练：</strong>SFT（监督微调）教会模型"如何回答"，但对齐训练教会模型"什么样的回答是好的"。这是让模型变得安全、有用、无害的关键步骤。没有对齐的模型可能产生有害、偏见或不真实的内容。
+    <strong>为什么需要对齐训练：</strong>SFT（监督微调）教会模型"如何回答"，但对齐训练教会模型"什么样的回答是好的"。这是让模型变得安全、有用、无害的关键步骤。没有对齐的模型可能产生有害、偏见或不真实的内容。
   </div>
 
   <h3>对齐训练方法概览</h3>
@@ -397,7 +397,7 @@ trainer.<span class="fn">train</span>()</code></pre>
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 选择建议：</strong>
+    <strong>选择建议：</strong>
     <ul>
       <li><strong>入门推荐DPO</strong>：最简单，不需要训练奖励模型，TRL库直接支持</li>
       <li><strong>资源有限选ORPO</strong>：一步到位，不需要单独的SFT阶段</li>
@@ -411,7 +411,7 @@ trainer.<span class="fn">train</span>()</code></pre>
   <h2>Unsloth：高效训练工具</h2>
 
   <div class="callout callout-info">
-    <strong>📖 Unsloth：</strong>2025-2026年最受欢迎的LLM微调加速工具之一。通过手写Triton内核和优化计算图，实现2倍训练速度提升和70%显存节省，同时保持与HuggingFace生态完全兼容。
+    <strong>Unsloth：</strong>2025-2026年最受欢迎的LLM微调加速工具之一。通过手写Triton内核和优化计算图，实现2倍训练速度提升和70%显存节省，同时保持与HuggingFace生态完全兼容。
   </div>
 
   <div class="code-block-wrapper">
@@ -465,7 +465,7 @@ trainer.<span class="fn">train</span>()</code></pre>
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 Unsloth优势：</strong>
+    <strong>Unsloth优势：</strong>
     <ul>
       <li>训练速度：比标准HuggingFace快约2倍</li>
       <li>显存节省：约减少70%显存占用</li>

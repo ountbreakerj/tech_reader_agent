@@ -78,7 +78,7 @@
   </ul>
 
   <div class="callout callout-tip">
-    <strong>💡 典型应用场景：</strong>Web应用（WordPress、Laravel）、电商平台、内容管理系统、日志系统、企业应用等。
+    <strong>典型应用场景：</strong>Web应用（WordPress、Laravel）、电商平台、内容管理系统、日志系统、企业应用等。
   </div>
 </div>
 
@@ -106,7 +106,7 @@
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 注意：</strong>一定要记住设置的 root 密码，忘记密码需要重置，比较麻烦。
+    <strong>注意：</strong>一定要记住设置的 root 密码，忘记密码需要重置，比较麻烦。
   </div>
 
   <h3>Linux安装（Ubuntu/Debian）</h3>
@@ -172,11 +172,11 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 最佳实践：</strong>生产环境中，<code>innodb_buffer_pool_size</code> 应该设置为物理内存的60%-80%，这是影响性能的最重要参数。
+    <strong>最佳实践：</strong>生产环境中，<code>innodb_buffer_pool_size</code> 应该设置为物理内存的60%-80%，这是影响性能的最重要参数。
   </div>
 
   <div class="callout callout-info">
-    <strong>📖 MySQL 版本说明：</strong>MySQL 目前采用 LTS + Innovation 双轨发布策略。<strong>MySQL 8.4 LTS</strong>（2024年发布）是当前推荐的生产版本，提供长期支持。<strong>MySQL 9.x Innovation</strong> 版本则包含最新特性，如原生 <code>VECTOR</code> 数据类型（支持 AI/ML 向量存储和检索），适合体验前沿功能。生产环境建议使用 LTS 版本。
+    <strong>MySQL 版本说明：</strong>MySQL 目前采用 LTS + Innovation 双轨发布策略。<strong>MySQL 8.4 LTS</strong>（2024年发布）是当前推荐的生产版本，提供长期支持。<strong>MySQL 9.x Innovation</strong> 版本则包含最新特性，如原生 <code>VECTOR</code> 数据类型（支持 AI/ML 向量存储和检索），适合体验前沿功能。生产环境建议使用 LTS 版本。
   </div>
 
   <h3>常用命令</h3>
@@ -339,7 +339,7 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 警告：</strong>执行 <code>UPDATE</code> 或 <code>DELETE</code> 操作前，一定要先用 <code>SELECT</code> 确认WHERE条件是否正确，避免误操作导致数据丢失！
+    <strong>警告：</strong>执行 <code>UPDATE</code> 或 <code>DELETE</code> 操作前，一定要先用 <code>SELECT</code> 确认WHERE条件是否正确，避免误操作导致数据丢失！
   </div>
 
   <h4>删除数据（DELETE）</h4>
@@ -411,7 +411,7 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
     </div>
 
     <div class="callout callout-tip">
-      <strong>💡 WHERE vs HAVING：</strong><code>WHERE</code> 在分组前过滤行，<code>HAVING</code> 在分组后过滤组。聚合函数的结果只能用 <code>HAVING</code> 过滤。
+      <strong>WHERE vs HAVING：</strong><code>WHERE</code> 在分组前过滤行，<code>HAVING</code> 在分组后过滤组。聚合函数的结果只能用 <code>HAVING</code> 过滤。
     </div>
   </div>
 
@@ -571,7 +571,7 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 索引优化原则：</strong>
+    <strong>索引优化原则：</strong>
     <ul style="margin-top: 0.5rem;">
       <li>在WHERE、JOIN、ORDER BY的字段上创建索引</li>
       <li>选择性高的字段更适合建索引（如用户名、邮箱）</li>
@@ -642,11 +642,11 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
   </table>
 
   <div class="callout callout-info">
-    <strong>📖 InnoDB 与幻读：</strong>上表中标 * 的幻读列是 SQL 标准的定义。但实际上，MySQL 默认引擎 <strong>InnoDB</strong> 在 REPEATABLE READ 级别下通过 <strong>MVCC（多版本并发控制）+ Next-Key Locking</strong> 已经能防止大部分幻读场景，其行为比 SQL 标准定义的更加严格。这也是为什么 MySQL 官方文档推荐使用默认的 REPEATABLE READ 而非 SERIALIZABLE。
+    <strong>InnoDB 与幻读：</strong>上表中标 * 的幻读列是 SQL 标准的定义。但实际上，MySQL 默认引擎 <strong>InnoDB</strong> 在 REPEATABLE READ 级别下通过 <strong>MVCC（多版本并发控制）+ Next-Key Locking</strong> 已经能防止大部分幻读场景，其行为比 SQL 标准定义的更加严格。这也是为什么 MySQL 官方文档推荐使用默认的 REPEATABLE READ 而非 SERIALIZABLE。
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 选择建议：</strong>大多数Web应用使用 <code>READ COMMITTED</code> 或 <code>REPEATABLE READ</code> 即可。金融等高一致性要求的场景使用 <code>SERIALIZABLE</code>。
+    <strong>选择建议：</strong>大多数Web应用使用 <code>READ COMMITTED</code> 或 <code>REPEATABLE READ</code> 即可。金融等高一致性要求的场景使用 <code>SERIALIZABLE</code>。
   </div>
 </div>
 
@@ -685,7 +685,7 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 反范式原则：</strong>只在读取频率远高于写入频率的场景使用反范式，并确保数据同步机制（如触发器、应用层同步）。
+    <strong>反范式原则：</strong>只在读取频率远高于写入频率的场景使用反范式，并确保数据同步机制（如触发器、应用层同步）。
   </div>
 
   <h3>常见设计模式</h3>

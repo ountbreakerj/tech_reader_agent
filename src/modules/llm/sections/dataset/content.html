@@ -33,7 +33,7 @@
   </table>
 
   <div class="callout callout-warn">
-    <strong>⚠️ LLM训练的划分差异：</strong>
+    <strong>LLM训练的划分差异：</strong>
     <ul style="margin-top: 0.5rem;">
       <li><strong>预训练阶段</strong>：通常不做严格的train/test划分——数据全部用于训练，评估通过下游benchmark完成</li>
       <li><strong>指令微调阶段</strong>：常用 <strong>95/5</strong> 或 <strong>98/2</strong> 的比例（而非80/10/10），因为高质量指令数据稀缺，需要尽量多用于训练</li>
@@ -82,7 +82,7 @@ val_data, test_data = <span class="fn">train_test_split</span>(
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 避免数据泄漏：</strong>划分时要确保训练集和测试集没有重叠，否则会高估模型性能。
+    <strong>避免数据泄漏：</strong>划分时要确保训练集和测试集没有重叠，否则会高估模型性能。
   </div>
 </div>
 
@@ -91,7 +91,7 @@ val_data, test_data = <span class="fn">train_test_split</span>(
   <h2>HuggingFace Datasets</h2>
 
   <div class="callout callout-info">
-    <strong>📖 什么是HuggingFace Datasets：</strong>一个强大的数据集处理库，支持流式处理、内存映射、并行处理，可以高效处理大规模数据集。
+    <strong>什么是HuggingFace Datasets：</strong>一个强大的数据集处理库，支持流式处理、内存映射、并行处理，可以高效处理大规模数据集。
   </div>
 
   <h3>基础用法</h3>
@@ -218,7 +218,7 @@ dataloader = DataLoader(
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 注意：</strong>下面展示的回译、同义词替换等方法主要用于<strong>传统NLP分类任务</strong>（如文本分类、情感分析）的数据增强。对于<strong>LLM预训练和指令微调</strong>，更主流的做法是使用<strong>合成数据生成</strong>（见下一节）。
+    <strong>注意：</strong>下面展示的回译、同义词替换等方法主要用于<strong>传统NLP分类任务</strong>（如文本分类、情感分析）的数据增强。对于<strong>LLM预训练和指令微调</strong>，更主流的做法是使用<strong>合成数据生成</strong>（见下一节）。
   </div>
 
   <h3>常见数据增强方法</h3>
@@ -262,7 +262,7 @@ dataloader = DataLoader(
   <h2>合成数据生成（2025-2026主流方案）</h2>
 
   <div class="callout callout-key">
-    <strong>🔑 核心趋势：</strong>在2025-2026年的LLM训练中，<strong>合成数据</strong>已成为指令微调数据的主要来源。其核心思路是用更强的LLM来生成训练数据，训练较弱的模型。
+    <strong>核心趋势：</strong>在2025-2026年的LLM训练中，<strong>合成数据</strong>已成为指令微调数据的主要来源。其核心思路是用更强的LLM来生成训练数据，训练较弱的模型。
   </div>
 
   <h3>主流合成数据方法</h3>
@@ -303,7 +303,7 @@ seed_instructions = [
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 实践建议：</strong>
+    <strong>实践建议：</strong>
     <ul style="margin-top: 0.5rem;">
       <li>合成数据需要<strong>严格质量过滤</strong>——低质量的合成数据反而会降低模型性能</li>
       <li>建议混合人工标注数据和合成数据，比例约 1:5 到 1:10</li>
@@ -367,7 +367,7 @@ seed_instructions = [
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 选择建议：</strong>
+    <strong>选择建议：</strong>
     <ul style="margin-top: 0.5rem;">
       <li><strong>过采样</strong>：数据量小时使用，可能增加训练时间</li>
       <li><strong>欠采样</strong>：数据量大时使用，可能丢失重要信息</li>

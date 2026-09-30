@@ -70,7 +70,7 @@
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 我的建议：</strong>如果是新项目且团队愿意学习，推荐PostgreSQL。它的功能更强大，扩展性更好，社区活跃。很多云服务（AWS RDS、Google Cloud SQL）都支持PostgreSQL。
+    <strong>我的建议：</strong>如果是新项目且团队愿意学习，推荐PostgreSQL。它的功能更强大，扩展性更好，社区活跃。很多云服务（AWS RDS、Google Cloud SQL）都支持PostgreSQL。
   </div>
 </div>
 
@@ -174,7 +174,7 @@ client_encoding = <span class="str">UTF8</span></code></pre>
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 性能调优原则：</strong>PostgreSQL的性能主要由<code>shared_buffers</code>、<code>work_mem</code>和<code>effective_cache_size</code>三个参数决定。生产环境中，<code>shared_buffers</code>设为物理内存的25%，<code>effective_cache_size</code>设为50%。
+    <strong>性能调优原则：</strong>PostgreSQL的性能主要由<code>shared_buffers</code>、<code>work_mem</code>和<code>effective_cache_size</code>三个参数决定。生产环境中，<code>shared_buffers</code>设为物理内存的25%，<code>effective_cache_size</code>设为50%。
   </div>
 
   <h3>连接管理（pg_hba.conf）</h3>
@@ -295,7 +295,7 @@ host    mydb            myuser          192.168.1.0/24          scram-sha-256</c
     </div>
 
     <div class="callout callout-tip">
-      <strong>💡 窗口函数使用场景：</strong>排名、滑动平均、环比同比计算、累计求和、分组内排名等。是数据分析和报表开发的利器。
+      <strong>窗口函数使用场景：</strong>排名、滑动平均、环比同比计算、累计求和、分组内排名等。是数据分析和报表开发的利器。
     </div>
   </div>
 
@@ -376,7 +376,7 @@ user_orders <span class="kw">AS</span> (
     </div>
 
     <div class="callout callout-tip">
-      <strong>💡 递归CTE应用场景：</strong>组织架构、产品分类、评论嵌套、文件夹结构、物料清单（BOM）等任何层次结构数据。
+      <strong>递归CTE应用场景：</strong>组织架构、产品分类、评论嵌套、文件夹结构、物料清单（BOM）等任何层次结构数据。
     </div>
   </div>
 
@@ -475,7 +475,7 @@ user_orders <span class="kw">AS</span> (
     </div>
 
     <div class="callout callout-tip">
-      <strong>💡 JSONB最佳实践：</strong>
+      <strong>JSONB最佳实践：</strong>
       <ul style="margin-top: 0.5rem;">
         <li>固定字段用列存储，灵活字段用JSONB</li>
         <li>JSONB字段务必建立GIN索引</li>
@@ -614,7 +614,7 @@ default_pool_size = 20</code></pre>
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 VACUUM策略：</strong>PostgreSQL默认开启autovacuum，会自动清理。但对更新频繁的表，建议手动定期执行 <code>VACUUM ANALYZE</code>。
+    <strong>VACUUM策略：</strong>PostgreSQL默认开启autovacuum，会自动清理。但对更新频繁的表，建议手动定期执行 <code>VACUUM ANALYZE</code>。
   </div>
 
   <h3>分区表</h3>
@@ -646,7 +646,7 @@ default_pool_size = 20</code></pre>
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 分区优势：</strong>对大表（千万级以上）按时间或其他字段分区，可以显著提升查询性能和维护效率。PostgreSQL 10+支持声明式分区。
+    <strong>分区优势：</strong>对大表（千万级以上）按时间或其他字段分区，可以显著提升查询性能和维护效率。PostgreSQL 10+支持声明式分区。
   </div>
 </div>
 
@@ -749,7 +749,7 @@ default_pool_size = 20</code></pre>
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 pgvector vs 独立向量数据库：</strong>pgvector 最大的优势是与 PostgreSQL 生态无缝集成——你可以在同一个事务中完成向量搜索和关系型查询，无需维护额外基础设施。对于中小规模 RAG 应用（百万级文档），pgvector 是绝佳选择。超大规模场景仍推荐 Milvus 等专用向量数据库。
+    <strong>pgvector vs 独立向量数据库：</strong>pgvector 最大的优势是与 PostgreSQL 生态无缝集成——你可以在同一个事务中完成向量搜索和关系型查询，无需维护额外基础设施。对于中小规模 RAG 应用（百万级文档），pgvector 是绝佳选择。超大规模场景仍推荐 Milvus 等专用向量数据库。
   </div>
 </div>
 
@@ -769,7 +769,7 @@ default_pool_size = 20</code></pre>
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 升级建议：</strong>如果是新项目，建议直接使用 PostgreSQL 18（当前 18.6，截至 2026-08）。已有项目可从 16/17 平滑升级，PostgreSQL 的大版本升级通常兼容性很好。
+    <strong>升级建议：</strong>如果是新项目，建议直接使用 PostgreSQL 18（当前 18.6，截至 2026-08）。已有项目可从 16/17 平滑升级，PostgreSQL 的大版本升级通常兼容性很好。
   </div>
 </div>
 

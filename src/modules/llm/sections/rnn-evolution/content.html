@@ -131,7 +131,7 @@ print(f"隐藏状态: {hidden.shape}")     # [4, 32, 256] (2层*2方向)</code><
 
   </table>
     <div class="callout callout-tip">
-    <p>💡 <strong>选型建议：</strong>在现代NLP中，LSTM/GRU已被Transformer大幅取代。但在时序预测、边缘设备推理等场景，GRU仍然是不错的选择。</p>
+    <p><strong>选型建议：</strong>在现代NLP中，LSTM/GRU已被Transformer大幅取代。但在时序预测、边缘设备推理等场景，GRU仍然是不错的选择。</p>
   </div>
   </div><div class="section" id="llm-rnn-evolution-s5">
     <h2>从RNN到Transformer</h2>
@@ -147,7 +147,7 @@ print(f"隐藏状态: {hidden.shape}")     # [4, 32, 256] (2层*2方向)</code><
 
   </table>
     <div class="callout callout-key">
-    <p>🔑 <strong>关键转折点：</strong>2017年Google发表"Attention Is All You Need"，提出完全基于注意力机制的Transformer架构，摒弃了RNN的循环结构，开启了大模型时代。</p>
+    <p><strong>关键转折点：</strong>2017年Google发表"Attention Is All You Need"，提出完全基于注意力机制的Transformer架构，摒弃了RNN的循环结构，开启了大模型时代。</p>
   </div>
   </div><div class="section" id="llm-rnn-evolution-s6">
     <h2>实践：LSTM文本分类</h2>
@@ -184,7 +184,7 @@ logits = model(x)
 print(f"分类输出: {logits.shape}")  # [32, 2]</code></pre>
   </div>
     <div class="callout callout-tip">
-    <p>💡 这个LSTM分类器在小数据集上效果不错，但随着数据量增加，BERT微调会显著超越它。</p>
+    <p>这个LSTM分类器在小数据集上效果不错，但随着数据量增加，BERT微调会显著超越它。</p>
   </div>
   </div>
 </div></section>

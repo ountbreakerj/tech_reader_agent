@@ -15,7 +15,7 @@
 
   </table>
     <div class="callout callout-key">
-    <p>🔑 FC不是让模型直接执行函数，而是让模型输出"我想调用XXX函数，参数是YYY"的JSON结构，由应用层执行后将结果返回模型。</p>
+    <p>FC不是让模型直接执行函数，而是让模型输出"我想调用XXX函数，参数是YYY"的JSON结构，由应用层执行后将结果返回模型。</p>
   </div>
   </div><div class="section" id="llm-function-calling-s2">
     <h2>工作原理</h2>
@@ -43,7 +43,7 @@
     <div class="step-content"><strong>生成回复</strong><br>模型基于函数结果生成最终回复</div>
   </div>
     <div class="callout callout-tip">
-    <p>💡 FC的核心价值：让模型"知道"有哪些工具可用，但不直接执行——安全性和可控性由应用层保障。</p>
+    <p>FC的核心价值：让模型"知道"有哪些工具可用，但不直接执行——安全性和可控性由应用层保障。</p>
   </div>
   </div><div class="section" id="llm-function-calling-s3">
     <h2>单函数调用实战</h2>
@@ -111,7 +111,7 @@ tools = [
 # "给张三发邮件" → 调用 send_email</code></pre>
   </div>
     <div class="callout callout-warn">
-    <p>⚠️ 函数描述的质量直接影响模型选择的准确性。描述要清晰、具体，避免歧义。</p>
+    <p>函数描述的质量直接影响模型选择的准确性。描述要清晰、具体，避免歧义。</p>
   </div>
   </div><div class="section" id="llm-function-calling-s5">
     <h2>Function Calling与数据库</h2>
@@ -140,7 +140,7 @@ tools = [
 # 模型输出: {"sql": "SELECT product, SUM(amount) as total FROM sales GROUP BY product ORDER BY total DESC LIMIT 5"}</code></pre>
   </div>
     <div class="callout callout-warn">
-    <p>⚠️ 安全警告：永远不要直接执行模型生成的SQL！必须添加参数验证、白名单过滤、只读权限等安全措施。</p>
+    <p>安全警告：永远不要直接执行模型生成的SQL！必须添加参数验证、白名单过滤、只读权限等安全措施。</p>
   </div>
   </div>
 </div></section>

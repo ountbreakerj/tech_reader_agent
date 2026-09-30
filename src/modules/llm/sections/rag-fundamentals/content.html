@@ -167,7 +167,7 @@ docs = text_splitter.split_documents(documents)
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 父子分块实践建议：</strong>小chunk通常为128-256 tokens用于embedding检索，父chunk为512-1024 tokens用于提供上下文。检索命中小chunk后，返回其对应的父chunk给LLM，这样既保证检索精度又不丢失上下文。
+    <strong>父子分块实践建议：</strong>小chunk通常为128-256 tokens用于embedding检索，父chunk为512-1024 tokens用于提供上下文。检索命中小chunk后，返回其对应的父chunk给LLM，这样既保证检索精度又不丢失上下文。
   </div>
 </div>
 
@@ -186,7 +186,7 @@ docs = text_splitter.split_documents(documents)
   <p>将复杂的多跳问题分解为多个简单子问题，分别检索后综合回答。例如"对比BERT和GPT在文本分类上的优劣"可分解为："BERT在文本分类上的表现"和"GPT在文本分类上的表现"两个子查询。</p>
 
   <div class="callout callout-info">
-    <strong>📖 选择建议：</strong>HyDE实现最简单，适合作为查询优化的起点；多查询扩展在大多数场景下能稳定提升召回率；查询分解适合处理复杂多跳问题。三者可以组合使用。
+    <strong>选择建议：</strong>HyDE实现最简单，适合作为查询优化的起点；多查询扩展在大多数场景下能稳定提升召回率；查询分解适合处理复杂多跳问题。三者可以组合使用。
   </div>
 </div>
 

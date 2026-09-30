@@ -115,7 +115,7 @@ euclidean_dist = np.linalg.norm(vec1 - vec2)
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 选型建议：</strong>学习阶段推荐Milvus或Chroma（开源、文档完善）。生产环境推荐Milvus（支持分布式、高可用）。
+    <strong>选型建议：</strong>学习阶段推荐Milvus或Chroma（开源、文档完善）。生产环境推荐Milvus（支持分布式、高可用）。
   </div>
 </div>
 
@@ -163,7 +163,7 @@ graph TB
   </table>
 
   <div class="callout callout-info">
-    <strong>📖 三种部署模式详解：</strong>
+    <strong>三种部署模式详解：</strong>
     <ul style="margin-top: 0.5rem;">
       <li><strong>Milvus Lite</strong>：嵌入式模式，数据存储在本地文件（如 <code>./milvus_demo.db</code>），无需启动任何服务，适合开发和测试</li>
       <li><strong>Milvus Standalone</strong>：单机服务模式，通过 Docker 部署，监听 <code>localhost:19530</code>，适合中小规模生产环境</li>
@@ -223,7 +223,7 @@ connections.connect(
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 学习建议：</strong>初学阶段使用Milvus Lite，零配置，数据存在本地文件。需要测试更多功能时用Standalone。生产环境用Distributed。
+    <strong>学习建议：</strong>初学阶段使用Milvus Lite，零配置，数据存在本地文件。需要测试更多功能时用Standalone。生产环境用Distributed。
   </div>
 </div>
 
@@ -453,7 +453,7 @@ search_results = client.search(
     </table>
 
     <div class="callout callout-tip">
-      <strong>💡 选择建议：</strong>
+      <strong>选择建议：</strong>
       <ul style="margin-top: 0.5rem;">
         <li>学习阶段：用 <code>IVF_FLAT</code>，参数少，容易理解</li>
         <li>生产环境：用 <code>HNSW</code>，性能最好</li>
@@ -497,7 +497,7 @@ search_results = client.search(
   <h3>数据一致性处理</h3>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 注意：</strong>Milvus默认是最终一致性，插入数据后可能需要几秒钟才能搜索到。需要强一致性时设置 <code>consistency_level="Strong"</code>。
+    <strong>注意：</strong>Milvus默认是最终一致性，插入数据后可能需要几秒钟才能搜索到。需要强一致性时设置 <code>consistency_level="Strong"</code>。
   </div>
 
   <h3>Milvus 2.5+ 新特性</h3>

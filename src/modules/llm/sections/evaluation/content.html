@@ -178,7 +178,7 @@ results = evaluator.simple_evaluate(
   <h2>LLM-as-Judge评估方法</h2>
 
   <div class="callout callout-info">
-    <strong>📖 LLM-as-Judge：</strong>用一个强大的LLM（如GPT-4、Claude）作为"裁判"来评估其他模型的输出质量。这种方法在2025-2026年已成为评估开放式对话质量的主流方法，MT-Bench、Arena-Hard、AlpacaEval 2.0均基于此。
+    <strong>LLM-as-Judge：</strong>用一个强大的LLM（如GPT-4、Claude）作为"裁判"来评估其他模型的输出质量。这种方法在2025-2026年已成为评估开放式对话质量的主流方法，MT-Bench、Arena-Hard、AlpacaEval 2.0均基于此。
   </div>
 
   <h3>主要框架</h3>
@@ -219,7 +219,7 @@ judge_prompt = <span class="str">"""请评估以下AI助手的回答质量（1-1
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ LLM-as-Judge的局限性：</strong>
+    <strong>LLM-as-Judge的局限性：</strong>
     <ul>
       <li><strong>位置偏见</strong>：倾向于偏好出现在特定位置的回答</li>
       <li><strong>冗长偏见</strong>：倾向于给更长的回答更高分</li>
@@ -233,7 +233,7 @@ judge_prompt = <span class="str">"""请评估以下AI助手的回答质量（1-1
   <h2>数据污染与评估可靠性</h2>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 数据污染（Data Contamination）：</strong>如果模型的训练数据中包含了评估基准的测试集，那么评估结果就不可信——相当于"考试前看了答案"。这是2025-2026年LLM评估领域最关注的问题之一。
+    <strong>数据污染（Data Contamination）：</strong>如果模型的训练数据中包含了评估基准的测试集，那么评估结果就不可信——相当于"考试前看了答案"。这是2025-2026年LLM评估领域最关注的问题之一。
   </div>
 
   <h3>污染的常见形式</h3>
@@ -258,7 +258,7 @@ judge_prompt = <span class="str">"""请评估以下AI助手的回答质量（1-1
   <h2>最新模型基准成绩参考（2025-2026）</h2>
 
   <div class="callout callout-info">
-    <strong>📖 注意：</strong>以下成绩来自各模型官方报告和第三方评测，仅作参考。不同评测条件（prompt格式、采样参数）可能导致结果差异。
+    <strong>注意：</strong>以下成绩来自各模型官方报告和第三方评测，仅作参考。不同评测条件（prompt格式、采样参数）可能导致结果差异。
   </div>
 
   <table>
@@ -270,7 +270,7 @@ judge_prompt = <span class="str">"""请评估以下AI助手的回答质量（1-1
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 解读建议：</strong>
+    <strong>解读建议：</strong>
     <ul>
       <li>没有任何单一基准能全面反映模型能力——需要综合多个维度</li>
       <li>SWE-Bench Verified是当前代码能力最权威的指标</li>

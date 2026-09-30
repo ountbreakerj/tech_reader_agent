@@ -97,7 +97,7 @@ print("Tokens:", output.tokens)
 print("Token IDs:", output.ids)</code></pre>
   </div>
     <div class="callout callout-key">
-    <p>🔑 <strong>关键认知：</strong>现代LLM不使用jieba分词，而是使用BPE/SentencePiece等子词分词器。jieba仍适用于传统NLP任务（如关键词提取、简单分类）。</p>
+    <p><strong>关键认知：</strong>现代LLM不使用jieba分词，而是使用BPE/SentencePiece等子词分词器。jieba仍适用于传统NLP任务（如关键词提取、简单分类）。</p>
   </div>
   </div><div class="section" id="llm-nlp-intro-s3">
     <h2>命名实体识别与词性标注</h2>
@@ -141,7 +141,7 @@ for word, flag in words:
         print(f"  {word:10s} -&gt; {flag}")</code></pre>
   </div>
     <div class="callout callout-warn">
-    <p>⚠️ jieba的NER精度有限（约85%），生产环境建议使用 <strong>spaCy</strong>、<strong>HanLP</strong> 或基于BERT的NER模型。</p>
+    <p>jieba的NER精度有限（约85%），生产环境建议使用 <strong>spaCy</strong>、<strong>HanLP</strong> 或基于BERT的NER模型。</p>
   </div>
   </div><div class="section" id="llm-nlp-intro-s4">
     <h2>文本数据增强</h2>
@@ -190,7 +190,7 @@ print("同义替换:", synonym_replace(text))
 print("随机删除:", random_delete(text))</code></pre>
   </div>
     <div class="callout callout-tip">
-    <p>💡 数据增强比例建议控制在原始数据的1-3倍，过多增强会引入噪声。</p>
+    <p>数据增强比例建议控制在原始数据的1-3倍，过多增强会引入噪声。</p>
   </div>
   </div><div class="section" id="llm-nlp-intro-s5">
     <h2>实践：中文文本预处理流水线</h2>
@@ -226,7 +226,7 @@ for rank, (word, count) in enumerate(counter.most_common(10), 1):
     print(f"  {rank}. {word:8s} {count:3d} {bar}")</code></pre>
   </div>
     <div class="callout callout-tip">
-    <p>💡 生产环境建议：1) 使用完整停用词表；2) 根据任务选择词性策略；3) 使用并行分词加速大规模处理。</p>
+    <p>生产环境建议：1) 使用完整停用词表；2) 根据任务选择词性策略；3) 使用并行分词加速大规模处理。</p>
   </div>
   </div>
 </div></section>

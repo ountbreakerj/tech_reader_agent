@@ -1869,26 +1869,26 @@ def assisted_decoding(input_ids, assistant_model, main_model):
 </div></div>
 <div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/s1-vllm-thinking-budget/readme.md</div><p>首先，我们来了解一下AI教母李飞飞教授关于 Test-time scaling 的论文：<a href="http://arxiv.org/abs/2501.19393" target="_blank" rel="noreferrer"><em>《s1: Simple test-time scaling》</em></a></p>
 <div align='center'>
-    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-1-8015eb04c1.png" alt="alt text" width="50%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-1-8015eb04c1.png" alt="Happy-LLM 图示" width="50%">
 </div>
 <p>论文大致讲了个什么事情呢？简单来说，提出了一种新的测试时间缩放方法，旨在提高模型在推理阶段的效率和准确性。通过调整模型的思考预算，可以在不同的任务和数据集上实现更好的性能。</p>
 <p>就是说对于一些复杂问题，需要用推理链来解决的问题，我们可以通过调整模型的思考预算来提高推理效率和准确性。上图也可以看到当思考预算增加时，模型的性能会有明显提升。</p>
 <div align='center'>
-    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-2-b50e8b6186.png" alt="alt text" width="50%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-2-b50e8b6186.png" alt="Happy-LLM 图示" width="50%">
 </div>
 <p>插一句题外话，论文中判断问题难易程度的方式是通过让 Qwen2.5-32B-Instruct 模型回答问题，答对的问题就是简单问题，答错的就是复杂问题。</p>
 <div align='center'>
-    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-3-03e2dbf179.png" alt="alt text" width="50%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-3-03e2dbf179.png" alt="Happy-LLM 图示" width="50%">
 </div>
 <p>论文也做了消融实验来探讨，在未满足思考预算时插入一些不同的特定词（如：Wait！）对模型最终性能的影响。结果表明，插入特定词可以有效地引导模型进行更深入的思考，并且“Wait，Wait”的效果最好。</p>
 <div class="section" id="llm-happy-extras-src3-s1"><h2>代码实现</h2>
 <p>我们使用 vLLM 来实现模型的思考预算。vLLM 是一个高性能的推理引擎，支持大规模语言模型的高效推理。以下为代码实现的步骤：</p>
 <blockquote>考虑到部分同学配置环境可能会遇到一些问题，我们在 ucloud 平台准备了环境镜像，点击下方链接并直接创建 ucloud 示例即可。 https://www.compshare.cn/images/8gfTTB5y0ql6?referral_code=ELukJdQS3vvCwYIfgsQf2C</blockquote>
 <div align='center'>
-    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/thinking-budget-e88ac2bd44.png" alt="alt text" width="80%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/thinking-budget-e88ac2bd44.png" alt="Happy-LLM 图示" width="80%">
 </div>
 <p>左侧为不使用思考预算的推理过程，右侧为使用思考预算的推理过程。可以看到，使用思考预算后，模型会在推理过程中插入特定词来引导模型进行更深入的思考。</p>
-<p>以下为核心代码实现，完整代码请参考 [<em>s1.py</em>](./s1.py)</p>
+<p>以下为核心代码实现，完整代码请参考 <em>s1.py</em></p>
 <div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>def run_thinking_budget_sample(llm_model, tokenizer, user_input, thinking_budget):
     input_text = build_input(user_input, tokenizer)
     input_token_count = count_token(input_text, tokenizer)
@@ -1992,17 +1992,17 @@ print(f&quot;迭代次数：{iteration_count}, 输入token数：{input_token_cou
     max_tokens=4096,
     skip_special_tokens=False
 )</code></pre></div>
-<p>以上为核心代码实现，完整代码请参考 [<em>s1.py</em>](./s1.py)。在实际使用中，可以根据具体的任务和数据集调整思考预算和其他参数，以获得更好的性能。</p>
+<p>以上为核心代码实现，完整代码请参考 <em>s1.py</em>。在实际使用中，可以根据具体的任务和数据集调整思考预算和其他参数，以获得更好的性能。</p>
 </div>
 <div class="section" id="llm-happy-extras-src3-s2"><h2>结果分析</h2>
 <p>使用思考预算后，模型在推理过程中能够更深入地思考问题，从而提高了推理效率和准确性。但是也发现了一些有趣的现象。</p>
 <p>例如，在某些情况下，就算插入了<code>Wait!</code>，模型并不会按照论文中所示进行多种不同方式尝试解答，或是反思之前的思考过程是否正确。而且还会出现模型在思考过程中重复生成相同的内容，导致思考 token 数量超过思考预算的情况。</p>
 <div align='center'>
-    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-4-5cbd17e128.png" alt="alt text" width="70%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-4-5cbd17e128.png" alt="Happy-LLM 图示" width="70%">
 </div>
 <p>当然，也有可能本身测试的模型只有14B参数，导致其在思考过程中的能力受到限制。</p>
 <p>经过测试下来，有可能强行使用特定词（如：Wait!）来引导模型进行更深入的思考，可能会促使模型产生 “一条道走到黑” 的想法。</p>
-<p>部分实验测试记录在 [<em>output</em>](./output/) 中。</p>
+<p>部分实验测试记录在 <em>output</em> 中。</p>
 </div></div>
 <div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/vlm-concatenation-finetune/README.md</div><ul>
 <li>作者：情感机器实验室——陈少宏</li>

@@ -94,7 +94,7 @@ class MultiHeadAttention(nn.Module):
         return self.W_o(out)</code></pre>
   </div>
     <div class="callout callout-key">
-    <p>🔑 <strong>多头的意义：</strong>不同的头可以关注不同类型的模式——有的头关注语法关系，有的关注语义相似度，有的关注位置关系。</p>
+    <p><strong>多头的意义：</strong>不同的头可以关注不同类型的模式——有的头关注语法关系，有的关注语义相似度，有的关注位置关系。</p>
   </div>
   </div><div class="section" id="llm-transformer-deep-s4">
     <h2>前馈网络与残差连接</h2>
@@ -111,7 +111,7 @@ class MultiHeadAttention(nn.Module):
         <li><strong>Pre-LN</strong>（现代模型常用）：<code>x + SubLayer(LayerNorm(x))</code></li>
     </ul>
     <div class="callout callout-tip">
-    <p>💡 Pre-LN比Post-LN训练更稳定，是现代LLM（GPT、LLaMA等）的标准选择。</p>
+    <p>Pre-LN比Post-LN训练更稳定，是现代LLM（GPT、LLaMA等）的标准选择。</p>
   </div>
   </div><div class="section" id="llm-transformer-deep-s5">
     <h2>Encoder与Decoder块</h2>
@@ -217,7 +217,7 @@ out = encoder(x)
 print(out.shape)  # torch.Size([2, 10, 512])</code></pre>
   </div>
     <div class="callout callout-tip">
-    <p>💡 实际开发中建议使用 <code>nn.TransformerEncoderLayer</code> 等内置模块，它们经过了充分的性能优化。从零实现主要用于学习理解。</p>
+    <p>实际开发中建议使用 <code>nn.TransformerEncoderLayer</code> 等内置模块，它们经过了充分的性能优化。从零实现主要用于学习理解。</p>
   </div>
   </div>
 </div></section>

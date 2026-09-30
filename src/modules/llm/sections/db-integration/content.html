@@ -226,7 +226,7 @@
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 异步双写优势：</strong>
+    <strong>异步双写优势：</strong>
     <ul style="margin-top: 0.5rem;">
       <li>MySQL写入不被Milvus延迟影响</li>
       <li>通过队列削峰，应对突发流量</li>
@@ -301,7 +301,7 @@ sequenceDiagram
   </div>
 
   <div class="callout callout-info">
-    <strong>📖 Milvus 2.5+ 原生全文检索（BM25）</strong>
+    <strong>Milvus 2.5+ 原生全文检索（BM25）</strong>
     <p style="margin-top: 0.3rem;">Milvus 2.5 开始内置 BM25 全文检索功能，支持稀疏向量（Sparse Vector）和倒排索引。这意味着在某些架构中，<strong>不再需要单独维护一个 MySQL 来做关键词检索</strong>——Milvus 可以同时处理语义搜索和关键词搜索，从而减少 CDC 同步链路的复杂度和维护成本。对于只关心"全文 + 向量"混合检索的场景，这是一条值得关注的简化路径。</p>
   </div>
 </div>
@@ -529,7 +529,7 @@ sync_lag = Gauge(
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 多库同步的数据一致性挑战</strong>
+    <strong>多库同步的数据一致性挑战</strong>
     <ul style="margin-top: 0.5rem;">
       <li><strong>分布式事务缺失：</strong>MySQL 和 Milvus 之间无法使用 ACID 事务，双写或 CDC 都可能出现一侧成功、另一侧失败的情况</li>
       <li><strong>顺序性保证：</strong>CDC 消费者需要保证事件的顺序处理，否则可能出现"先删除后插入"被乱序为"先插入后删除"的问题</li>
@@ -540,7 +540,7 @@ sync_lag = Gauge(
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 监控建议：</strong>
+    <strong>监控建议：</strong>
     <ul style="margin-top: 0.5rem;">
       <li>使用Prometheus + Grafana监控同步延迟和QPS</li>
       <li>设置告警：同步延迟超过60秒告警</li>

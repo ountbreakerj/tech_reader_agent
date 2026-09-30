@@ -296,7 +296,10 @@ function inlineMarkdown(value, sourceFile) {
     const file = resolveImage(reference, sourceFile);
     const id = registerImage(file);
     if (!id) return `[图片未找到：${escapeHtml(reference)}]`;
-    const html = `<figure class="happy-figure"><img class="fig-img" src="@asset/${id}" alt="${escapeHtml(alt || 'Happy-LLM 图示')}" loading="lazy"><figcaption>${escapeHtml(alt || 'Happy-LLM 图示')}</figcaption></figure>`;
+    // 源 markdown 中的占位 alt（'alt text'、'图片描述' 等）视为缺失，走统一兜底
+    const cleaned = /^(alt text|图片描述|image|图片|插图)$/i.test((alt || '').trim()) ? '' : alt;
+    const label = cleaned || 'Happy-LLM 图示';
+    const html = `<figure class="happy-figure"><img class="fig-img" src="@asset/${id}" alt="${escapeHtml(label)}" loading="lazy"><figcaption>${escapeHtml(label)}</figcaption></figure>`;
     return placeholder(html);
   });
   text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => placeholder(`<span class="math-display-inline" role="math" aria-label="数学公式">${renderTex(formula)}</span>`));
@@ -307,6 +310,8 @@ function inlineMarkdown(value, sourceFile) {
   text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
   text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  // 指向相对 .md/.py/目录的链接在离线单文件中是死链，降级为纯文本
+  text = text.replace(/\[([^\]]+)\]\((?:\.\.?\/)[^)\s]+(?:\.md|\.py|\/)\)/g, '$1');
   return text.replace(/\u0000(\d+)\u0000/g, (_, index) => placeholders[Number(index)]);
 }
 

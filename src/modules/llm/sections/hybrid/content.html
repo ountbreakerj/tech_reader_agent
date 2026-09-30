@@ -5,7 +5,7 @@
 </div>
 
 <div class="callout callout-key" style="margin: 2rem 0;">
-  <strong>🔑 本模块核心内容：</strong>这是整个RAG教程最重要的模块。掌握混合检索算法和数据同步方案，是构建生产级RAG系统的关键。
+  <strong>本模块核心内容：</strong>这是整个RAG教程最重要的模块。掌握混合检索算法和数据同步方案，是构建生产级RAG系统的关键。
 </div>
 
 <div class="section" id="llm-hybrid-s1">
@@ -50,7 +50,7 @@
   </table>
 
   <div class="callout callout-warn">
-    <strong>⚠️ MySQL FULLTEXT的限制：</strong>MySQL的FULLTEXT搜索使用的是TF-IDF变体评分算法，<strong>不是真正的BM25</strong>。如果需要标准BM25评分，应使用Elasticsearch/OpenSearch或Milvus 2.5+的原生全文检索（基于tantivy引擎）。
+    <strong>MySQL FULLTEXT的限制：</strong>MySQL的FULLTEXT搜索使用的是TF-IDF变体评分算法，<strong>不是真正的BM25</strong>。如果需要标准BM25评分，应使用Elasticsearch/OpenSearch或Milvus 2.5+的原生全文检索（基于tantivy引擎）。
   </div>
 </div>
 
@@ -58,7 +58,7 @@
   <h2>多路召回算法</h2>
 
   <div class="callout callout-info">
-    <strong>📖 多路召回原理：</strong>同时使用多种检索方式（MySQL SQL + BM25 + 向量检索），分别召回一批结果，然后用融合算法合并排序，得到最终结果。
+    <strong>多路召回原理：</strong>同时使用多种检索方式（MySQL SQL + BM25 + 向量检索），分别召回一批结果，然后用融合算法合并排序，得到最终结果。
   </div>
 
   <h3>Reciprocal Rank Fusion (RRF)</h3>
@@ -145,7 +145,7 @@ sorted_docs = <span class="fn">sorted</span>(rrf_scores.items(), key=<span class
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 分数归一化问题：</strong>使用线性组合时，不同检索方法的分数量纲差异很大——余弦相似度有界 [0, 1]，但BM25分数无上界。不做归一化会导致某一路主导融合结果。常用归一化方法：
+    <strong>分数归一化问题：</strong>使用线性组合时，不同检索方法的分数量纲差异很大——余弦相似度有界 [0, 1]，但BM25分数无上界。不做归一化会导致某一路主导融合结果。常用归一化方法：
     <ul>
       <li><strong>Min-Max归一化：</strong>将分数映射到 [0, 1]，简单直观</li>
       <li><strong>Z-Score归一化：</strong>基于均值和标准差标准化，对异常值鲁棒</li>
@@ -275,7 +275,7 @@ sorted_docs = <span class="fn">sorted</span>(rrf_scores.items(), key=<span class
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 架构简化建议：</strong>如果使用Milvus 2.5+，可以直接用单个Milvus实例替代MySQL + Milvus双库方案，同时获得dense向量检索 + sparse检索 + 全文BM25检索三路召回能力，消除数据同步的复杂性。对于新项目，优先考虑原生混合检索方案。
+    <strong>架构简化建议：</strong>如果使用Milvus 2.5+，可以直接用单个Milvus实例替代MySQL + Milvus双库方案，同时获得dense向量检索 + sparse检索 + 全文BM25检索三路召回能力，消除数据同步的复杂性。对于新项目，优先考虑原生混合检索方案。
   </div>
 </div>
 
@@ -285,7 +285,7 @@ sorted_docs = <span class="fn">sorted</span>(rrf_scores.items(), key=<span class
   <p>在生产环境中，<strong>Elasticsearch</strong>和<strong>OpenSearch</strong>（AWS维护的ES开源分支）是BM25全文检索的行业标准方案，广泛应用于搜索引擎、日志分析和RAG系统。</p>
 
   <div class="callout callout-info">
-    <strong>📖 为什么生产环境推荐ES：</strong>
+    <strong>为什么生产环境推荐ES：</strong>
     <ul>
       <li><strong>真正的BM25实现：</strong>标准BM25评分，而非MySQL的TF-IDF变体</li>
       <li><strong>丰富的查询DSL：</strong>支持布尔查询、模糊匹配、同义词、自定义分析器</li>
@@ -295,7 +295,7 @@ sorted_docs = <span class="fn">sorted</span>(rrf_scores.items(), key=<span class
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 典型生产架构：</strong>Elasticsearch（BM25全文检索 + 结构化过滤）+ Milvus（向量语义检索），通过RRF或线性组合融合。这套组合是目前业界最常见的生产级RAG检索架构。
+    <strong>典型生产架构：</strong>Elasticsearch（BM25全文检索 + 结构化过滤）+ Milvus（向量语义检索），通过RRF或线性组合融合。这套组合是目前业界最常见的生产级RAG检索架构。
   </div>
 </div>
 

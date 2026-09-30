@@ -110,7 +110,7 @@
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 解读LR曲线：</strong>选择损失下降最快（曲线最陡）的地方对应的学习率，通常是最佳学习率的10倍作为最大值。
+    <strong>解读LR曲线：</strong>选择损失下降最快（曲线最陡）的地方对应的学习率，通常是最佳学习率的10倍作为最大值。
   </div>
 </div>
 
@@ -180,7 +180,7 @@ scheduler = get_cosine_schedule_with_warmup(
   <h2>WSD调度策略（2025-2026新趋势）</h2>
 
   <div class="callout callout-info">
-    <strong>📖 WSD（Warmup-Stable-Decay）调度：</strong>2025-2026年在大规模预训练中越来越流行的三阶段调度策略。DeepSeek V3/V4、MiniCPM等模型均采用了此策略。
+    <strong>WSD（Warmup-Stable-Decay）调度：</strong>2025-2026年在大规模预训练中越来越流行的三阶段调度策略。DeepSeek V3/V4、MiniCPM等模型均采用了此策略。
   </div>
 
   <div class="code-block-wrapper">
@@ -205,7 +205,7 @@ scheduler = get_cosine_schedule_with_warmup(
   <h2>学习率与批量大小的关系</h2>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 线性缩放规则：</strong>当你改变批量大小时，学习率也需要相应调整。这是一个常被忽略但非常重要的经验法则。
+    <strong>线性缩放规则：</strong>当你改变批量大小时，学习率也需要相应调整。这是一个常被忽略但非常重要的经验法则。
   </div>
 
   <div class="code-block-wrapper">
@@ -224,7 +224,7 @@ lr_new = lr_base * sqrt(new_batch_size / base_batch_size)
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 实践建议：</strong>从较小的batch size和学习率开始，逐步增大。如果增大batch size后训练不稳定，尝试使用square root缩放而非线性缩放。
+    <strong>实践建议：</strong>从较小的batch size和学习率开始，逐步增大。如果增大batch size后训练不稳定，尝试使用square root缩放而非线性缩放。
   </div>
 </div>
 
@@ -232,7 +232,7 @@ lr_new = lr_base * sqrt(new_batch_size / base_batch_size)
   <h2>muP：跨模型规模的超参数迁移</h2>
 
   <div class="callout callout-info">
-    <strong>📖 muP（Maximal Update Parametrization）：</strong>一种参数化方法，使得在小模型上调优的超参数可以直接迁移到大模型上使用，大幅降低大模型超参数搜索的成本。Cerebras、xAI等团队在训练大规模模型时已采用此方法。
+    <strong>muP（Maximal Update Parametrization）：</strong>一种参数化方法，使得在小模型上调优的超参数可以直接迁移到大模型上使用，大幅降低大模型超参数搜索的成本。Cerebras、xAI等团队在训练大规模模型时已采用此方法。
   </div>
 
   <div class="code-block-wrapper">

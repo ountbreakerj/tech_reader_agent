@@ -96,7 +96,7 @@ model = AutoModelForCausalLM.<span class="fn">from_pretrained</span>(
   <h2>推理核心概念</h2>
 
   <div class="callout callout-info">
-    <strong>📖 理解这些概念对于选择和优化推理方案至关重要。</strong>
+    <strong>理解这些概念对于选择和优化推理方案至关重要。</strong>
   </div>
 
   <h3>连续批处理（Continuous Batching）</h3>
@@ -262,7 +262,7 @@ curl http://localhost:8000/v1/completions \
   <h2>SGLang部署</h2>
 
   <div class="callout callout-info">
-    <strong>📖 SGLang（v0.5.10）：</strong>2025-2026年快速崛起的推理框架，与vLLM形成双雄竞争。其RadixAttention技术在多轮对话和结构化输出场景下表现优异。
+    <strong>SGLang（v0.5.10）：</strong>2025-2026年快速崛起的推理框架，与vLLM形成双雄竞争。其RadixAttention技术在多轮对话和结构化输出场景下表现优异。
   </div>
 
   <div class="code-block-wrapper">
@@ -288,7 +288,7 @@ curl http://localhost:30000/v1/chat/completions \
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 vLLM vs SGLang选择建议：</strong>
+    <strong>vLLM vs SGLang选择建议：</strong>
     <ul>
       <li><strong>通用推理服务</strong>：两者都很好，vLLM社区更大</li>
       <li><strong>多轮对话/Agent</strong>：SGLang的RadixAttention有天然优势</li>
@@ -302,7 +302,7 @@ curl http://localhost:30000/v1/chat/completions \
   <h2>TensorRT-LLM部署</h2>
 
   <div class="callout callout-info">
-    <strong>📖 TensorRT-LLM（v1.2.1）：</strong>NVIDIA官方的LLM推理优化引擎。通过算子融合、量化优化、自定义CUDA内核等技术，在NVIDIA GPU上实现极致推理性能。适合对延迟和吞吐量有严格要求的生产环境。
+    <strong>TensorRT-LLM（v1.2.1）：</strong>NVIDIA官方的LLM推理优化引擎。通过算子融合、量化优化、自定义CUDA内核等技术，在NVIDIA GPU上实现极致推理性能。适合对延迟和吞吐量有严格要求的生产环境。
   </div>
 
   <div class="code-block-wrapper">
@@ -333,7 +333,7 @@ python run.py \
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 注意事项：</strong>TensorRT-LLM需要为特定的模型架构和GPU型号构建引擎，不具有跨平台通用性。适合固定模型、固定硬件的大规模部署场景。
+    <strong>注意事项：</strong>TensorRT-LLM需要为特定的模型架构和GPU型号构建引擎，不具有跨平台通用性。适合固定模型、固定硬件的大规模部署场景。
   </div>
 </div>
 
@@ -341,7 +341,7 @@ python run.py \
   <h2>本地部署：GGUF + Ollama</h2>
 
   <div class="callout callout-info">
-    <strong>📖 GGUF格式：</strong>llama.cpp项目定义的模型格式，专为高效CPU/GPU混合推理设计。支持多种量化方案（Q4_K_M、Q5_K_M、Q8_0等），是本地部署LLM的事实标准格式。Ollama让本地部署变得极其简单。
+    <strong>GGUF格式：</strong>llama.cpp项目定义的模型格式，专为高效CPU/GPU混合推理设计。支持多种量化方案（Q4_K_M、Q5_K_M、Q8_0等），是本地部署LLM的事实标准格式。Ollama让本地部署变得极其简单。
   </div>
 
   <div class="code-block-wrapper">
@@ -368,7 +368,7 @@ curl http://localhost:11434/api/generate \
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 Ollama适用场景：</strong>
+    <strong>Ollama适用场景：</strong>
     <ul>
       <li>本地开发和测试（无需GPU服务器）</li>
       <li>隐私敏感场景（数据不离开本机）</li>
@@ -382,7 +382,7 @@ curl http://localhost:11434/api/generate \
   <h2>多LoRA服务</h2>
 
   <div class="callout callout-info">
-    <strong>📖 多LoRA服务：</strong>一个基座模型同时服务多个LoRA适配器。比如一个7B基座模型同时服务"法律助手""医疗助手""编程助手"三个不同LoRA，共享基座权重，大幅降低部署成本。
+    <strong>多LoRA服务：</strong>一个基座模型同时服务多个LoRA适配器。比如一个7B基座模型同时服务"法律助手""医疗助手""编程助手"三个不同LoRA，共享基座权重，大幅降低部署成本。
   </div>
 
   <div class="code-block-wrapper">
@@ -410,7 +410,7 @@ python -m sglang.launch_server \
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 多LoRA的优势：</strong>基座模型的显存只需加载一次（约14GB for 7B FP16），每个LoRA适配器仅额外占用几十MB。一个GPU即可服务多个专业领域模型，显著降低部署成本。
+    <strong>多LoRA的优势：</strong>基座模型的显存只需加载一次（约14GB for 7B FP16），每个LoRA适配器仅额外占用几十MB。一个GPU即可服务多个专业领域模型，显著降低部署成本。
   </div>
 </div>
 

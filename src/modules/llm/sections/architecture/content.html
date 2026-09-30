@@ -167,7 +167,7 @@
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 选型建议：</strong>学习阶段使用 <strong>Llama 3.1-8B</strong> 或 <strong>Qwen3-8B</strong>，生产环境根据具体需求选择。GPT-4的MoE架构从未被OpenAI官方确认，属于社区推测。
+    <strong>选型建议：</strong>学习阶段使用 <strong>Llama 3.1-8B</strong> 或 <strong>Qwen3-8B</strong>，生产环境根据具体需求选择。GPT-4的MoE架构从未被OpenAI官方确认，属于社区推测。
   </div>
 </div>
 
@@ -188,7 +188,7 @@
   </table>
 
   <div class="callout callout-key">
-    <strong>🔑 Flash Attention是最重要的效率创新：</strong>几乎所有2023年后的LLM训练和推理框架都内置了Flash Attention。它不改变注意力的数学结果，只是通过优化GPU内存访问模式（tiling + recomputation），将训练速度提升2-4倍，同时精确计算注意力（非近似）。
+    <strong>Flash Attention是最重要的效率创新：</strong>几乎所有2023年后的LLM训练和推理框架都内置了Flash Attention。它不改变注意力的数学结果，只是通过优化GPU内存访问模式（tiling + recomputation），将训练速度提升2-4倍，同时精确计算注意力（非近似）。
   </div>
 
   <h3>GQA vs MHA vs MLA</h3>
@@ -228,7 +228,7 @@
   </table>
 
   <div class="callout callout-info">
-    <strong>📖 MoE（混合专家模型）详解：</strong>MoE是当前最重要的架构趋势。例如 <strong>Llama 4 Scout</strong> 总参数109B但每次推理只激活17B参数（16个专家），<strong>DeepSeek V4</strong> 总参数1.6T但只激活49B。这意味着模型拥有超大知识容量，同时推理成本只与小模型相当。
+    <strong>MoE（混合专家模型）详解：</strong>MoE是当前最重要的架构趋势。例如 <strong>Llama 4 Scout</strong> 总参数109B但每次推理只激活17B参数（16个专家），<strong>DeepSeek V4</strong> 总参数1.6T但只激活49B。这意味着模型拥有超大知识容量，同时推理成本只与小模型相当。
   </div>
 </div>
 

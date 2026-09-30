@@ -61,7 +61,7 @@
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 数据集选择建议：</strong>学习阶段使用小规模数据集（如C4的子集或Wikipedia），生产环境使用The Pile或完整C4。
+    <strong>数据集选择建议：</strong>学习阶段使用小规模数据集（如C4的子集或Wikipedia），生产环境使用The Pile或完整C4。
   </div>
 
   <h3>私有数据</h3>
@@ -75,7 +75,7 @@
   </ul>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 数据版权注意：</strong>使用公开数据集前，务必检查其许可证（License）。有些数据集（如CommonCrawl）可能包含受版权保护的内容。
+    <strong>数据版权注意：</strong>使用公开数据集前，务必检查其许可证（License）。有些数据集（如CommonCrawl）可能包含受版权保护的内容。
   </div>
 </div>
 
@@ -156,7 +156,7 @@
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 语言检测推荐：</strong>生产环境建议使用 <strong>fastText lid.176</strong> 模型进行语言识别（支持176种语言），准确率远高于简单的字符比例判断。FineWeb、RedPajama、Dolma等主流数据集均采用此方案。
+    <strong>语言检测推荐：</strong>生产环境建议使用 <strong>fastText lid.176</strong> 模型进行语言识别（支持176种语言），准确率远高于简单的字符比例判断。FineWeb、RedPajama、Dolma等主流数据集均采用此方案。
   </div>
 
   <h3>困惑度（Perplexity）质量过滤</h3>
@@ -212,7 +212,7 @@ model = kenlm.<span class="fn">Model</span>(<span class="str">"zh.arpa.klm"</spa
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 PII去除推荐：</strong>仅使用正则表达式容易遗漏边界情况。生产环境建议使用微软开源的 <strong>Presidio</strong> 库（<code>pip install presidio-analyzer presidio-anonymizer</code>），它结合了正则、NLP实体识别和上下文分析，能更准确地识别姓名、地址、信用卡号等PII信息。
+    <strong>PII去除推荐：</strong>仅使用正则表达式容易遗漏边界情况。生产环境建议使用微软开源的 <strong>Presidio</strong> 库（<code>pip install presidio-analyzer presidio-anonymizer</code>），它结合了正则、NLP实体识别和上下文分析，能更准确地识别姓名、地址、信用卡号等PII信息。
   </div>
 </div>
 
@@ -319,7 +319,7 @@ tokens = enc.<span class="fn">encode</span>(text)
     </div>
 
     <div class="callout callout-info">
-      <strong>📖 分词器对比：</strong>
+      <strong>分词器对比：</strong>
       <ul style="margin-top: 0.5rem;">
         <li><strong>BPE</strong>：GPT系列、LLaMA系列使用</li>
         <li><strong>WordPiece</strong>：BERT系列使用</li>
@@ -549,7 +549,7 @@ lsh = MinHashLSH(threshold=<span class="num">0.8</span>, num_perm=<span class="n
   </div>
 
   <div class="callout callout-info">
-    <strong>📖 主流去重工具推荐：</strong>
+    <strong>主流去重工具推荐：</strong>
     <ul style="margin-top: 0.5rem;">
       <li><strong>text-dedup</strong>：集成多种去重算法（MinHash、SimHash、Suffix Array等），开箱即用</li>
       <li><strong>datatrove</strong>（HuggingFace）：大规模数据处理pipeline，包含MinHash去重模块</li>

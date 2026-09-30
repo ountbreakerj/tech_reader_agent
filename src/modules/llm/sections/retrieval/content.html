@@ -77,7 +77,7 @@ top_idx = np.argmax(scores)
   <p>BM25是TF-IDF的改进版本，引入了文档长度归一化和词频饱和度控制：</p>
 
   <div class="callout callout-info">
-    <strong>📖 BM25公式：</strong><br>
+    <strong>BM25公式：</strong><br>
     <code>score(D, Q) = Σ IDF(qi) * [f(qi, D) * (k1 + 1)] / [f(qi, D) + k1 * (1 - b + b * |D| / avgdl)]</code><br><br>
     其中：<code>f(qi, D)</code> = 词qi在文档D中的词频，<code>|D|</code> = 文档长度，<code>avgdl</code> = 平均文档长度<br>
     <code>k1 = 1.2</code>（词频饱和参数），<code>b = 0.75</code>（文档长度归一化参数）<br>
@@ -130,11 +130,11 @@ top_idx = np.argmax(similarities)
   </table>
 
   <div class="callout callout-info">
-    <strong>📖 注意区分算法和库：</strong>FAISS（Meta）、Milvus、Annoy 是<strong>库</strong>，它们内部实现了上述多种算法。例如 FAISS 同时支持 IVF、HNSW、PQ 等多种索引类型。选择时应根据算法特性决定，而非仅看库名称。
+    <strong>注意区分算法和库：</strong>FAISS（Meta）、Milvus、Annoy 是<strong>库</strong>，它们内部实现了上述多种算法。例如 FAISS 同时支持 IVF、HNSW、PQ 等多种索引类型。选择时应根据算法特性决定，而非仅看库名称。
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 算法选择：</strong>
+    <strong>算法选择：</strong>
     <ul>
       <li>数据量<1000万：HNSW（精度最高，推荐首选）</li>
       <li>数据量1000万-1亿：IVF + HNSW</li>
@@ -154,7 +154,7 @@ top_idx = np.argmax(similarities)
   <p>SPLADE（Sparse Lexical and Expansion）是代表性模型，通过掩码语言模型（MLM）的权重来学习词项重要性，并自动扩展相关词汇。例如查询"机器学习"时，SPLADE可能自动扩展出"深度学习"、"神经网络"等相关词项。</p>
 
   <div class="callout callout-tip">
-    <strong>💡 实践推荐：</strong>BGE-M3模型原生支持sparse retrieval，一个模型同时产出dense、sparse和ColBERT三种表征，是目前多语言场景下的最佳选择。SPLADE在英文benchmark上表现优异，但中文支持较弱。
+    <strong>实践推荐：</strong>BGE-M3模型原生支持sparse retrieval，一个模型同时产出dense、sparse和ColBERT三种表征，是目前多语言场景下的最佳选择。SPLADE在英文benchmark上表现优异，但中文支持较弱。
   </div>
 
   <table>
@@ -176,7 +176,7 @@ top_idx = np.argmax(similarities)
   <p>与传统单向量模型将整个文档压缩为一个向量不同，ColBERT为文档中的每个token生成独立的上下文向量。检索时使用MaxSim评分：</p>
 
   <div class="callout callout-info">
-    <strong>📖 MaxSim公式：</strong><br>
+    <strong>MaxSim公式：</strong><br>
     <code>Score(Q, D) = Σ_i max_j cosine_similarity(E_qi, E_dj)</code><br><br>
     对查询中的每个token，找到文档中与其最相似的token（取最大余弦相似度），然后将所有查询token的最大相似度求和。这样既保留了token级别的语义细节，又能高效计算。
   </div>
@@ -188,7 +188,7 @@ top_idx = np.argmax(similarities)
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 ColBERT的双重角色：</strong>ColBERT既可作为第一阶段检索器（直接在token向量上做ANN检索），也可作为重排序器（对初筛结果精细打分）。BGE-M3模型的ColBERT表征可用于这两个阶段，实现端到端的高质量检索。
+    <strong>ColBERT的双重角色：</strong>ColBERT既可作为第一阶段检索器（直接在token向量上做ANN检索），也可作为重排序器（对初筛结果精细打分）。BGE-M3模型的ColBERT表征可用于这两个阶段，实现端到端的高质量检索。
   </div>
 </div>
 

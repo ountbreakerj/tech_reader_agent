@@ -38,7 +38,7 @@
   </table>
 
   <div class="callout callout-info">
-    <strong>📖 扩展知识：</strong>现代应用往往需要多种数据库协同工作（多库架构）。例如：MySQL存用户数据 + Milvus存向量 + Redis做缓存。此外，越来越多的数据库开始<strong>原生支持混合搜索</strong>（向量+全文检索），如 PostgreSQL 的 pgvector + tsvector 组合、Milvus 2.5+ 内置的 BM25 全文检索等，使得单库即可完成多种检索任务。
+    <strong>扩展知识：</strong>现代应用往往需要多种数据库协同工作（多库架构）。例如：MySQL存用户数据 + Milvus存向量 + Redis做缓存。此外，越来越多的数据库开始<strong>原生支持混合搜索</strong>（向量+全文检索），如 PostgreSQL 的 pgvector + tsvector 组合、Milvus 2.5+ 内置的 BM25 全文检索等，使得单库即可完成多种检索任务。
   </div>
 </div>
 
@@ -86,7 +86,7 @@
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 我的建议：</strong>如果是新项目且没有历史包袱，推荐PostgreSQL。它的功能更全面，长期来看更不容易遇到瓶颈。
+    <strong>我的建议：</strong>如果是新项目且没有历史包袱，推荐PostgreSQL。它的功能更全面，长期来看更不容易遇到瓶颈。
   </div>
 </div>
 
@@ -131,7 +131,7 @@
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 pgvector：已有PostgreSQL团队的最佳选择</strong>
+    <strong>pgvector：已有PostgreSQL团队的最佳选择</strong>
     <ul style="margin-top: 0.5rem;">
       <li>pgvector 是 PostgreSQL 的向量检索扩展，安装后即可在熟悉的 PG 实例中存储和查询向量</li>
       <li>无需额外部署和运维独立的向量数据库，降低架构复杂度</li>
@@ -142,7 +142,7 @@
   </div>
 
   <div class="callout callout-info">
-    <strong>📖 MySQL 9.x VECTOR 类型（实验性）</strong>
+    <strong>MySQL 9.x VECTOR 类型（实验性）</strong>
     <p style="margin-top: 0.3rem;">MySQL 9.0+ 开始引入原生 <code>VECTOR</code> 数据类型和向量距离函数，标志着 MySQL 也在向量检索领域发力。目前该特性仍处于实验性阶段，功能和索引支持远不如 pgvector 成熟。如果你的团队使用 MySQL 且对向量检索需求较轻，可以持续关注其演进；生产环境仍建议搭配 Milvus 或 pgvector。</p>
   </div>
 
@@ -199,11 +199,11 @@ graph TB
   </table>
 
   <div class="callout callout-tip">
-    <strong>💡 实践建议：</strong>大多数RAG应用采用最终一致性方案即可。用户数据存MySQL，向量数据存Milvus，通过CDC或双写保持同步，允许几秒钟的延迟。
+    <strong>实践建议：</strong>大多数RAG应用采用最终一致性方案即可。用户数据存MySQL，向量数据存Milvus，通过CDC或双写保持同步，允许几秒钟的延迟。
   </div>
 
   <div class="callout callout-info">
-    <strong>📖 混合搜索新趋势：</strong>传统架构需要 MySQL + Milvus 两套系统分别负责关键词检索和向量检索。随着技术演进，<strong>混合搜索正逐渐走向原生化</strong>：PostgreSQL 通过 pgvector + tsvector 可在单库内同时完成语义搜索和全文搜索；Milvus 2.5+ 内置了 BM25 全文检索能力，不再需要为关键词搜索单独维护一个 MySQL。对于新建项目，简化架构、减少数据同步复杂度是一个值得考虑的方向。
+    <strong>混合搜索新趋势：</strong>传统架构需要 MySQL + Milvus 两套系统分别负责关键词检索和向量检索。随着技术演进，<strong>混合搜索正逐渐走向原生化</strong>：PostgreSQL 通过 pgvector + tsvector 可在单库内同时完成语义搜索和全文搜索；Milvus 2.5+ 内置了 BM25 全文检索能力，不再需要为关键词搜索单独维护一个 MySQL。对于新建项目，简化架构、减少数据同步复杂度是一个值得考虑的方向。
   </div>
 </div>
 

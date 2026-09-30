@@ -79,7 +79,7 @@ writer.close()</code></pre>
   <h3>过拟合信号</h3>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 过拟合警告信号：</strong>
+    <strong>过拟合警告信号：</strong>
     <ul>
       <li>训练损失持续下降，但验证损失开始上升</li>
       <li>验证准确率在达到峰值后开始下降</li>
@@ -176,7 +176,7 @@ optimizer.step()</code></pre>
   </div>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 梯度裁剪值选择：</strong>max_norm=1.0是常用默认值。LLM训练中常见范围为0.5-5.0。如果梯度范数频繁触及裁剪阈值，说明学习率可能过大。
+    <strong>梯度裁剪值选择：</strong>max_norm=1.0是常用默认值。LLM训练中常见范围为0.5-5.0。如果梯度范数频繁触及裁剪阈值，说明学习率可能过大。
   </div>
 </div>
 
@@ -194,7 +194,7 @@ optimizer.step()</code></pre>
   </table>
 
   <div class="callout callout-info">
-    <strong>📖 MFU（Model FLOPs Utilization）：</strong>衡量实际训练速度与GPU理论峰值算力的比值。MFU = 实际FLOPs / 峰值FLOPs。这是衡量训练效率的黄金指标。PaLM论文报告的MFU约46%，现代优化后可达50%-60%。
+    <strong>MFU（Model FLOPs Utilization）：</strong>衡量实际训练速度与GPU理论峰值算力的比值。MFU = 实际FLOPs / 峰值FLOPs。这是衡量训练效率的黄金指标。PaLM论文报告的MFU约46%，现代优化后可达50%-60%。
   </div>
 
   <div class="code-block-wrapper">
@@ -238,7 +238,7 @@ gpu_util = torch.cuda.utilization()
   <h2>训练损失突刺（Loss Spike）处理</h2>
 
   <div class="callout callout-warn">
-    <strong>⚠️ 真实训练中的常见问题：</strong>在长时间的大模型训练中，损失曲线偶尔会出现突然飙升（loss spike），这是非常常见的现象。如何处理loss spike是LLM训练工程师的核心技能之一。
+    <strong>真实训练中的常见问题：</strong>在长时间的大模型训练中，损失曲线偶尔会出现突然飙升（loss spike），这是非常常见的现象。如何处理loss spike是LLM训练工程师的核心技能之一。
   </div>
 
   <h3>Loss Spike的常见原因</h3>
@@ -273,7 +273,7 @@ loss = outputs.loss
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 业界经验：</strong>GPT-4的训练报告中提到，整个训练过程出现了约20次loss spike。Meta的LLaMA训练中也观察到类似现象。关键是：保存足够频繁的checkpoint，以及有自动检测和回滚机制。
+    <strong>业界经验：</strong>GPT-4的训练报告中提到，整个训练过程出现了约20次loss spike。Meta的LLaMA训练中也观察到类似现象。关键是：保存足够频繁的checkpoint，以及有自动检测和回滚机制。
   </div>
 </div>
 
@@ -351,7 +351,7 @@ mlflow.set_experiment(<span class="str">"llm-training"</span>)
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 工具选择建议：</strong>
+    <strong>工具选择建议：</strong>
     <ul>
       <li><strong>TensorBoard</strong>：轻量，适合个人实验，PyTorch内置支持</li>
       <li><strong>WandB</strong>：功能最丰富，支持协作，免费额度足够个人使用</li>
@@ -364,7 +364,7 @@ mlflow.set_experiment(<span class="str">"llm-training"</span>)
   <h2>权重分布监控</h2>
 
   <div class="callout callout-info">
-    <strong>📖 权重分布监控：</strong>除了损失和准确率，监控模型权重和激活值的分布变化也很重要。权重突然变大或变小可能预示训练问题。
+    <strong>权重分布监控：</strong>除了损失和准确率，监控模型权重和激活值的分布变化也很重要。权重突然变大或变小可能预示训练问题。
   </div>
 
   <div class="code-block-wrapper">
@@ -395,7 +395,7 @@ mlflow.set_experiment(<span class="str">"llm-training"</span>)
   </div>
 
   <div class="callout callout-tip">
-    <strong>💡 监控要点：</strong>如果某层的权重标准差持续增大，可能出现权重爆炸；如果梯度标准差持续接近0，该层可能无法学习。关注"dead neurons"——输出恒为0的神经元。
+    <strong>监控要点：</strong>如果某层的权重标准差持续增大，可能出现权重爆炸；如果梯度标准差持续接近0，该层可能无法学习。关注"dead neurons"——输出恒为0的神经元。
   </div>
 </div>
 
