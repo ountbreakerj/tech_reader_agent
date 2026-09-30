@@ -28,6 +28,8 @@
   /* ========== helpers ========== */
   function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
   function show(el, v) { el.hidden = !v; }
+  // TOC 分组标题统一去掉前导 emoji（菜单页保留，作模块识别色载体）
+  function stripEmoji(s) { return String(s).replace(/^[\p{Extended_Pictographic}\uFE0F\u200D\u20E3]+\s*/u, ""); }
   function syncTopbarHeight() {
     document.documentElement.style.setProperty("--reader-topbar-height", $("#topbar").getBoundingClientRect().height + "px");
   }
@@ -98,7 +100,7 @@
         var gt = document.createElement("div");
         gt.className = "toc-group-title toc-depth-" + depth + (entry.fold ? " collapsible" : "");
         gt.innerHTML = "<span></span><span class='chev'>▼</span>";
-        gt.firstChild.textContent = entry.t;
+        gt.firstChild.textContent = stripEmoji(entry.t);
         var items = document.createElement("div");
         items.className = "toc-items toc-depth-" + depth;
         if (entry.id) items.appendChild(makeTocLink({ id: entry.id, t: "分类目录" }, depth + 1));
@@ -140,7 +142,7 @@
     if (target) target.classList.add("reader-anchor");
     var a = document.createElement("a");
     a.className = "toc-link" + (node.lvl === 2 ? " lvl2" : node.lvl === 3 ? " lvl3" : "") + (depth > 0 ? " toc-depth-" + depth : "");
-    a.textContent = node.t;
+    a.textContent = stripEmoji(node.t);
     a.dataset.target = node.id;
     a.href = MODULES[currentMod].route + "?section=" + encodeURIComponent(node.id);
     a.addEventListener("click", function (ev) {
@@ -398,12 +400,12 @@
     }
     if (tpPop && tpPop.classList.contains("open")) {
       if (e.key === "Escape") tpClose();
-      else if (e.key === "Enter") { e.preventDefault(); tpGotoChapter(); }
+      else if (e.key === "Enter" && !(e.target.closest && e.target.closest("button, a, input, select, [role='button']"))) { e.preventDefault(); tpGotoChapter(); }
       return;
     }
     if (resumeDlg && resumeDlg.classList.contains("open")) {
       if (e.key === "Escape") resumeClose();
-      else if (e.key === "Enter") { e.preventDefault(); resumeGo(); }
+      else if (e.key === "Enter" && !(e.target.closest && e.target.closest("button, a, input, select, [role='button']"))) { e.preventDefault(); resumeGo(); }
       return;
     }
     if (lightbox.classList.contains("open")) {
@@ -742,7 +744,7 @@
 
   function collectMedia() {
     lbItems = [];
-    $$("#mod-book .fig-img, #mod-codex-harness .fig-img").forEach(function (img) {
+    $$("#mod-book .fig-img, #mod-codex-harness .fig-img, #mod-llm .fig-img, #mod-llm .happy-gallery-item img").forEach(function (img) {
       lbItems.push({ kind: "img", src: img.src, cap: img.alt || "" });
     });
     $$(".diagram", document.getElementById("mod-lg")).forEach(function (d, i) {
@@ -820,7 +822,7 @@
       }
     }
     var imageButton = e.target.closest(".cx-diagram-open");
-    var img = imageButton ? $(".fig-img", imageButton) : e.target.closest(".fig-img");
+    var img = imageButton ? $(".fig-img", imageButton) : e.target.closest(".fig-img, .happy-gallery-item img");
     if (img) {
       var items = lbItems.filter(function (x) { return x.kind === "img"; });
       var found = null;

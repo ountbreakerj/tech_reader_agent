@@ -1,0 +1,28 @@
+{
+  "verdict": "pass",
+  "scope": ["#/", "#/book", "#/dsh", "#/harness", "#/codex-harness", "#/langgraph", "#/llm", "desktop", "mobile", "dark", "light"],
+  "findings": [],
+  "resolvedFindings": [
+    {"severity": "blocking", "role": "ux", "location": "app.js keydown / #resumeDlg #tpPop", "evidence": "焦点在「留在首页」或「✕」按钮上按 Enter 会触发主操作（反向操作）", "resolution": "Enter 映射主操作前检测 e.target 是否为可交互元素；T1/T2 行为测试通过"},
+    {"severity": "major", "role": "ui", "location": "shell.css #pager", "evidence": "max-width 固定 980px，调整正文宽度后翻页栏与正文错位", "resolution": "改为 var(--reader-width) 且 padding 对齐 .chapter；T5 通过"},
+    {"severity": "major", "role": "ux", "location": "#mod-llm 图片", "evidence": "约 191 张图片无灯箱（collectMedia 未收集）", "resolution": "82 张正文图补 fig-img 类 + 109 张画廊图纳入收集；T3 通过；生成器 import-happy-llm.mjs 同步修复"},
+    {"severity": "major", "role": "art", "location": "llm happy-images 画廊", "evidence": "109 个 alt/figcaption 为原始文件路径", "resolution": "全部改为语义化图注（章节·图号/主题 slug）；T6 通过；生成器同步"},
+    {"severity": "major", "role": "ui", "location": "#/ 首页", "evidence": "auto-fit 网格在桌面产生 3+1 孤儿卡片", "resolution": "桌面锁定 2×2，≤660px 单列；双主题截图确认"},
+    {"severity": "minor", "role": "ui", "location": "llm mysql/style.css", "evidence": "290 行三倍重复", "resolution": "按级联超集规则安全去重为单份（6599 字节）"},
+    {"severity": "minor", "role": "ui", "location": "全局圆角", "evidence": "12+ 种圆角值", "resolution": "收敛为 6/10/16/pill 四档（--radius:16, --radius-s:10 及 5 处硬编码归并）"},
+    {"severity": "minor", "role": "ui", "location": "harness/learning-menu CTA", "evidence": "识别色红/蓝用于「进入深析/查看章节」链接，近似错误态", "resolution": "CTA 统一 var(--accent-2)，识别色保留在 .sub 徽章；T7 通过（151 个 CTA 同一颜色）"},
+    {"severity": "minor", "role": "accessibility", "location": "全局动效", "evidence": "无 prefers-reduced-motion 降级", "resolution": "新增媒体查询：滚动改 auto，动画/过渡时长归零"},
+    {"severity": "minor", "role": "ui", "location": "TOC 侧栏", "evidence": "分组标题 emoji 有无不一（llm 全有、lg 零星、其余无）", "resolution": "stripEmoji 统一去除 TOC 前导 emoji（分组+链接）；菜单页保留；T4/T8 通过"},
+    {"severity": "minor", "role": "accessibility", "location": "全局焦点", "evidence": ":focus-visible 定制样式仅 TOC 有", "resolution": "新增全局 :focus-visible 2px accent 焦点环"}
+  ],
+  "checks": [
+    "node build.mjs（SHA-256 05c5745681e8e27181f59bf92e57ba91e914633582dfc3a3e899afefdb18c2bd）",
+    "node verify.mjs 通过（6 模块 / 101 正文单元 / 1248 DOM id / 227 图片）",
+    "node tools/assets.mjs audit 通过（227 资源）",
+    "行为自测套件 9/9 PASS（T1-T9：Enter 劫持修复、主操作保留、llm 灯箱、TOC 无 emoji、pager 跟随宽度、图注语义化、CTA 颜色统一、harness TOC 颜色正常）",
+    "桌面暗色/浅色截图复核（home、book、dsh、harness、codex-harness、langgraph、llm）",
+    "移动视口截图复核（home/book；注：本机 headless 最小视口 492 CSS px，真实 390px 经 CSS 推断验证）",
+    "node --check 语法校验 app.js / import-happy-llm.mjs 通过",
+    "改动 CSS 文件花括号平衡检查通过（shell/harness/shared/mysql）"
+  ]
+}

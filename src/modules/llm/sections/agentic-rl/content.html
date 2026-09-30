@@ -2,7 +2,7 @@
 <p>当 Agent 真正进入搜索、代码执行等环境后，仅靠监督微调已经很难覆盖所有可能的交互轨迹。模型需要自己尝试动作，根据最终结果判断一条轨迹是否有效，再把成功经验更新到策略中。大模型强化学习由此从“让回答更符合偏好”，逐步走向“让模型在环境中学会行动”。</p>
 <p>本章围绕四个彼此衔接的主题展开。首先介绍当前大模型强化学习中使用广泛的 Group Relative Policy Optimization（GRPO），建立 rollout、reward、advantage 与策略更新的完整认识；随后介绍 On-Policy Distillation（OPD），观察 Student 如何在自己的状态分布上持续获得 Teacher 的逐 token 指导；最后以 Search-R1 和 ReTool 为例，把同一套训练框架扩展到搜索引擎与代码解释器，完成两条可以运行的 Agentic RL 实践。</p>
 <div align='center'>
-    <img src="@asset/happy-llm/docs/images/8-images/8-1-chapter-roadmap-64675d8865.png" alt="第八章内容结构" width="90%">
+    <img class="fig-img" src="@asset/happy-llm/docs/images/8-images/8-1-chapter-roadmap-64675d8865.png" alt="第八章内容结构" width="90%">
     <p>图 8.1 第八章内容结构</p>
 </div>
 <p>本章全部示例均使用 PyTRIO 0.2.6。PyTRIO 将本地的数据处理、环境交互和训练控制，与远端的模型采样、前向反向传播和权重管理连接起来。四个示例虽然任务不同，核心链路始终可以概括为：</p>
@@ -45,7 +45,7 @@ print(service_client.get_supported_models())</code></pre></div>
 <div class="math-display" role="math" aria-label="数学公式">A<sub>i</sub> = <span class="mfrac"><span class="mnum">r<sub>i</sub>-<span class="mtext">mean</span>(r<sub>1</sub>,…,r<sub>G</sub>)</span><span class="mden"><span class="mtext">std</span>(r<sub>1</sub>,…,r<sub>G</sub>)+ϵ</span></span>.</div>
 <p>这样一来，同一道题中的高分回答获得正 advantage，低分回答获得负 advantage。问题本身的难度被组内基线抵消，策略可以更专注地学习“在相同条件下，哪些生成方式更好”。</p>
 <div align='center'>
-    <img src="@asset/happy-llm/docs/images/8-images/8-2-grpo-0bde8229c0.png" alt="GRPO 的分组采样与策略更新" width="90%">
+    <img class="fig-img" src="@asset/happy-llm/docs/images/8-images/8-2-grpo-0bde8229c0.png" alt="GRPO 的分组采样与策略更新" width="90%">
     <p>图 8.2 GRPO 的分组采样与策略更新</p>
 </div>
 <p>例如，对同一道数学题采样 4 个回答，规则判题器得到奖励 <span class="math" role="math" aria-label="数学公式">[1,0,0,1]</span>。组内均值为 <span class="math" role="math" aria-label="数学公式">0.5</span>，只做均值中心化时，4 个 advantage 分别为：</p>
@@ -396,7 +396,7 @@ python docs/chapter8/grpo/01-demo-sync.py \
 <li><strong>Student update</strong>：根据两者的概率差构造逐 token 信号并更新 Student。</li>
 </ol>
 <div align='center'>
-    <img src="@asset/happy-llm/docs/images/8-images/8-3-opd-b6038659f3.png" alt="OPD 在 Student 自身轨迹上获得 Teacher 反馈" width="90%">
+    <img class="fig-img" src="@asset/happy-llm/docs/images/8-images/8-3-opd-b6038659f3.png" alt="OPD 在 Student 自身轨迹上获得 Teacher 反馈" width="90%">
     <p>图 8.3 OPD 在 Student 自身轨迹上获得 Teacher 反馈</p>
 </div>
 <p>图 8.3 中，Teacher 只进行前向计算。Student 的采样动作也不参与反向传播，梯度从构造好的训练目标回到当前 Student 参数。这种停止梯度的边界使 OPD 可以直接复用现有 rollout 与策略优化基础设施。</p>
@@ -829,7 +829,7 @@ Tool: He was born in Lyon, France ...
 Assistant: Answer: France</code></pre></div>
 <p>第二次搜索词依赖第一次 observation，因此无法在 rollout 开始前一次性确定。训练代码需要维护环境状态，并在每个 assistant turn 后解析模型动作。</p>
 <div align='center'>
-    <img src="@asset/happy-llm/docs/images/8-images/8-4-search-r1-993f6f7d2a.png" alt="Search-R1 的多轮搜索与 observation mask" width="90%">
+    <img class="fig-img" src="@asset/happy-llm/docs/images/8-images/8-4-search-r1-993f6f7d2a.png" alt="Search-R1 的多轮搜索与 observation mask" width="90%">
     <p>图 8.4 Search-R1 的多轮搜索与 observation mask</p>
 </div>
 <p>Search-R1 论文使用 <code>&lt;search&gt;... &lt;/search&gt;</code> 和 <code>&lt;information&gt;... &lt;/information&gt;</code> 等文本标签表示动作与观察。本章使用 Qwen3.5-4B 模型，采用模型原生 function calling 模板：</p>
@@ -1792,7 +1792,7 @@ Tool: 128
 Assistant: \boxed{128}</code></pre></div>
 <p>从强化学习角度看，代码、执行错误、数值结果和最终回答共同构成轨迹。代码解释器是环境，Assistant 生成的工具调用与自然语言答案都是动作，stdout 或 stderr 是 observation。</p>
 <div align='center'>
-    <img src="@asset/happy-llm/docs/images/8-images/8-5-retool-60716ed0c6.png" alt="ReTool 的多轮代码执行与结果奖励" width="90%">
+    <img class="fig-img" src="@asset/happy-llm/docs/images/8-images/8-5-retool-60716ed0c6.png" alt="ReTool 的多轮代码执行与结果奖励" width="90%">
     <p>图 8.5 ReTool 的多轮代码执行与结果奖励</p>
 </div>
 <p>ReTool 不需要为“调用了工具”单独加分。最终答案 reward 会通过轨迹级 advantage 传递到前面的代码动作。这样，只有真正帮助任务成功的工具使用方式会得到正向信号，冗余或误导性的调用会随失败轨迹受到抑制。</p>

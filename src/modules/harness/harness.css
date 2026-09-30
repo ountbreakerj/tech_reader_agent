@@ -25,15 +25,15 @@
 .harness-head { padding: 12px 0 22px; }
 .harness-head > p { max-width: 780px; color: var(--text-dim); }
 .harness-scope .home-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0; gap: 18px; }
-.harness-scope .home-card { border-radius: 8px; padding: 22px; min-width: 0; box-shadow: none; background: var(--bg-soft); }
+.harness-scope .home-card { border-radius: 10px; padding: 22px; min-width: 0; box-shadow: none; background: var(--bg-soft); }
 .harness-scope .home-card:hover { transform: none; border-color: var(--h-green); }
 .harness-scope .home-card h2 { font-size: 20px; margin: 0 0 4px; }
 .harness-scope .home-card h3 { font-size: 16.5px; margin: 0 0 6px; }
 .harness-scope .home-card .sub { color: var(--h-green); margin: 0 0 10px; }
 .harness-scope .home-card .desc { font-size: 14px; line-height: 1.8; }
-.harness-scope .home-card .go { color: var(--h-green); }
-.harness-scope .home-card:nth-child(2) .sub, .harness-scope .home-card:nth-child(2) .go { color: var(--h-blue); }
-.harness-scope .home-card:nth-child(3) .sub, .harness-scope .home-card:nth-child(3) .go { color: var(--h-coral); }
+.harness-scope .home-card .go { color: var(--accent-2); }
+.harness-scope .home-card:nth-child(2) .sub { color: var(--h-blue); }
+.harness-scope .home-card:nth-child(3) .sub { color: var(--h-coral); }
 .harness-meta { color: var(--text-dim); font-size: 12px; margin-top: 16px; }
 .harness-section { margin-top: 34px; padding-top: 26px; border-top: 1px solid var(--border); }
 .harness-scope .harness-flow { list-style: none; padding: 0; margin: 24px 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }

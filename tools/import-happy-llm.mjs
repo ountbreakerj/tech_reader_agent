@@ -296,7 +296,7 @@ function inlineMarkdown(value, sourceFile) {
     const file = resolveImage(reference, sourceFile);
     const id = registerImage(file);
     if (!id) return `[图片未找到：${escapeHtml(reference)}]`;
-    const html = `<figure class="happy-figure"><img src="@asset/${id}" alt="${escapeHtml(alt || 'Happy-LLM 图示')}" loading="lazy"><figcaption>${escapeHtml(alt || 'Happy-LLM 图示')}</figcaption></figure>`;
+    const html = `<figure class="happy-figure"><img class="fig-img" src="@asset/${id}" alt="${escapeHtml(alt || 'Happy-LLM 图示')}" loading="lazy"><figcaption>${escapeHtml(alt || 'Happy-LLM 图示')}</figcaption></figure>`;
     return placeholder(html);
   });
   text = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => placeholder(`<span class="math-display-inline" role="math" aria-label="数学公式">${renderTex(formula)}</span>`));
@@ -499,10 +499,25 @@ function sourceSection(source) {
 }
 
 const galleryId = 'llm-happy-images';
+// 把 docs/images/2-figures/1-1.png 这类来源路径转成可读的图注
+const GALLERY_SPECIAL = { 'datawhale': 'Datawhale 标识', 'head': 'Happy-LLM 封面', 'star-history-20251017': 'Star 增长曲线（2025-10）' };
+function humanizeSlug(s) { return s.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').trim(); }
+function galleryCaption(rel) {
+  const num = rel.match(/(\d+)-(?:figures|images)\/([0-9]+(?:-[0-9]+)?)/);
+  if (num) return { cap: `第 ${num[1]} 章 · 图 ${num[2]}`, alt: `Happy-LLM 第 ${num[1]} 章插图 · 图 ${num[2]}` };
+  const base = rel.split('/').pop().replace(/\.[a-z0-9]+$/i, '');
+  if (GALLERY_SPECIAL[base]) return { cap: GALLERY_SPECIAL[base], alt: `Happy-LLM ${GALLERY_SPECIAL[base]}` };
+  const chapDir = rel.match(/(\d+)-(?:figures|images)\//);
+  if (chapDir) return { cap: `第 ${chapDir[1]} 章 · ${humanizeSlug(base)}`, alt: `Happy-LLM 第 ${chapDir[1]} 章插图 · ${humanizeSlug(base)}` };
+  const extra = rel.match(/extra-chapter\/([^/]+)\//);
+  if (extra) return { cap: `番外 · ${humanizeSlug(extra[1])} · ${humanizeSlug(base)}`, alt: `Happy-LLM 番外插图 · ${humanizeSlug(extra[1])}` };
+  const human = humanizeSlug(base);
+  return human ? { cap: human, alt: `Happy-LLM 插图 · ${human}` } : { cap: 'Happy-LLM 教程插图', alt: 'Happy-LLM 教程插图' };
+}
 const galleryEntries = imageFiles
   .sort((a, b) => path.relative(HAPPY_ROOT, a).localeCompare(path.relative(HAPPY_ROOT, b)))
   .map((file) => ({ file, id: registerImage(file), rel: path.relative(HAPPY_ROOT, file).replaceAll('\\', '/') }))
-  .map(({ id, rel }) => `<figure class="happy-gallery-item"><img src="@asset/${id}" alt="${escapeHtml(rel)}" loading="lazy"><figcaption>${escapeHtml(rel)}</figcaption></figure>`)
+  .map(({ id, rel }) => { const { cap, alt } = galleryCaption(rel); return `<figure class="happy-gallery-item"><img src="@asset/${id}" alt="${escapeHtml(alt)}" loading="lazy"><figcaption>${escapeHtml(cap)}</figcaption></figure>`; })
   .join('\n');
 const gallery = `<section class="llm-mod llm-m-happy-source llm-m-happy-images" id="${galleryId}"><div class="module-wrapper"><div class="llm-hero" style="--hero-a:#7c3aed;--hero-b:#db2777;"><h1>🖼️ Happy-LLM 图片资源库</h1><p>109 张教程与专题图片全部本地内嵌，离线打开也可查看</p><div class="source-meta">资源登记：src/assets/manifest.json · 无文件大小上限</div></div><details class="happy-gallery-details"><summary>展开全部图片（${imageFiles.length} 张）</summary><div class="happy-gallery">${galleryEntries}</div></details></div></section>`;
 

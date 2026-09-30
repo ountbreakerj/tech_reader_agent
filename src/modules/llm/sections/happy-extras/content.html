@@ -102,7 +102,7 @@ def main():
 if __name__ == &quot;__main__&quot;:
     main()    </code></pre></div>
 <p>Tokens: [&#39;Hello&#39;, &#39;,&#39;, &#39;how&#39;, &#39;are&#39;, &#39;you&#39;, &#39;today&#39;, &#39;?&#39;, &#39;I&#39;, &#39;hope&#39;, &#39;you&#39;, &#39;are&#39;, &#39;doing&#39;, &#39;well&#39;, &#39;.&#39;] Vocabulary size: 14 Vocabulary: {&#39;,&#39;: 0, &#39;.&#39;: 1, &#39;&lt;pad&gt;&#39;: 2, &#39;&lt;unk&gt;&#39;: 3, &#39;?&#39;: 4, &#39;Hello&#39;: 5, &#39;I&#39;: 6, &#39;are&#39;: 7, &#39;doing&#39;: 8, &#39;hope&#39;: 9, &#39;how&#39;: 10, &#39;today&#39;: 11, &#39;well&#39;: 12, &#39;you&#39;: 13} Encoded text: [5, 0, 10, 7, 13, 11, 4, 6, 9, 13, 7, 8, 12, 1] Embeddings shape: torch.Size([14, 10]) Word vector for &#39;Hello&#39;: [-0.16787808 -0.46388683 -0.4728546   0.59449345 -0.23820949  0.34212282 0.6591729  -0.10877569  0.60686487 -1.771871  ] Word vector for &#39;,&#39;: [ 0.19194137 -1.2824519   1.1420391  -0.8361696  -0.578317    0.1025617 1.2452478  -0.08552601  0.9869009  -0.04940421]</p>
-<p><figure class="happy-figure"><img src="@asset/happy-llm/extra-chapter/text-data-processing/image/output_1_1-279535745e.png" alt="png" loading="lazy"><figcaption>png</figcaption></figure></p>
+<p><figure class="happy-figure"><img class="fig-img" src="@asset/happy-llm/extra-chapter/text-data-processing/image/output_1_1-279535745e.png" alt="png" loading="lazy"><figcaption>png</figcaption></figure></p>
 <p>词相似度分析: &#39;Hello&#39; 和 &#39;,&#39; 的相似度: 0.2132 &#39;Hello&#39; 和 &#39;how&#39; 的相似度: -0.0277 &#39;Hello&#39; 和 &#39;are&#39; 的相似度: 0.1024 &#39;Hello&#39; 和 &#39;you&#39; 的相似度: 0.1597 &#39;,&#39; 和 &#39;Hello&#39; 的相似度: 0.2132 &#39;,&#39; 和 &#39;how&#39; 的相似度: -0.0801 &#39;,&#39; 和 &#39;are&#39; 的相似度: -0.6096 &#39;,&#39; 和 &#39;you&#39; 的相似度: 0.2355 &#39;how&#39; 和 &#39;Hello&#39; 的相似度: -0.0277 &#39;how&#39; 和 &#39;,&#39; 的相似度: -0.0801 &#39;how&#39; 和 &#39;are&#39; 的相似度: 0.1170 &#39;how&#39; 和 &#39;you&#39; 的相似度: -0.0412 &#39;are&#39; 和 &#39;Hello&#39; 的相似度: 0.1024 &#39;are&#39; 和 &#39;,&#39; 的相似度: -0.6096 &#39;are&#39; 和 &#39;how&#39; 的相似度: 0.1170 &#39;are&#39; 和 &#39;you&#39; 的相似度: 0.2203 &#39;you&#39; 和 &#39;Hello&#39; 的相似度: 0.1597 &#39;you&#39; 和 &#39;,&#39; 的相似度: 0.2355 &#39;you&#39; 和 &#39;how&#39; 的相似度: -0.0412 &#39;you&#39; 和 &#39;are&#39; 的相似度: 0.2203</p>
 <p>这下我们就能够很清楚的在散点图中看到不同词语之间的距离。</p>
 </div>
@@ -1869,23 +1869,23 @@ def assisted_decoding(input_ids, assistant_model, main_model):
 </div></div>
 <div class="happy-source-file"><div class="source-file-label">来源文件 · Extra-Chapter/s1-vllm-thinking-budget/readme.md</div><p>首先，我们来了解一下AI教母李飞飞教授关于 Test-time scaling 的论文：<a href="http://arxiv.org/abs/2501.19393" target="_blank" rel="noreferrer"><em>《s1: Simple test-time scaling》</em></a></p>
 <div align='center'>
-    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-1-8015eb04c1.png" alt="alt text" width="50%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-1-8015eb04c1.png" alt="alt text" width="50%">
 </div>
 <p>论文大致讲了个什么事情呢？简单来说，提出了一种新的测试时间缩放方法，旨在提高模型在推理阶段的效率和准确性。通过调整模型的思考预算，可以在不同的任务和数据集上实现更好的性能。</p>
 <p>就是说对于一些复杂问题，需要用推理链来解决的问题，我们可以通过调整模型的思考预算来提高推理效率和准确性。上图也可以看到当思考预算增加时，模型的性能会有明显提升。</p>
 <div align='center'>
-    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-2-b50e8b6186.png" alt="alt text" width="50%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-2-b50e8b6186.png" alt="alt text" width="50%">
 </div>
 <p>插一句题外话，论文中判断问题难易程度的方式是通过让 Qwen2.5-32B-Instruct 模型回答问题，答对的问题就是简单问题，答错的就是复杂问题。</p>
 <div align='center'>
-    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-3-03e2dbf179.png" alt="alt text" width="50%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-3-03e2dbf179.png" alt="alt text" width="50%">
 </div>
 <p>论文也做了消融实验来探讨，在未满足思考预算时插入一些不同的特定词（如：Wait！）对模型最终性能的影响。结果表明，插入特定词可以有效地引导模型进行更深入的思考，并且“Wait，Wait”的效果最好。</p>
 <div class="section" id="llm-happy-extras-src3-s1"><h2>代码实现</h2>
 <p>我们使用 vLLM 来实现模型的思考预算。vLLM 是一个高性能的推理引擎，支持大规模语言模型的高效推理。以下为代码实现的步骤：</p>
 <blockquote>考虑到部分同学配置环境可能会遇到一些问题，我们在 ucloud 平台准备了环境镜像，点击下方链接并直接创建 ucloud 示例即可。 https://www.compshare.cn/images/8gfTTB5y0ql6?referral_code=ELukJdQS3vvCwYIfgsQf2C</blockquote>
 <div align='center'>
-    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/thinking-budget-e88ac2bd44.png" alt="alt text" width="80%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/thinking-budget-e88ac2bd44.png" alt="alt text" width="80%">
 </div>
 <p>左侧为不使用思考预算的推理过程，右侧为使用思考预算的推理过程。可以看到，使用思考预算后，模型会在推理过程中插入特定词来引导模型进行更深入的思考。</p>
 <p>以下为核心代码实现，完整代码请参考 [<em>s1.py</em>](./s1.py)</p>
@@ -1998,7 +1998,7 @@ print(f&quot;迭代次数：{iteration_count}, 输入token数：{input_token_cou
 <p>使用思考预算后，模型在推理过程中能够更深入地思考问题，从而提高了推理效率和准确性。但是也发现了一些有趣的现象。</p>
 <p>例如，在某些情况下，就算插入了<code>Wait!</code>，模型并不会按照论文中所示进行多种不同方式尝试解答，或是反思之前的思考过程是否正确。而且还会出现模型在思考过程中重复生成相同的内容，导致思考 token 数量超过思考预算的情况。</p>
 <div align='center'>
-    <img src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-4-5cbd17e128.png" alt="alt text" width="70%">
+    <img class="fig-img" src="@asset/happy-llm/extra-chapter/s1-vllm-thinking-budget/images/image-4-5cbd17e128.png" alt="alt text" width="70%">
 </div>
 <p>当然，也有可能本身测试的模型只有14B参数，导致其在思考过程中的能力受到限制。</p>
 <p>经过测试下来，有可能强行使用特定词（如：Wait!）来引导模型进行更深入的思考，可能会促使模型产生 “一条道走到黑” 的想法。</p>
@@ -2028,7 +2028,7 @@ print(f&quot;迭代次数：{iteration_count}, 输入token数：{input_token_cou
 </ul>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/ppap-87d827eb21.png" alt="PPAP" width="400" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/ppap-87d827eb21.png" alt="PPAP" width="400" />
   <figcaption>I have a Qwen, I have a SmolVLM...</figcaption>
   </figure>
 </div>
@@ -2051,7 +2051,7 @@ print(f&quot;迭代次数：{iteration_count}, 输入token数：{input_token_cou
 <p>首先，我们先回顾一下SmolVLM2模型的构建方案，SmolVLM2模型的整体包括三大块：视觉模型层，特征映射层和大语言模型层，见下图：</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/smolvlm2-665836f168.png" alt="smolvlm2" width="400" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/smolvlm2-665836f168.png" alt="smolvlm2" width="400" />
   <figcaption>SmolVLM2的架构图</figcaption>
   </figure>
 </div>
@@ -2082,7 +2082,7 @@ print(f&quot;迭代次数：{iteration_count}, 输入token数：{input_token_cou
 <p>整体架构和对图文对前后处理依旧保持SmolVLM2的流程不变，具体改动见下图：</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/concatation-e7a5e48bee.png" alt="concatation" width="400" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/concatation-e7a5e48bee.png" alt="concatation" width="400" />
   <figcaption>将Qwen3-0.6B替换SmolVLM2的语言模型部分</figcaption>
   </figure>
 </div>
@@ -2127,7 +2127,7 @@ Assistant:</code></pre></div>
 <p>读者注意到了除了<code>&lt;fake_token_around_image&gt;</code>，<code>&lt;image&gt;</code>等用于指示图像的词，还出现了&lt;row_1_col_1&gt;这种位置指示符，这是因为SmolVLM2为了防止降采样对图像分辨率影响，专门使用了<code>image splitting</code>技术，简单来说就是将全局图和高清的局部图共同输入到模型当中（见下图<code>image splitting</code>模块），感兴趣的读者可在文末找到HF的技术报告了解详细技术。</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/image-split-379eb30f80.png" alt="image-split" width="400" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/image-split-379eb30f80.png" alt="image-split" width="400" />
   <figcaption>SmolVLM2的完整推理流程，可以看到在图像输入前使用`image splitting`进行了预切分</figcaption>
   </figure>
 </div>
@@ -2151,7 +2151,7 @@ Assistant:</code></pre></div>
 <p>替换模型这块没什么复杂的，主要是需要处理Transformers比较复杂的嵌套逻辑。Tranformers通常建议模型将预训练模型backbone和下游任务分开来。改动逻辑图如下：</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/change_model-9c816e2d3b.png" alt="change_model" width="400" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/change_model-9c816e2d3b.png" alt="change_model" width="400" />
   <figcaption>替换smolvlm2的文本模块和语言模型头</figcaption>
   </figure>
 </div>
@@ -2198,7 +2198,7 @@ smolvlm2_02B_model.generation_config.eos_token_id = 151645
 <p>上面的代码可以看到在替换各个变量时需要将嵌套模型的变量一起替换掉，笔者之前训练时就因为仅仅替换了<code>SmolVLMForConditionalGeneration</code>而忘记替换<code>SmolVLMModel</code>中的<code>image_token_id</code>，导致语言模型接收不到图像特征，最后表现出来就是loss下降的极快且低，grad_norm看起来也学到位了，一推理效果特别差，附上错误训练的损失图：</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/fail_train-705627f413.png" alt="fail_train" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/fail_train-705627f413.png" alt="fail_train" width="800" />
   <figcaption>SwanLab记录训练结果展示：蓝色为错误训练的完整微调loss图，可以看到损失下降很快，然而实际推理会发现模型并没有图像理解能力。冻结语言模型头（红色）后发现grad_norm为零且loss不收敛，正确的应该是黄色</figcaption>
   </figure>
 </div>
@@ -2232,14 +2232,14 @@ smolvlm2_02B_model.model.connector = new_connector
 <p>笔者最初计划寻找中文多模态数据集，但发现相关的资料比较少。因此决定先用英文的多模态数据集凑合一下。之后再考虑通过数据合成的方式将部分数据翻译为中文。关于数据合成和配比的问题将在之后的博客讨论。</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/the_cauldron-c005c5c3a0.png" alt="the_cauldron" width="400" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/the_cauldron-c005c5c3a0.png" alt="the_cauldron" width="400" />
   <figcaption>the_cauldron数据集logo</figcaption>
   </figure>
 </div>
 <p>这里为了方便本项目直接使用HuggingFace团队整合的多模态数据集the Cauldron数据集，Cauldron翻译成中文类似于煮东西的“釜”，不知道HF团队是不是玩“炼丹”的梗。这个数据集整合了50个视觉微调任务数据集的训练集，用于微调Huggingface发布的多模态模型Idefics2模型。这50多个数据集都被处理成了一致的格式（见下图），共有1,880,992条数据，完整下载约169G，非常方便使用。</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/data_show-6c3cfbeb12.png" alt="data_show" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/data_show-6c3cfbeb12.png" alt="data_show" width="800" />
   <figcaption>数据集样本展示</figcaption>
   </figure>
 </div>
@@ -2278,7 +2278,7 @@ smolvlm2_02B_model.model.connector = new_connector
 <p>这两种策略的对比如下图：</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/mask-389e11f575.png" alt="mask" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/mask-389e11f575.png" alt="mask" width="800" />
   <figcaption>两种微调掩码策略的差异，通常建议选择“仅微调模型回答部分”以增强泛化性</figcaption>
   </figure>
 </div>
@@ -2362,7 +2362,7 @@ smolvlm2_02B_model.model.connector = new_connector
 <p><strong>笔者个人感觉沐曦的GPU整体适配效果还是非常好的，没遇到适配性的问题。体验上和用NV的GPU做训练没什么区别</strong>。笔者自己也用过好几款国产GPU，沐曦的体验肯定是名列前茅的，包括代码中有指定flash attention在沐曦GPU上都能成功迁移，这点非常值得给沐曦团队点个赞。希望国产GPU生态能越发展越好，造福广大炼丹师；）。</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/muxi-gpu-a4615a5217.jpg" alt="muxi-gpu" width="400" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/muxi-gpu-a4615a5217.jpg" alt="muxi-gpu" width="400" />
   <figcaption>沐曦国产GPU，笔者用的云端服务器没见过真机，因此找了张网图</figcaption>
   </figure>
 </div>
@@ -2487,28 +2487,28 @@ accelerate launch --num_process 8 train.py ./cocoqa_train.yaml</code></pre></div
 <p>注意，本项目使用SwanLab进行训练日志记录与分析，如果未登陆SwanLab需要使用<code>swanlab login</code>进行登陆。运行后看到如下结果即代表实验成功开启：</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/run-bc19b1bf46.png" alt="run" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/run-bc19b1bf46.png" alt="run" width="800" />
   <figcaption>成功训练后可以看到SwanLab链接</figcaption>
   </figure>
 </div>
 <p>下面是笔者完成小批量微调训练的训练损失、测试损失结果图</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/cocoqa_swanlab-e84d061d9f.png" alt="cocoqa_swanlab" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/cocoqa_swanlab-e84d061d9f.png" alt="cocoqa_swanlab" width="800" />
   <figcaption>SwanLab训练可视化分析结果，可以看到最后训练损失和测试损失都收敛在0.65左右</figcaption>
   </figure>
 </div>
 <p>模型在完成训练后会自动使用一张狗狗图片配合问题“图中有什么动物？”让模型根据图片进行推理，推理结果如下：</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/bad_case-4c63624334.png" alt="bad_case" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/bad_case-4c63624334.png" alt="bad_case" width="800" />
   <figcaption>SwanLab记录了模型训练好后的推理结果，可以看到模型能正常理解和回复中文</figcaption>
   </figure>
 </div>
 <p>当时看到模型对着三只狗的图片回答“兔子”时笔者一时认为炼丹失败了，当然如果实际炼丹失败后模型是不会输出动物类型的，而是输出一些乱码或者告诉用户并没有看到图片。识别错误的原因实际上是由于训练步数过少导致的。后续加大训练步数与数据量后模型能正常识别出狗狗并且能准确的说出有三只狗。</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/dog-8d4b13a9c0.png" alt="dog" width="250" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/dog-8d4b13a9c0.png" alt="dog" width="250" />
   <figcaption>附上三只眼神忧伤的狗子，难道长得很像兔子吗？</figcaption>
   </figure>
 </div>
@@ -2522,14 +2522,14 @@ accelerate launch --num_processes 8 train.py ./full_train.yaml</code></pre></div
 <p>下图展示了使用完整微调数据对比于小批量训练，可以看到全量数据微调时loss变得更为抖动，这是由于数据类型的丰富给模型的学习带来了一定的挑战。</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/fulldata_swanlab-13d3e21ec4.png" alt="fulldata_swanlab" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/fulldata_swanlab-13d3e21ec4.png" alt="fulldata_swanlab" width="800" />
   <figcaption>红色为完整训练loss，黄色为小批量训练结果</figcaption>
   </figure>
 </div>
 <p>进一步对比完整训练和小批量训练的训练和测试损失，可以看到完整训练的模型训练损失达到了0.61，远低于仅仅使用cocoqa模型的效果，评估损失也远低于前者，维持在0.58左右。</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/evalloss-b5e677ba01.png" alt="evalloss" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/evalloss-b5e677ba01.png" alt="evalloss" width="800" />
   <figcaption>红色为完整训练loss，黄色为小批量训练结果</figcaption>
   </figure>
 </div>
@@ -2537,21 +2537,21 @@ accelerate launch --num_processes 8 train.py ./full_train.yaml</code></pre></div
 <p>此外，模型通过分析1k步之后的训练损失、平均梯度范数（Grad Norm）变化。此时训练任务已过半，且学习率开始快速衰减。如下图，可以看到学习率快速衰减的情况下模型损失并没有明显的进一步下降，这说明模型已经实现了充分训练。</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/1kstep-5b9806ebd5.png" alt="1kstep" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/1kstep-5b9806ebd5.png" alt="1kstep" width="800" />
   <figcaption>1k step之后模型的训练损失变化</figcaption>
   </figure>
 </div>
 <p>在训练效率方面，可以看到我们仍没有充分榨干沐曦GPU的性能，当然这也是由于多模态任务的网络本身架构上比较复杂，其中包含许多对图像、文本的拼接工作，这也导致了GPU性能没法完全利用。</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/mx-gpu-use-b43ec09007.png" alt="mx-gpu-use" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/mx-gpu-use-b43ec09007.png" alt="mx-gpu-use" width="800" />
   <figcaption>SwanLab对沐曦C500训效率自动记录</figcaption>
   </figure>
 </div>
 <p>同样在完成训练后使用狗狗图进行了测试，这次模型能理解图片、中文以及给出正确的回复。更为关键的是模型完全保留了Qwen3-0.6B原有的全部能力，包括函数调用、推理等。在此基础上，仅仅增加了0.09B参数量的情况下为模型带来了图像理解能力！</p>
 <div align="center">
   <figure>
-  <img src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/good_case-6a3efcfd49.png" alt="good_case" width="800" />
+  <img class="fig-img" src="@asset/happy-llm/extra-chapter/vlm-concatenation-finetune/images/good_case-6a3efcfd49.png" alt="good_case" width="800" />
   <figcaption>同样的图片与问题，更大的数据量和更充足的数据使得模型能够正确给出回复</figcaption>
   </figure>
 </div>
@@ -2848,7 +2848,7 @@ class DynamicSemanticChunker:
         return sub_chunks</code></pre></div>
 <h3>建筑文档审查系统</h3>
 <p>整体的审查过程如下图所示。系统获取需要审查的区域后，依据提示生成审查问题推荐，此部分也可供工程师进行相关问题输入或推荐问题选择，生成待审查问题。随后，系统通过生成式知识引导检索框架，依据审查问题在所建文本知识库中检索出相应的知识参考。最终，依据检索的部分与审查原文，进行问题分析与审查修正，完成最终的审查流程。</p>
-<p><figure class="happy-figure"><img src="@asset/happy-llm/extra-chapter/cddrs/images/pic1-aff28780eb.png" alt="picture" loading="lazy"><figcaption>picture</figcaption></figure></p>
+<p><figure class="happy-figure"><img class="fig-img" src="@asset/happy-llm/extra-chapter/cddrs/images/pic1-aff28780eb.png" alt="picture" loading="lazy"><figcaption>picture</figcaption></figure></p>
 <h4>审查问题生成</h4>
 <p>在文档审查流程中，系统引入了双阶段Prompt工程驱动的智能化问询生成机制，旨在对建筑施工交底文档进行预见性分析与风险挖掘，实现对文档潜在问题的高效、精准定位。</p>
 <p>阶段1为待查文档主旨目标解构，模型被指示从文本中提炼核心事件、关键技术、工艺流程等要素，结构化地总结文档的核心内容，由此界定本次审查的靶向目标，为后续的精细化问询奠定基础。阶段2为多维度风险探测与定制化问询生成，基于第一阶段提炼的核心要素，通过few-shot等方式引导 LLM 从合规性、安全性、可操作性等多维度对文档进行风险探测。Prompt 指示模型围绕潜在的限制条件、操作流程、以及可能存在的合规性隐患等方面，进行细粒度、多角度的审查提问。</p>
@@ -2885,8 +2885,8 @@ def generate_review_queries(llm, document_chunk: str) -&gt; List[str]:
     
     return queries[:5]</code></pre></div>
 <h4>知识引导生成式检索</h4>
-<p>系统的核心创新在于知识引导的检索框架，整个过程分为三个关键步骤。步骤1为句子级编码，主要负责输入查询句子的初始表示学习，计算查询与知识库chunks间的句子级相似度分数。步骤2为知识引导检索，进一步从查询中提取关键信息，利用这些信息结合文档长度自适应加权等机制，对每个知识库chunk进行更详细的评分。步骤3为重排序与增强，使用大语言模型对步骤2检索的结果进行进一步重排序，并利用精炼的知识来增强原始查询。 <figure class="happy-figure"><img src="@asset/happy-llm/extra-chapter/cddrs/images/pic2-cec6c5e820.png" alt="picture" loading="lazy"><figcaption>picture</figcaption></figure></p>
-<p>首先建立专门针对建筑领域文本分析的深度提取模块，集成领域预训练BERT进行上下文编码，结合双向LSTM进行建筑法规依赖建模。建立三级重要性分类层次：max（最高）、mid（中等）、lit（字面）优先级。本项目直接通过大语言模型进行关键信息提取，如果需要更精准的效果，可以自行训练BERT模型进行专门的关键信息提取。 <figure class="happy-figure"><img src="@asset/happy-llm/extra-chapter/cddrs/images/pic3-1341a4123d.png" alt="picture" loading="lazy"><figcaption>picture</figcaption></figure></p>
+<p>系统的核心创新在于知识引导的检索框架，整个过程分为三个关键步骤。步骤1为句子级编码，主要负责输入查询句子的初始表示学习，计算查询与知识库chunks间的句子级相似度分数。步骤2为知识引导检索，进一步从查询中提取关键信息，利用这些信息结合文档长度自适应加权等机制，对每个知识库chunk进行更详细的评分。步骤3为重排序与增强，使用大语言模型对步骤2检索的结果进行进一步重排序，并利用精炼的知识来增强原始查询。 <figure class="happy-figure"><img class="fig-img" src="@asset/happy-llm/extra-chapter/cddrs/images/pic2-cec6c5e820.png" alt="picture" loading="lazy"><figcaption>picture</figcaption></figure></p>
+<p>首先建立专门针对建筑领域文本分析的深度提取模块，集成领域预训练BERT进行上下文编码，结合双向LSTM进行建筑法规依赖建模。建立三级重要性分类层次：max（最高）、mid（中等）、lit（字面）优先级。本项目直接通过大语言模型进行关键信息提取，如果需要更精准的效果，可以自行训练BERT模型进行专门的关键信息提取。 <figure class="happy-figure"><img class="fig-img" src="@asset/happy-llm/extra-chapter/cddrs/images/pic3-1341a4123d.png" alt="picture" loading="lazy"><figcaption>picture</figcaption></figure></p>
 <div class="code-block-wrapper"><div class="code-header"><span class="code-lang">python</span></div><pre><code>import re
 from typing import Dict, Tuple, List
 
