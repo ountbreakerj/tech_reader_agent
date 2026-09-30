@@ -244,7 +244,7 @@ mark.hit-cur { animation: hitpulse .8s ease; }
 #lightbox .lb-imgwrap { max-width: 92vw; max-height: 84vh; display: flex; align-items: center; justify-content: center; }
 #lightbox img, #lightbox svg { max-width: 92vw; max-height: 84vh; background: #fff; border-radius: 10px; box-shadow: 0 20px 80px rgba(0,0,0,.6); }
 #lightbox .lb-cap { color: #d7dce8; font-size: 13.5px; margin-top: 14px; max-width: 80vw; text-align: center; }
-#lightbox .lb-count { position: absolute; top: 18px; right: 24px; color: #9aa3b8; font-size: 13px; }
+#lightbox .lb-count { position: absolute; top: 18px; left: 24px; color: #9aa3b8; font-size: 13px; }
 .lb-nav {
   position: absolute; top: 50%; transform: translateY(-50%);
   width: 46px; height: 64px; border: 0; border-radius: 10px;
@@ -253,7 +253,7 @@ mark.hit-cur { animation: hitpulse .8s ease; }
 }
 .lb-nav:hover { background: rgba(255,255,255,.18); }
 #lbPrev { left: 18px; } #lbNext { right: 18px; }
-#lbClose { position: absolute; top: 14px; left: 20px; width: 42px; height: 42px; font-size: 22px; border-radius: 10px; border: 0; background: rgba(255,255,255,.08); color: #e8ecf4; cursor: pointer; }
+#lbClose { position: absolute; top: 14px; right: 20px; width: 42px; height: 42px; font-size: 22px; border-radius: 10px; border: 0; background: rgba(255,255,255,.08); color: #e8ecf4; cursor: pointer; }
 #lbClose:hover { background: rgba(255,255,255,.18); }
 
 /* ---------- toast ---------- */
@@ -517,19 +517,19 @@ body.sidebar-open #backdrop { display: block; opacity: 1; }
 .home-card .prog .bar { height: 5px; border-radius: 99px; background: var(--chip); overflow: hidden; }
 .home-card .prog .bar i { display: block; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .35s ease; }
 .home-card .prog .txt { margin-top: 5px; font-size: 11.5px; color: var(--text-dim); }
-#resumeDlg { position: fixed; inset: 0; z-index: 140; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(8,10,14,.72); backdrop-filter: blur(4px); opacity: 0; transition: opacity .2s ease; }
-#resumeDlg.open { display: flex; opacity: 1; }
-#resumeDlg .box { width: 100%; max-width: 440px; padding: 22px 22px 18px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 20px 60px var(--shadow); }
-#resumeDlg h3 { margin: 0 0 8px; font-size: 17px; color: var(--text-strong); }
+#resumeDlg, #keysDlg { position: fixed; inset: 0; z-index: 140; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(8,10,14,.72); backdrop-filter: blur(4px); opacity: 0; transition: opacity .2s ease; }
+#resumeDlg.open, #keysDlg.open { display: flex; opacity: 1; }
+#resumeDlg .box, #keysDlg .box { width: 100%; max-width: 440px; padding: 22px 22px 18px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 20px 60px var(--shadow); }
+#resumeDlg h3, #keysDlg h3 { margin: 0 0 8px; font-size: 17px; color: var(--text-strong); }
 #resumeDlg p { margin: 0; font-size: 13.5px; color: var(--text-dim); line-height: 1.7; }
 #resumeDlg .where { margin: 10px 0 0; padding: 10px 12px; background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-s); font-size: 13px; color: var(--text); }
 #resumeDlg .where b { color: var(--accent); font-weight: 600; }
 #resumeDlg .meta { margin-top: 8px; font-size: 12px; }
-#resumeDlg .acts { margin-top: 16px; display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
-#resumeDlg button { font: inherit; font-size: 13.5px; padding: 8px 14px; border-radius: var(--radius-s); border: 1px solid var(--border); background: var(--bg-soft); color: var(--text); cursor: pointer; transition: border-color .18s ease, color .18s ease, filter .18s ease; }
-#resumeDlg button:hover { border-color: var(--accent); color: var(--text-strong); }
-#resumeDlg button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
-#resumeDlg button.primary:hover { filter: brightness(1.08); color: var(--bg); }
+#resumeDlg .acts, #keysDlg .acts { margin-top: 16px; display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+#resumeDlg button, #keysDlg button { font: inherit; font-size: 13.5px; padding: 8px 14px; border-radius: var(--radius-s); border: 1px solid var(--border); background: var(--bg-soft); color: var(--text); cursor: pointer; transition: border-color .18s ease, color .18s ease, filter .18s ease; }
+#resumeDlg button:hover, #keysDlg button:hover { border-color: var(--accent); color: var(--text-strong); }
+#resumeDlg button.primary, #keysDlg button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+#resumeDlg button.primary:hover, #keysDlg button.primary:hover { filter: brightness(1.08); color: var(--bg); }
 
 /* === 技术点角标 / 弹窗 / 返回锚点（req #2） === */
 .tp-mark {
@@ -577,6 +577,13 @@ body.sidebar-open #backdrop { display: block; opacity: 1; }
 #tpPop .tp-foot button { font: inherit; font-size: 13.5px; padding: 8px 14px; border-radius: var(--radius-s); border: 1px solid var(--accent); background: var(--accent); color: var(--bg); font-weight: 600; cursor: pointer; transition: filter .16s ease; }
 #tpPop .tp-foot button:hover { filter: brightness(1.08); }
 #tpPop .tp-foot button[disabled] { opacity: .45; cursor: default; filter: none; }
+
+#keysDlg .keys-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+#keysDlg .keys-table td { padding: 6px 4px; border-bottom: 1px solid var(--border); color: var(--text-dim); }
+#keysDlg .keys-table tr:last-child td { border-bottom: 0; }
+#keysDlg .keys-table td:first-child { width: 46%; white-space: nowrap; }
+#keysDlg kbd { display: inline-block; padding: 0 6px; margin-right: 2px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-code); color: var(--text-strong); font-family: inherit; }
+#readerWidthVal { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
 
 #tpBack {
   position: fixed; left: 50%; transform: translateX(-50%) translateY(14px);

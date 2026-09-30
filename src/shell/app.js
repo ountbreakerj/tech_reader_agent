@@ -63,10 +63,14 @@
     setTheme(t, false); setFont(f, false);
     var widthInput = $("#readerWidth");
     if (widthInput) widthInput.value = readerWidth;
+    var widthVal = $("#readerWidthVal");
+    if (widthVal) widthVal.textContent = readerWidth;
   })();
   $("#readerWidth").addEventListener("input", function (e) {
     readerWidth = parseInt(e.target.value, 10) || 980;
     document.documentElement.style.setProperty("--reader-width", readerWidth + "px");
+    var widthVal = $("#readerWidthVal");
+    if (widthVal) widthVal.textContent = readerWidth;
     try { localStorage.setItem("tr-width", String(readerWidth)); } catch (e2) {}
   });
   $$(".theme-btn").forEach(function (b) {
@@ -75,6 +79,22 @@
   $$(".font-btn").forEach(function (b) {
     b.addEventListener("click", function () { setFont(b.dataset.fontVal); });
   });
+
+  /* ========== shortcuts dialog ========== */
+  var keysDlg = $("#keysDlg");
+  function keysOpen() {
+    keysDlg.classList.add("open");
+    document.body.style.overflow = "hidden";
+    $("#keysClose").focus();
+  }
+  function keysCloseFn() {
+    keysDlg.classList.remove("open");
+    document.body.style.overflow = "";
+    $("#keysBtn").focus();
+  }
+  $("#keysBtn").addEventListener("click", keysOpen);
+  $("#keysClose").addEventListener("click", keysCloseFn);
+  keysDlg.addEventListener("click", function (e) { if (e.target === keysDlg) keysCloseFn(); });
 
   /* ========== TOC build ========== */
   function flattenToc(entries, out) {
@@ -148,7 +168,7 @@
     a.addEventListener("click", function (ev) {
       if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
       if (location.hash === a.getAttribute("href")) { ev.preventDefault(); route(); }
-      document.body.classList.remove("sidebar-open");
+      setSidebar(false);
     });
     return a;
   }
@@ -223,18 +243,21 @@
   toTop.addEventListener("click", function () { window.scrollTo({ top: 0, behavior: "smooth" }); });
 
   /* ========== drawer ========== */
+  function setSidebar(open) {
+    document.body.classList.toggle("sidebar-open", open);
+    var mb = $("#menuBtn");
+    mb.setAttribute("aria-expanded", String(open));
+    mb.setAttribute("aria-label", open ? "关闭导航" : "打开导航");
+  }
   $("#menuBtn").addEventListener("click", function () {
-    document.body.classList.toggle("sidebar-open");
-    this.setAttribute("aria-expanded", String(document.body.classList.contains("sidebar-open")));
+    setSidebar(!document.body.classList.contains("sidebar-open"));
   });
   $("#backdrop").addEventListener("click", function () {
-    document.body.classList.remove("sidebar-open");
-    $("#menuBtn").setAttribute("aria-expanded", "false");
+    setSidebar(false);
   });
   window.addEventListener("resize", function () {
     if (window.innerWidth > 820) {
-      document.body.classList.remove("sidebar-open");
-      $("#menuBtn").setAttribute("aria-expanded", "false");
+      setSidebar(false);
     }
   });
 
@@ -266,8 +289,7 @@
     clearSearch();
     if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
     restoring = false;
-    document.body.classList.remove("sidebar-open");
-    $("#menuBtn").setAttribute("aria-expanded", "false");
+    setSidebar(false);
     $("#tocParent").href = "#/harness";
     $("#tocParent").textContent = "← Harness";
     show($("#tocParent"), mod === "dsh" || mod === "codex-harness");
@@ -281,7 +303,7 @@
         show(document.getElementById(MODULES[k].scopeId), false);
       });
       renderHomeProgress();
-      document.body.classList.remove("sidebar-open");
+      setSidebar(false);
       window.scrollTo({ top: 0, behavior: "instant" });
       return;
     }
@@ -393,9 +415,13 @@
   /* ========== keyboard ========== */
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && document.body.classList.contains("sidebar-open")) {
-      document.body.classList.remove("sidebar-open");
-      $("#menuBtn").setAttribute("aria-expanded", "false");
+      setSidebar(false);
       $("#menuBtn").focus();
+      return;
+    }
+    if (keysDlg && keysDlg.classList.contains("open")) {
+      if (e.key === "Escape") keysCloseFn();
+      else if (e.key === "Enter" && !(e.target.closest && e.target.closest("button, a, input, select, [role='button']"))) { e.preventDefault(); keysCloseFn(); }
       return;
     }
     if (tpPop && tpPop.classList.contains("open")) {
@@ -420,6 +446,7 @@
       return;
     }
     if (e.target.closest("button, a, summary, select, [role='button']")) return;
+    if (e.key === "?") { e.preventDefault(); keysOpen(); return; }
     if (!currentMod) return;
     if (e.key === "ArrowLeft") { e.preventDefault(); gotoChapter(-1); }
     else if (e.key === "ArrowRight") { e.preventDefault(); gotoChapter(1); }

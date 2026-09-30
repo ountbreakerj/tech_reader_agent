@@ -38,7 +38,7 @@
       <div class="go">开始阅读 →</div>
     </a>
   </div>
-  <div class="home-foot">深 / 浅 / 纸三色主题 · 全文搜索 · 代码高亮复制 · 图片灯箱 · 键盘翻页 · 可打印导出 PDF</div>
+  <div class="home-foot">深 / 浅 / 纸三色主题 · 模块内搜索 · 代码高亮复制 · 图片灯箱 · 键盘翻页（按 ? 查看全部快捷键）· 可打印导出 PDF</div>
 </div>
 
 <!-- ==================== READER ==================== -->
@@ -53,10 +53,10 @@
     <div id="topbar">
       <button id="menuBtn" class="tb-btn" aria-label="打开导航">☰</button>
       <a id="homeBtn" class="tb-btn" href="#/" title="返回首页">← <span class="home-txt">首页</span></a>
-      <input id="search" type="text" placeholder="搜索标题 / 正文 / 关键词…（Enter 跳转下一个）">
+      <input id="search" type="text" placeholder="搜索本模块的标题与正文…（Enter 跳转下一个）">
       <span id="searchStatus"></span>
       <span class="tb-sep"></span>
-      <div class="tb-group width-control"><label class="tb-label" for="readerWidth">正文</label><input id="readerWidth" type="range" min="720" max="1180" step="20" value="980" title="调整正文宽度"></div>
+      <div class="tb-group width-control"><label class="tb-label" for="readerWidth">正文</label><input id="readerWidth" type="range" min="720" max="1180" step="20" value="980" title="调整正文宽度"><span class="tb-label" id="readerWidthVal">980</span></div>
       <span class="tb-sep"></span>
       <div class="tb-group"><span class="tb-label">主题</span>
         <button class="tb-btn theme-btn" data-theme-val="dark" title="深色主题">深</button>
@@ -71,6 +71,7 @@
       </div>
       <span class="tb-sep"></span>
       <button id="printBtn" class="tb-btn" title="打印 / 导出 PDF">🖨</button>
+      <button id="keysBtn" class="tb-btn" title="键盘快捷键 (?)" aria-label="键盘快捷键">?</button>
     </div>
     <div id="content">
       <div class="module" id="mod-book" hidden><div class="book-scope">

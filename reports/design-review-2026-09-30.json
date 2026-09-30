@@ -1,0 +1,20 @@
+{
+  "verdict": "pass",
+  "scope": ["#/", "#/book", "desktop", "mobile", "dark", "interaction"],
+  "findings": [],
+  "resolvedFindings": [
+    {"severity": "minor", "role": "ux", "location": "#lightbox", "evidence": "关闭按钮在左上、计数在右上，与主流图片查看器相反", "resolution": "✕ 调至右上、计数调至左上；T13 计算样式断言通过，截图确认"},
+    {"severity": "minor", "role": "product", "location": "#search", "evidence": "搜索仅作用于当前模块，placeholder 与首页「全文搜索」表述造成预期落差", "resolution": "placeholder 改为「搜索本模块的标题与正文…」，首页特性清单同步改为「模块内搜索」；T14 通过"},
+    {"severity": "minor", "role": "ux", "location": "键盘快捷键", "evidence": "j/k/空格/方向键/「/」等快捷键无界面入口可发现", "resolution": "顶栏新增「?」按钮 + 快捷键面板（kbd 芯片表格），支持 ? 打开、Esc/遮罩/按钮关闭、焦点往返；T10 通过"},
+    {"severity": "minor", "role": "ux", "location": ".width-control", "evidence": "宽度滑杆无当前值反馈", "resolution": "新增 px 读数（init 与 input 双路径同步）；T11 通过"},
+    {"severity": "minor", "role": "accessibility", "location": "#menuBtn", "evidence": "aria-label 恒为「打开导航」，不随抽屉状态变化", "resolution": "收敛出 setSidebar(open) 辅助函数统一替换 7 处开关点，同步 aria-expanded 与 aria-label；T12 通过"}
+  ],
+  "checks": [
+    "node build.mjs（SHA-256 33f7844ac069921155f34dcbe097a43624fd3aacc27f2d2b34f199f2d522cd92）",
+    "node verify.mjs 通过（6 模块 / 101 正文单元 / 1253 DOM id）",
+    "行为自测 7/7 PASS（含 T1/T5 回归：Enter 劫持修复与 pager 宽度未被破坏）",
+    "快捷键面板 / 灯箱 / 顶栏桌面截图复核",
+    "node --check 语法校验 app.js 通过",
+    "shell.css 花括号平衡检查通过"
+  ]
+}

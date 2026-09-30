@@ -2,3 +2,4 @@ reports/visual/latest/
 .codegraph/
 node_modules/
 dist/tech-reader.html
+.workbuddy/
