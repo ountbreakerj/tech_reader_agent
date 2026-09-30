@@ -15,15 +15,6 @@
       margin: 2rem 0;  border: 1px solid var(--lc-border);
       transition: opacity 0.5s ease, transform 0.5s ease; }
 .llm-m-streaming-deploy .section.visible { opacity: 1; }
-.llm-m-streaming-deploy .callout { border-radius: 12px; padding: 1rem 1.25rem; margin: 1.25rem 0;
-      position: relative; padding-left: 2.75rem; font-size: 0.93rem;
-      border: 1px solid; }
-.llm-m-streaming-deploy .callout::before { position: absolute; left: 0.85rem; top: 1rem; font-size: 1.1rem; }
-.llm-m-streaming-deploy .callout-tip::before { content: '\1F4A1'; }
-.llm-m-streaming-deploy .callout-warn::before { content: '\26A0\FE0F'; }
-.llm-m-streaming-deploy .callout-analogy::before { content: '\1F3AF'; }
-.llm-m-streaming-deploy .callout-key::before { content: '\1F511'; }
-.llm-m-streaming-deploy .callout-info::before { content: '\1F4D6'; }
 .llm-m-streaming-deploy .code-block-wrapper { position: relative; margin: 1rem 0; border-radius: 12px;
       overflow: visible; border: 1px solid #313244; }
 .llm-m-streaming-deploy .code-header { display: flex; align-items: center; justify-content: space-between;

@@ -37,13 +37,6 @@
             font-size: 0.88em;
             font-family: 'Fira Code', 'Consolas', monospace; }
 .llm-m-advanced-rag pre code { padding: 0; }
-.llm-m-advanced-rag .callout { border-left: 4px solid;
-            padding: 0.8rem 1rem;
-            margin: 1rem 0;
-            border-radius: 0 6px 6px 0;
-            font-size: 0.93rem; }
-.llm-m-advanced-rag .callout-title { font-weight: 700;
-            margin-bottom: 0.3rem; }
 .llm-m-advanced-rag .flow-diagram { border: 1px solid #2a2a3a;
             border-radius: 8px;
             padding: 1.2rem;

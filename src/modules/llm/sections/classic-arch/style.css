@@ -19,13 +19,6 @@
 .llm-m-classic-arch table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
 .llm-m-classic-arch th, .llm-m-classic-arch td { padding: 10px 14px; border: 1px solid var(--lc-border); text-align: left; }
 .llm-m-classic-arch th { font-weight: 600; }
-.llm-m-classic-arch .callout-tip, .llm-m-classic-arch .callout-warn, .llm-m-classic-arch .callout-info { padding: 16px 20px; border-radius: 8px; margin: 16px 0; font-size: 14px; }
-.llm-m-classic-arch .callout-tip { border-left: 4px solid #10b981; }
-.llm-m-classic-arch .callout-warn { border-left: 4px solid #f59e0b; }
-.llm-m-classic-arch .callout-info { border-left: 4px solid #3b82f6; }
-.llm-m-classic-arch .callout-tip::before { content: "TIP"; font-weight: 700;  margin-right: 8px; }
-.llm-m-classic-arch .callout-warn::before { content: "WARN"; font-weight: 700;  margin-right: 8px; }
-.llm-m-classic-arch .callout-info::before { content: "INFO"; font-weight: 700;  margin-right: 8px; }
 .llm-m-classic-arch .badge { display: inline-block;   font-size: 12px; padding: 2px 10px; border-radius: 12px; margin-left: 8px; }
 .llm-m-classic-arch .tag { display: inline-block;   font-size: 12px; padding: 2px 8px; border-radius: 4px; margin: 2px; border: 1px solid var(--lc-border); }
 .llm-m-classic-arch footer { text-align: center; padding: 32px;  font-size: 13px; border-top: 1px solid var(--lc-border); }

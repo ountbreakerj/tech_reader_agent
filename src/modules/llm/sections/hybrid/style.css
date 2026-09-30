@@ -19,28 +19,6 @@
       margin: 2rem 0;  border: 1px solid var(--lc-border);
       transition: opacity 0.5s ease, transform 0.5s ease; }
 .llm-m-hybrid .section.visible { opacity: 1; }
-.llm-m-hybrid .callout { border-radius: 12px; padding: 1rem 1.25rem; margin: 1.25rem 0;
-      position: relative; padding-left: 2.75rem; font-size: 0.93rem;
-      border: 1px solid; }
-.llm-m-hybrid .callout::before { position: absolute; left: 0.85rem; top: 1rem; font-size: 1.1rem; }
-.llm-m-hybrid .callout-tip::before { content: '💡'; }
-.llm-m-hybrid .callout-warn::before { content: '⚠️'; }
-.llm-m-hybrid .callout-analogy::before { content: '🎯'; }
-.llm-m-hybrid .callout-key::before { content: '🔑'; }
-.llm-m-hybrid .callout-info::before { content: '📖'; }
-.llm-m-hybrid .callout-practice { border-width: 2px; }
-.llm-m-hybrid .callout-practice::before { content: '✏️'; }
-.llm-m-hybrid .practice-header { display: flex; align-items: center; gap: 0.5rem;
-      font-size: 1rem; font-weight: 700; 
-      margin-bottom: 0.75rem; letter-spacing: -0.01em; }
-.llm-m-hybrid .practice-header .badge { display: inline-flex; align-items: center; gap: 0.25rem;
-       
-      font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.5rem;
-      border-radius: 9999px; letter-spacing: 0.03em; }
-.llm-m-hybrid .practice- .practice-body p { margin: 0.4rem 0; font-size: 0.93rem; }
-.llm-m-hybrid .practice-hint { margin-top: 0.75rem; padding: 0.6rem 0.9rem;
-       border-radius: 8px;
-      font-size: 0.85rem;  border: 1px dashed #86efac; }
 .llm-m-hybrid .code-block-wrapper { position: relative; margin: 1rem 0; border-radius: 12px;
       overflow: visible; border: 1px solid #313244; }
 .llm-m-hybrid .code-header { display: flex; align-items: center; justify-content: space-between;

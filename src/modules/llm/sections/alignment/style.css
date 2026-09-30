@@ -19,13 +19,6 @@
 .llm-m-alignment table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
 .llm-m-alignment th, .llm-m-alignment td { padding: 10px 14px; border: 1px solid var(--lc-border); text-align: left; }
 .llm-m-alignment th { font-weight: 600; }
-.llm-m-alignment .callout-tip, .llm-m-alignment .callout-warn, .llm-m-alignment .callout-info { padding: 16px 20px; border-radius: 8px; margin: 16px 0; font-size: 14px; }
-.llm-m-alignment .callout-tip { border-left: 4px solid #10b981; }
-.llm-m-alignment .callout-warn { border-left: 4px solid #f59e0b; }
-.llm-m-alignment .callout-info { border-left: 4px solid #3b82f6; }
-.llm-m-alignment .callout-tip::before { content: "TIP"; font-weight: 700;  margin-right: 8px; }
-.llm-m-alignment .callout-warn::before { content: "WARN"; font-weight: 700;  margin-right: 8px; }
-.llm-m-alignment .callout-info::before { content: "INFO"; font-weight: 700;  margin-right: 8px; }
 .llm-m-alignment .badge { display: inline-block;   font-size: 12px; padding: 2px 10px; border-radius: 12px; margin-left: 8px; }
 .llm-m-alignment .formula { border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 14px 0; font-family: "Fira Code", monospace; font-size: 13px; text-align: center; line-height: 1.8; }
 .llm-m-alignment footer { text-align: center; padding: 32px;  font-size: 13px; border-top: 1px solid var(--lc-border); }

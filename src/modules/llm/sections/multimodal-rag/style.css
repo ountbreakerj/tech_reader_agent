@@ -41,15 +41,6 @@
   border-radius: 4px;
   font-size: 0.88em; }
 .llm-m-multimodal-rag pre code { padding: 0; }
-.llm-m-multimodal-rag .callout { padding: 1rem 1.2rem;
-  border-radius: 6px;
-  margin-bottom: 1.5rem;
-  font-size: 0.95rem; }
-.llm-m-multimodal-rag .callout-blue { border-left: 4px solid #3b82f6; }
-.llm-m-multimodal-rag .callout-green { border-left: 4px solid #22c55e; }
-.llm-m-multimodal-rag .callout-yellow { border-left: 4px solid #eab308; }
-.llm-m-multimodal-rag .callout-purple { border-left: 4px solid #a855f7; }
-.llm-m-multimodal-rag .callout strong { display: block; margin-bottom: 0.3rem; }
 .llm-m-multimodal-rag .arch-table td { text-align: center; font-size: 0.9rem; }
 .llm-m-multimodal-rag .arrow-cell { border: none !important;  font-size: 1.4rem;  padding: 0.3rem; }
 .llm-m-multimodal-rag .tag { display: inline-block;

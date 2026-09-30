@@ -24,13 +24,6 @@
             font-size: 0.88rem;
             line-height: 1.6; }
 .llm-m-rag-eval pre code { padding: 0; }
-.llm-m-rag-eval .callout { border-left: 4px solid #3b82f6;
-            padding: 1rem 1.2rem;
-            margin: 1.2rem 0;
-            border-radius: 0 6px 6px 0; }
-.llm-m-rag-eval .callout-warn { border-left-color: #f59e0b; }
-.llm-m-rag-eval .callout-success { border-left-color: #10b981; }
-.llm-m-rag-eval .callout strong { display: block; margin-bottom: 0.3rem; }
 .llm-m-rag-eval .metric-card { border: 1px solid var(--lc-border);
             border-radius: 8px;
             padding: 1rem;

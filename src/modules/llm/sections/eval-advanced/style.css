@@ -41,15 +41,6 @@
             font-size: 0.88rem;
             line-height: 1.6; }
 .llm-m-eval-advanced pre code { padding: 0; }
-.llm-m-eval-advanced .callout { border-left: 4px solid #3b82f6;
-            
-            padding: 1rem 1.2rem;
-            margin: 1rem 0;
-            border-radius: 0 8px 8px 0; }
-.llm-m-eval-advanced .callout-warn { border-left-color: #f59e0b; }
-.llm-m-eval-advanced .callout-success { border-left-color: #10b981; }
-.llm-m-eval-advanced .callout-danger { border-left-color: #ef4444; }
-.llm-m-eval-advanced .callout strong { display: block; margin-bottom: 0.3rem; }
 .llm-m-eval-advanced ul, .llm-m-eval-advanced ol { margin: 0.5rem 0 1rem 1.5rem; }
 .llm-m-eval-advanced li { margin-bottom: 0.3rem; }
 .llm-m-eval-advanced .subtitle { font-size: 1.05rem;

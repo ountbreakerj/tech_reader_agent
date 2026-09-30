@@ -19,13 +19,6 @@
 .llm-m-distributed table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
 .llm-m-distributed th, .llm-m-distributed td { padding: 10px 14px; border: 1px solid var(--lc-border); text-align: left; }
 .llm-m-distributed th { font-weight: 600; }
-.llm-m-distributed .callout-tip, .llm-m-distributed .callout-warn, .llm-m-distributed .callout-info { padding: 16px 20px; border-radius: 8px; margin: 16px 0; font-size: 14px; }
-.llm-m-distributed .callout-tip { border-left: 4px solid #10b981; }
-.llm-m-distributed .callout-warn { border-left: 4px solid #f59e0b; }
-.llm-m-distributed .callout-info { border-left: 4px solid #3b82f6; }
-.llm-m-distributed .callout-tip::before { content: "TIP"; font-weight: 700;  margin-right: 8px; }
-.llm-m-distributed .callout-warn::before { content: "WARN"; font-weight: 700;  margin-right: 8px; }
-.llm-m-distributed .callout-info::before { content: "INFO"; font-weight: 700;  margin-right: 8px; }
 .llm-m-distributed .badge { display: inline-block;   font-size: 12px; padding: 2px 10px; border-radius: 12px; margin-left: 8px; }
 .llm-m-distributed .formula { border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 14px 0; font-family: "Fira Code", monospace; font-size: 14px; text-align: center; }
 .llm-m-distributed footer { text-align: center; padding: 32px;  font-size: 13px; border-top: 1px solid var(--lc-border); }
