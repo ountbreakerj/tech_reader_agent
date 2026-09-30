@@ -90,9 +90,12 @@ export function detectImageMime(buffer, fileName = '') {
   throw new Error(`无法识别图片类型: ${fileName || '(无文件名)'}`);
 }
 
-export function expandAssetTokens(text, project, usage = new Set()) {
+export function expandAssetTokens(text, project, usage = new Set(), options = {}) {
+  // inline=false 时输出 tr-asset://<id> 占位符，真实 data URI 由构建端汇总进
+  // window.__TR_ASSETS 注册表（每资源单份存储），运行时由 app.js 统一回填 img.src。
+  const { inline = true, uriCache = null } = options;
   const tokenPattern = /@asset\/([A-Za-z0-9._/-]+)/g;
-  const cache = new Map();
+  const cache = uriCache || new Map();
   return text.replace(tokenPattern, (token, id) => {
     const entry = project.assets[id];
     if (!entry) throw new Error(`未登记的图片引用 ${token}`);
@@ -105,7 +108,7 @@ export function expandAssetTokens(text, project, usage = new Set()) {
       if (entry.sha256 && sha256(buffer) !== entry.sha256) throw new Error(`图片内容哈希不一致: ${id}`);
       cache.set(id, `${entry.dataUriPrefix || `data:${entry.mime};base64,`}${buffer.toString('base64')}`);
     }
-    return cache.get(id);
+    return inline ? cache.get(id) : `tr-asset://${id}`;
   });
 }
 

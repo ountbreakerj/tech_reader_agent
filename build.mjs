@@ -17,9 +17,17 @@ const checkBaseline = args.has('--check-baseline');
 const project = loadProject(PROJECT_ROOT);
 const { manifest } = project;
 const assetUsage = new Set();
+const assetUris = new Map();
 
 function read(relativePath) {
-  return expandAssetTokens(readProjectFile(PROJECT_ROOT, relativePath), project, assetUsage);
+  // legacy 构建必须保持字节级基线，继续整段内联；常规构建用占位符 + 注册表单份存储
+  return expandAssetTokens(readProjectFile(PROJECT_ROOT, relativePath), project, assetUsage, { inline: legacy, uriCache: assetUris });
+}
+
+function generateAssetRegistry() {
+  const parts = [];
+  for (const [id, uri] of assetUris) parts.push(`${JSON.stringify(id)}:${JSON.stringify(uri)}`);
+  return `\nwindow.__TR_ASSETS={${parts.join(',')}};\n`;
 }
 
 function readModuleFile(module, relativePath) {
@@ -74,6 +82,7 @@ if (!legacy) {
   const occurrences = app.split(manifest.generatedMarker).length - 1;
   if (occurrences !== 1) throw new Error(`app.js 生成标记应出现一次，实际 ${occurrences}`);
   app = app.replace(manifest.generatedMarker, generateModuleRegistry());
+  app = generateAssetRegistry() + app;
 }
 
 const scriptContents = [

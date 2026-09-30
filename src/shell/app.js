@@ -25,6 +25,18 @@
   var readerWidth = 980;
   var spyTick = false;
 
+  /* ========== asset 占位符回填（构建端单份存储，避免重复内联） ========== */
+  (function () {
+    var reg = window.__TR_ASSETS || {};
+    $$("img").forEach(function (img) {
+      var src = img.getAttribute("src") || "";
+      if (src.indexOf("tr-asset://") === 0) {
+        var uri = reg[src.slice(11)];
+        if (uri) img.src = uri;
+      }
+    });
+  })();
+
   /* ========== helpers ========== */
   function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
   function show(el, v) { el.hidden = !v; }
