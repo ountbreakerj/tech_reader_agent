@@ -357,7 +357,7 @@
     if (section && scope.contains(section)) {
       pendingRestore = null;
       section.setAttribute("tabindex", "-1");
-      section.focus({ preventScroll: true });
+      section.focus({ preventScroll: true, focusVisible: false });
       section.scrollIntoView({ behavior: "instant", block: "start" });
       setActiveToc(sectionId);
     } else if (!sectionId && !changed) {

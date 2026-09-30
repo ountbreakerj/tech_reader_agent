@@ -10,13 +10,14 @@
 <h1>🦜 LangGraph Sub-Agents 实战教程</h1>
 <p class="subtitle">从零构建一个能 <strong>写代码 → 生测试 → 做审查 → 自动修复</strong> 的 Multi-Agent<sup class="tp-mark" data-tp="multi-agent" role="button" tabindex="0" title="查看技术点详情" aria-label="查看技术点详情">?</sup> Pipeline</p>
 
-<div class="hero">
-  <h4>🎯 你将收获什么</h4>
-  <p>深入理解 LangGraph 核心概念（State / Node / Edge / 条件分支 / 持久化 / Sub-Graph / 并行执行）<br>
-  掌握 LangChain & LangGraph 常用 API 速查<br>
-  掌握 Sub-Agent 协作模式，学会控制中间流程与产物流转<br>
-  通过 4 个实战案例获得<strong>独立构建 Agent 工作流</strong>的能力</p>
-</div>
+<h2>你将收获什么</h2>
+
+<ul>
+  <li>深入理解 LangGraph 核心概念（State / Node / Edge / 条件分支 / 持久化 / Sub-Graph / 并行执行）</li>
+  <li>掌握 LangChain & LangGraph 常用 API 速查</li>
+  <li>掌握 Sub-Agent 协作模式，学会控制中间流程与产物流转</li>
+  <li>通过 4 个实战案例获得<strong>独立构建 Agent 工作流</strong>的能力</li>
+</ul>
 
 <!-- ==================== SECTION 1 ==================== -->
 <div class="section" id="lg-s1">
@@ -24,9 +25,9 @@
 
 <p>先花 3 分钟快速回顾 LangChain 核心概念 —— 后面 LangGraph 的很多东西都建立在这些基础之上。</p>
 
-<div class="callout callout-analogy">
-  <strong>类比时间：</strong>如果把 LLM 应用比作做菜，LangChain 给你提供了<strong>食材</strong>（Prompt 模板）、<strong>厨具</strong>（LLM 调用）和<strong>调料</strong>（工具/Tool）。但怎么做菜（流程编排），它只提供了一种非常简单的方案 —— 链（Chain）。
-</div>
+<blockquote>
+  <p><strong>类比时间：</strong>如果把 LLM 应用比作做菜，LangChain 给你提供了<strong>食材</strong>（Prompt 模板）、<strong>厨具</strong>（LLM 调用）和<strong>调料</strong>（工具/Tool）。但怎么做菜（流程编排），它只提供了一种非常简单的方案 —— 链（Chain）。</p>
+</blockquote>
 
 <h3>LangChain 核心组件</h3>
 
@@ -40,9 +41,9 @@
   <tr><td><code>Agent</code></td><td>自主决策 + 工具调用</td><td>LLM 自己决定用什么工具、调几次</td></tr>
 </table>
 
-<div class="callout callout-key">
-  <strong>关键限制：</strong>LangChain 的 Chain 是<strong>线性管道</strong> —— A → B → C，数据单向流动。Agent 虽然能循环调用工具，但流程控制能力有限，很难实现复杂的分支、回退、并行、人工审核等场景。
-</div>
+<blockquote>
+  <p><strong>关键限制：</strong>LangChain 的 Chain 是<strong>线性管道</strong> —— A → B → C，数据单向流动。Agent 虽然能循环调用工具，但流程控制能力有限，很难实现复杂的分支、回退、并行、人工审核等场景。</p>
+</blockquote>
 
 <p>举个例子，用 LangChain LCEL 写一个简单的代码生成链：</p>
 
@@ -80,22 +81,16 @@ result <span class="op">=</span> chain.<span class="fn">invoke</span>({<span cla
 
 <p>Chain 就力不从心了。这就是 LangGraph 登场的原因。</p>
 
-<div class="callout callout-practice" id="prac-s1">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>你是一个翻译助手开发者。用户输入一句中文，你需要：</p>
-    <p>① 用 <code>PromptTemplate</code> 构建一个「中文→英文」翻译提示词</p>
-    <p>② 用 <code>ChatAnthropic</code> 调用模型完成翻译</p>
-    <p>③ 用 <code>StrOutputParser</code> 解析输出</p>
-    <p>④ 把上面三步用 <strong>LCEL 管道语法</strong> <code>prompt | llm | parser</code> 串联起来</p>
-    <p>⑤ 最后用 <code>chain.invoke()</code> 传入一句话测试，打印翻译结果</p>
-  </div>
-  <div class="practice-hint">
-    <strong>提示词参考：</strong><br>
-    <code>system</code>: "你是一个专业的中英文翻译。只输出翻译结果，不要解释。"<br>
-    <code>human</code>: "请把以下中文翻译成英文：{text}"
-  </div>
-</div>
+<blockquote id="prac-s1">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>你是一个翻译助手开发者。用户输入一句中文，你需要：</p>
+  <p>① 用 <code>PromptTemplate</code> 构建一个「中文→英文」翻译提示词</p>
+  <p>② 用 <code>ChatAnthropic</code> 调用模型完成翻译</p>
+  <p>③ 用 <code>StrOutputParser</code> 解析输出</p>
+  <p>④ 把上面三步用 <strong>LCEL 管道语法</strong> <code>prompt | llm | parser</code> 串联起来</p>
+  <p>⑤ 最后用 <code>chain.invoke()</code> 传入一句话测试，打印翻译结果</p>
+  <p><strong>提示词参考：</strong><br> <code>system</code>: "你是一个专业的中英文翻译。只输出翻译结果，不要解释。"<br> <code>human</code>: "请把以下中文翻译成英文：{text}"</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 2 ==================== -->
@@ -125,9 +120,9 @@ result <span class="op">=</span> chain.<span class="fn">invoke</span>({<span cla
   </div>
 </div>
 
-<div class="callout callout-analogy">
-  <strong>类比：</strong>LangChain 的 Chain 像是<strong>流水线</strong> —— 传送带从头到尾，工位固定顺序。LangGraph 像是<strong>乐高积木</strong> —— 你可以用积木（节点）和连接件（边）拼出任何形状的工作流：有环的、有分支的、并行的，随你设计。
-</div>
+<blockquote>
+  <p><strong>类比：</strong>LangChain 的 Chain 像是<strong>流水线</strong> —— 传送带从头到尾，工位固定顺序。LangGraph 像是<strong>乐高积木</strong> —— 你可以用积木（节点）和连接件（边）拼出任何形状的工作流：有环的、有分支的、并行的，随你设计。</p>
+</blockquote>
 
 <div class="diagram">
   <pre class="mermaid">
@@ -163,21 +158,17 @@ graph LR
   <tr><td>并行执行</td><td>多节点并行运行，支持 Map-Reduce 模式</td></tr>
 </table>
 
-<div class="callout callout-practice" id="prac-s2">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>你需要构建一个「文章改写器」，流程如下：</p>
-    <p>① 用户输入一段文字 → <strong>节点A</strong> 改写为正式风格</p>
-    <p>② → <strong>节点B</strong> 检查改写结果是否达到「正式语气」标准</p>
-    <p>③ → 如果不达标，<strong>回到节点A</strong> 重新改写（加上之前的反馈）</p>
-    <p>④ → 如果达标，输出最终结果</p>
-    <p>这个<strong>循环</strong>的需求，正好说明了为什么需要 LangGraph 而不是 LangChain。</p>
-    <p>请先用 <strong>LangChain LCEL</strong> 思考能否实现，再用 <strong>LangGraph</strong> 实现。对比两者的差异。</p>
-  </div>
-  <div class="practice-hint">
-    <strong>要点：</strong>State 需要 <code>text</code>（原文）、<code>rewritten</code>（改写结果）、<code>is_formal</code>（是否达标）、<code>feedback</code>（反馈意见）、<code>attempts</code>（尝试次数）。条件边根据 <code>is_formal</code> 决定「结束」还是「重写」。
-  </div>
-</div>
+<blockquote id="prac-s2">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>你需要构建一个「文章改写器」，流程如下：</p>
+  <p>① 用户输入一段文字 → <strong>节点A</strong> 改写为正式风格</p>
+  <p>② → <strong>节点B</strong> 检查改写结果是否达到「正式语气」标准</p>
+  <p>③ → 如果不达标，<strong>回到节点A</strong> 重新改写（加上之前的反馈）</p>
+  <p>④ → 如果达标，输出最终结果</p>
+  <p>这个<strong>循环</strong>的需求，正好说明了为什么需要 LangGraph 而不是 LangChain。</p>
+  <p>请先用 <strong>LangChain LCEL</strong> 思考能否实现，再用 <strong>LangGraph</strong> 实现。对比两者的差异。</p>
+  <p><strong>要点：</strong>State 需要 <code>text</code>（原文）、<code>rewritten</code>（改写结果）、<code>is_formal</code>（是否达标）、<code>feedback</code>（反馈意见）、<code>attempts</code>（尝试次数）。条件边根据 <code>is_formal</code> 决定「结束」还是「重写」。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 3 ==================== -->
@@ -190,9 +181,9 @@ graph LR
 <div id="s3-1">
 <h3>State（状态）— 共享记忆</h3>
 
-<div class="callout callout-analogy">
-  <strong>类比：</strong>想象一个多人协作的<strong>共享白板</strong>。每个参与者（节点）都可以在白板上写字、擦除、修改。所有人看到的都是同一块白板的最新内容。State 就是这块白板。
-</div>
+<blockquote>
+  <p><strong>类比：</strong>想象一个多人协作的<strong>共享白板</strong>。每个参与者（节点）都可以在白板上写字、擦除、修改。所有人看到的都是同一块白板的最新内容。State 就是这块白板。</p>
+</blockquote>
 
 <p>State 是 LangGraph 的<strong>核心中的核心</strong>。它是一个 Python 对象（通常是 <code>TypedDict</code> 或 <code>Pydantic BaseModel</code>），在整个图的执行过程中被所有节点共享。</p>
 
@@ -223,9 +214,9 @@ graph LR
     history: <span class="cls">Annotated</span>[<span class="cls">list</span>[<span class="cls">str</span>], add]</code></pre>
 </div>
 
-<div class="callout callout-key">
-  <strong>关键语法 <code>Annotated[list[str], add]</code>：</strong>默认情况下，节点返回的字典会<strong>覆盖</strong> State 中同名字段。但加上 <code>Annotated[list, add]</code> 后，新的列表会<strong>追加</strong>到原有列表后面，而不是替换。这在记录历史日志时非常有用。这里的 <code>add</code> 就是一个 <strong>reducer 函数</strong>，后面高级详解会深入讲。
-</div>
+<blockquote>
+  <p><strong>关键语法 <code>Annotated[list[str], add]</code>：</strong>默认情况下，节点返回的字典会<strong>覆盖</strong> State 中同名字段。但加上 <code>Annotated[list, add]</code> 后，新的列表会<strong>追加</strong>到原有列表后面，而不是替换。这在记录历史日志时非常有用。这里的 <code>add</code> 就是一个 <strong>reducer 函数</strong>，后面高级详解会深入讲。</p>
+</blockquote>
 
 <div class="diagram">
   <pre class="mermaid">
@@ -239,29 +230,25 @@ graph LR
   <div class="caption">图 2：State 作为共享白板，所有节点都读写它</div>
 </div>
 
-<div class="callout callout-practice" id="prac-s3-1">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>你要为一个「小说写作助手」设计 State。系统有三个角色：</p>
-    <p>① <strong>大纲师</strong>：根据主题生成故事大纲</p>
-    <p>② <strong>写手</strong>：根据大纲写出正文</p>
-    <p>③ <strong>编辑</strong>：审查正文，给出修改意见</p>
-    <p>你需要定义一个 State，包含所有必要的字段，让三个角色能通过 State 协作。特别注意：修改意见要<strong>追加记录</strong>而不是覆盖（用 <code>Annotated[list, add]</code>）。</p>
-    <p>请用 <code>TypedDict</code> 定义这个 State，至少包含 6 个字段，并为每个字段写注释说明「谁写入、谁读取」。</p>
-  </div>
-  <div class="practice-hint">
-    <strong>参考字段：</strong><code>topic</code>（主题）、<code>outline</code>（大纲）、<code>draft</code>（草稿）、<code>revision_feedback</code>（修改意见列表，用 <code>Annotated[list[str], add]</code>）、<code>is_final</code>（是否定稿）、<code>revision_count</code>（修订次数）
-  </div>
-</div>
+<blockquote id="prac-s3-1">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>你要为一个「小说写作助手」设计 State。系统有三个角色：</p>
+  <p>① <strong>大纲师</strong>：根据主题生成故事大纲</p>
+  <p>② <strong>写手</strong>：根据大纲写出正文</p>
+  <p>③ <strong>编辑</strong>：审查正文，给出修改意见</p>
+  <p>你需要定义一个 State，包含所有必要的字段，让三个角色能通过 State 协作。特别注意：修改意见要<strong>追加记录</strong>而不是覆盖（用 <code>Annotated[list, add]</code>）。</p>
+  <p>请用 <code>TypedDict</code> 定义这个 State，至少包含 6 个字段，并为每个字段写注释说明「谁写入、谁读取」。</p>
+  <p><strong>参考字段：</strong><code>topic</code>（主题）、<code>outline</code>（大纲）、<code>draft</code>（草稿）、<code>revision_feedback</code>（修改意见列表，用 <code>Annotated[list[str], add]</code>）、<code>is_final</code>（是否定稿）、<code>revision_count</code>（修订次数）</p>
+</blockquote>
 </div>
 
 <!-- 3.2 Node -->
 <div id="s3-2">
 <h3>Node（节点）— 干活的人</h3>
 
-<div class="callout callout-analogy">
-  <strong>类比：</strong>如果 State 是白板，Node 就是一个个<strong>工人</strong>。每个工人走到白板前，读取上面的内容，做自己的工作，然后把结果写回白板。
-</div>
+<blockquote>
+  <p><strong>类比：</strong>如果 State 是白板，Node 就是一个个<strong>工人</strong>。每个工人走到白板前，读取上面的内容，做自己的工作，然后把结果写回白板。</p>
+</blockquote>
 
 <p>Node 就是一个普通的 <strong>Python 函数</strong>，接收当前 State，处理后返回一个字典（要更新的字段）。也可以是另一个编译好的 Graph（子图）。</p>
 
@@ -293,9 +280,9 @@ llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span 
     }</code></pre>
 </div>
 
-<div class="callout callout-tip">
-  <strong>要点：</strong>节点函数的返回值是一个<strong>字典</strong>，只包含要更新的 State 字段。LangGraph 会自动把它合并到当前 State 中。你不需要返回完整的 State。
-</div>
+<blockquote>
+  <p><strong>要点：</strong>节点函数的返回值是一个<strong>字典</strong>，只包含要更新的 State 字段。LangGraph 会自动把它合并到当前 State 中。你不需要返回完整的 State。</p>
+</blockquote>
 
 <h4>节点的签名规则</h4>
 
@@ -306,31 +293,25 @@ llm <span class="op">=</span> <span class="cls">ChatAnthropic</span>(model<span 
   <tr><td>返回更新</td><td><code>return {"key": value}</code></td><td>返回字典，自动合并到 State</td></tr>
 </table>
 
-<div class="callout callout-practice" id="prac-s3-2">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>继续「小说写作助手」。现在你需要实现<strong>写手节点</strong>：</p>
-    <p>① 接收 <code>NovelState</code> 作为参数</p>
-    <p>② 从 State 中读取 <code>outline</code>（大纲）</p>
-    <p>③ 调用 <code>ChatAnthropic</code>，用一个精心设计的 <code>ChatPromptTemplate</code> 让 LLM 写出正文</p>
-    <p>④ 返回一个字典，更新 <code>draft</code> 和 <code>history</code> 字段</p>
-    <p>思考：你的 prompt 需要包含哪些信息？如果编辑给出了 <code>revision_feedback</code>，你的节点是否需要读取它来改进？</p>
-  </div>
-  <div class="practice-hint">
-    <strong>关键：</strong>节点函数只返回要更新的字段（字典），不要返回完整 State。<br>
-    <strong>Prompt 参考：</strong>system = "你是一个有创意的小说写手。根据大纲写出引人入胜的正文，注意人物刻画和情节推进。"<br>
-    human = "请根据以下大纲写正文：\n{outline}\n\n修改意见（如有）：{feedback}"
-  </div>
-</div>
+<blockquote id="prac-s3-2">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>继续「小说写作助手」。现在你需要实现<strong>写手节点</strong>：</p>
+  <p>① 接收 <code>NovelState</code> 作为参数</p>
+  <p>② 从 State 中读取 <code>outline</code>（大纲）</p>
+  <p>③ 调用 <code>ChatAnthropic</code>，用一个精心设计的 <code>ChatPromptTemplate</code> 让 LLM 写出正文</p>
+  <p>④ 返回一个字典，更新 <code>draft</code> 和 <code>history</code> 字段</p>
+  <p>思考：你的 prompt 需要包含哪些信息？如果编辑给出了 <code>revision_feedback</code>，你的节点是否需要读取它来改进？</p>
+  <p><strong>关键：</strong>节点函数只返回要更新的字段（字典），不要返回完整 State。<br> <strong>Prompt 参考：</strong>system = "你是一个有创意的小说写手。根据大纲写出引人入胜的正文，注意人物刻画和情节推进。"<br> human = "请根据以下大纲写正文：\n{outline}\n\n修改意见（如有）：{feedback}"</p>
+</blockquote>
 </div>
 
 <!-- 3.3 Edge -->
 <div id="s3-3">
 <h3>Edge &amp; 条件分支 — 流程控制</h3>
 
-<div class="callout callout-analogy">
-  <strong>类比：</strong>Node 是工人，Edge 就是工人之间的<strong>传话规则</strong>。「做完后把结果传给下一个人」—— 这是普通边。「如果质量不合格，传给修复组；如果合格，传给发布组」—— 这是条件边。
-</div>
+<blockquote>
+  <p><strong>类比：</strong>Node 是工人，Edge 就是工人之间的<strong>传话规则</strong>。「做完后把结果传给下一个人」—— 这是普通边。「如果质量不合格，传给修复组；如果合格，传给发布组」—— 这是条件边。</p>
+</blockquote>
 
 <h4>普通边（Normal Edge）</h4>
 
@@ -395,39 +376,34 @@ graph TD
   <div class="caption">图 3：条件边实现「审查→修复→再审查」循环</div>
 </div>
 
-<div class="callout callout-key">
-  <strong>路由函数的规则：</strong>
+<blockquote>
+  <p><strong>路由函数的规则：</strong></p>
   <ul>
-    <li>接收当前 State，返回一个<strong>字符串</strong>（路由 key）</li>
-    <li>返回值必须是 <code>add_conditional_edges</code> 映射字典中的 key 之一</li>
-    <li><code>__end__</code> 是 LangGraph 的内置特殊节点，表示流程结束</li>
+  <li>接收当前 State，返回一个<strong>字符串</strong>（路由 key）</li>
+  <li>返回值必须是 <code>add_conditional_edges</code> 映射字典中的 key 之一</li>
+  <li><code>__end__</code> 是 LangGraph 的内置特殊节点，表示流程结束</li>
   </ul>
-</div>
+</blockquote>
 
-<div class="callout callout-practice" id="prac-s3-3">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>继续「小说写作助手」。你需要定义<strong>编辑节点的路由函数</strong>：</p>
-    <p>① 编辑审查完正文后，根据 <code>is_final</code> 和 <code>revision_count</code> 决定下一步</p>
-    <p>② 如果定稿（<code>is_final=True</code>）→ 流程结束</p>
-    <p>③ 如果修订次数 ≥ 3 → 强制结束（防止无限循环）</p>
-    <p>④ 否则 → 回到写手节点重新修改</p>
-    <p>请实现这个 <code>should_continue_writing</code> 路由函数，并用 <code>add_conditional_edges</code> 把它挂到图上。</p>
-  </div>
-  <div class="practice-hint">
-    <strong>关键：</strong>路由函数返回的字符串必须和 <code>add_conditional_edges</code> 映射字典中的 key 完全一致。<br>
-    映射：<code>{"final": END, "max_retries": END, "revise": "writer"}</code>
-  </div>
-</div>
+<blockquote id="prac-s3-3">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>继续「小说写作助手」。你需要定义<strong>编辑节点的路由函数</strong>：</p>
+  <p>① 编辑审查完正文后，根据 <code>is_final</code> 和 <code>revision_count</code> 决定下一步</p>
+  <p>② 如果定稿（<code>is_final=True</code>）→ 流程结束</p>
+  <p>③ 如果修订次数 ≥ 3 → 强制结束（防止无限循环）</p>
+  <p>④ 否则 → 回到写手节点重新修改</p>
+  <p>请实现这个 <code>should_continue_writing</code> 路由函数，并用 <code>add_conditional_edges</code> 把它挂到图上。</p>
+  <p><strong>关键：</strong>路由函数返回的字符串必须和 <code>add_conditional_edges</code> 映射字典中的 key 完全一致。<br> 映射：<code>{"final": END, "max_retries": END, "revise": "writer"}</code></p>
+</blockquote>
 </div>
 
 <!-- 3.4 Graph -->
 <div id="s3-4">
 <h3>Graph 编排 — 把一切串起来</h3>
 
-<div class="callout callout-analogy">
-  <strong>类比：</strong>State 是白板，Node 是工人，Edge 是传话规则 —— 那 <code>StateGraph</code> 就是<strong>项目经理</strong>，负责把所有人和规则组织起来，定义「谁先做、谁后做、做完给谁」。
-</div>
+<blockquote>
+  <p><strong>类比：</strong>State 是白板，Node 是工人，Edge 是传话规则 —— 那 <code>StateGraph</code> 就是<strong>项目经理</strong>，负责把所有人和规则组织起来，定义「谁先做、谁后做、做完给谁」。</p>
+</blockquote>
 
 <p>完整的图构建流程就 4 步：</p>
 
@@ -477,35 +453,27 @@ graph TD
   <div class="caption">图 4：完整的代码生成 Pipeline 流程图</div>
 </div>
 
-<div class="callout callout-practice" id="prac-s3-4">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>把「小说写作助手」的全部零件组装起来！</p>
-    <p>① 创建 <code>StateGraph</code>，传入你之前定义的 <code>NovelState</code></p>
-    <p>② 添加 3 个节点：<code>"outliner"</code>（大纲师）、<code>"writer"</code>（写手）、<code>"editor"</code>（编辑）</p>
-    <p>③ 设置入口：<code>START → outliner</code></p>
-    <p>④ 添加普通边：<code>outliner → writer → editor</code></p>
-    <p>⑤ 添加条件边：编辑后根据路由函数决定「结束 / 重写」</p>
-    <p>⑥ 添加循环边：<code>writer → editor</code>（修改后重新审查）</p>
-    <p>⑦ <code>.compile()</code> 编译，并用 <code>.invoke()</code> 传入一个主题测试</p>
-  </div>
-  <div class="practice-hint">
-    <strong>检查清单：</strong><br>
-    • 有 <code>set_entry_point("outliner")</code> 或 <code>add_edge(START, "outliner")</code><br>
-    • 条件边的路由函数返回值和映射字典 key 一一对应<br>
-    • 修复后有边回到编辑节点形成循环<br>
-    • 别忘了在 <code>invoke()</code> 时传入完整的初始 State（所有字段都要有初始值）
-  </div>
-</div>
+<blockquote id="prac-s3-4">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>把「小说写作助手」的全部零件组装起来！</p>
+  <p>① 创建 <code>StateGraph</code>，传入你之前定义的 <code>NovelState</code></p>
+  <p>② 添加 3 个节点：<code>"outliner"</code>（大纲师）、<code>"writer"</code>（写手）、<code>"editor"</code>（编辑）</p>
+  <p>③ 设置入口：<code>START → outliner</code></p>
+  <p>④ 添加普通边：<code>outliner → writer → editor</code></p>
+  <p>⑤ 添加条件边：编辑后根据路由函数决定「结束 / 重写」</p>
+  <p>⑥ 添加循环边：<code>writer → editor</code>（修改后重新审查）</p>
+  <p>⑦ <code>.compile()</code> 编译，并用 <code>.invoke()</code> 传入一个主题测试</p>
+  <p><strong>检查清单：</strong><br> • 有 <code>set_entry_point("outliner")</code> 或 <code>add_edge(START, "outliner")</code><br> • 条件边的路由函数返回值和映射字典 key 一一对应<br> • 修复后有边回到编辑节点形成循环<br> • 别忘了在 <code>invoke()</code> 时传入完整的初始 State（所有字段都要有初始值）</p>
+</blockquote>
 </div>
 
 <!-- 3.5 持久化 -->
 <div id="s3-5">
 <h3>持久化与 Checkpoint — 记忆不丢失</h3>
 
-<div class="callout callout-analogy">
-  <strong>类比：</strong>玩游戏时的<strong>存档系统</strong>。每走一步自动存档（Checkpoint），你可以随时读档回到任意一步，也可以在游戏崩溃后从最近的存档继续。LangGraph 的持久化就是这个存档系统。
-</div>
+<blockquote>
+  <p><strong>类比：</strong>玩游戏时的<strong>存档系统</strong>。每走一步自动存档（Checkpoint），你可以随时读档回到任意一步，也可以在游戏崩溃后从最近的存档继续。LangGraph 的持久化就是这个存档系统。</p>
+</blockquote>
 
 <p>持久化的核心用途：</p>
 
@@ -542,34 +510,29 @@ history <span class="op">=</span> app.<span class="fn">get_state_history</span>(
     <span class="fn">print</span>(snapshot.metadata[<span class="str">"step"</span>], snapshot.values)</code></pre>
 </div>
 
-<div class="callout callout-warn">
-  <strong>注意：</strong><code>InMemorySaver</code> 是内存存储，进程结束就没了。生产环境请用 <code>SqliteSaver</code> 或 <code>PostgresSaver</code>（详见高级详解章节）。
-</div>
+<blockquote>
+  <p><strong>注意：</strong><code>InMemorySaver</code> 是内存存储，进程结束就没了。生产环境请用 <code>SqliteSaver</code> 或 <code>PostgresSaver</code>（详见高级详解章节）。</p>
+</blockquote>
 
-<div class="callout callout-practice" id="prac-s3-5">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>给「小说写作助手」加上<strong>存档功能</strong>！</p>
-    <p>① 创建 <code>InMemorySaver</code> 实例，传入 <code>graph.compile(checkpointer=...)</code></p>
-    <p>② 运行时指定 <code>config = {"configurable": {"thread_id": "novel-001"}}</code></p>
-    <p>③ 运行一次后，用 <code>app.get_state_history(config)</code> 查看所有 Checkpoint 快照</p>
-    <p>④ 尝试从某个中间 Checkpoint 恢复执行（用 <code>app.invoke(None, config=config)</code>）</p>
-    <p>思考：如果你把 <code>thread_id</code> 改成 <code>"novel-002"</code>，之前的存档还在吗？</p>
-  </div>
-  <div class="practice-hint">
-    <strong>验证方法：</strong>在每次运行后打印 <code>len(list(app.get_state_history(config)))</code>，观察 Checkpoint 数量是否随着节点执行递增。<br>
-    每个节点执行后都会自动产生一个 Checkpoint。
-  </div>
-</div>
+<blockquote id="prac-s3-5">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>给「小说写作助手」加上<strong>存档功能</strong>！</p>
+  <p>① 创建 <code>InMemorySaver</code> 实例，传入 <code>graph.compile(checkpointer=...)</code></p>
+  <p>② 运行时指定 <code>config = {"configurable": {"thread_id": "novel-001"}}</code></p>
+  <p>③ 运行一次后，用 <code>app.get_state_history(config)</code> 查看所有 Checkpoint 快照</p>
+  <p>④ 尝试从某个中间 Checkpoint 恢复执行（用 <code>app.invoke(None, config=config)</code>）</p>
+  <p>思考：如果你把 <code>thread_id</code> 改成 <code>"novel-002"</code>，之前的存档还在吗？</p>
+  <p><strong>验证方法：</strong>在每次运行后打印 <code>len(list(app.get_state_history(config)))</code>，观察 Checkpoint 数量是否随着节点执行递增。<br> 每个节点执行后都会自动产生一个 Checkpoint。</p>
+</blockquote>
 </div>
 
 <!-- 3.6 HITL -->
 <div id="s3-6">
 <h3>Human-in-the-Loop — 人类介入</h3>
 
-<div class="callout callout-analogy">
-  <strong>类比：自动驾驶汽车</strong> —— 大部分时候自动行驶，但在复杂路口会提示「请人类接管」。LangGraph 的 Human-in-the-Loop 就是这个「请人类接管」的机制。
-</div>
+<blockquote>
+  <p><strong>类比：自动驾驶汽车</strong> —— 大部分时候自动行驶，但在复杂路口会提示「请人类接管」。LangGraph 的 Human-in-the-Loop 就是这个「请人类接管」的机制。</p>
+</blockquote>
 
 <p>LangGraph 有两代写法。先看现在推荐的那一种：在节点里直接调 <code>interrupt()</code>，把「要问人类什么」当成数据交出去；外部想好了，再用 <code>Command(resume=…)</code> 把答案送回去。两边通过 Checkpoint 衔接，所以 <strong>必须配 <code>checkpointer</code></strong>，否则无处存放挂起的现场。</p>
 
@@ -628,9 +591,9 @@ final <span class="op">=</span> app.<span class="fn">invoke</span>(
 )</code></pre>
 </div>
 
-<div class="callout callout-warn">
-  <strong>最容易踩的坑：恢复时节点是「从头重跑」的。</strong><code>interrupt()</code> 不是协程挂起，不会从那一行接着往下走——LangGraph 会把整个节点函数重新执行一遍，只是这一次 <code>interrupt()</code> 直接返回你传的值。所以 <code>interrupt()</code> <strong>之前</strong>的代码会跑两次：写数据库、发邮件、扣费这类有副作用的操作千万不要放在它前面，要么移到 <code>interrupt()</code> 之后，要么拆到单独的节点里。
-</div>
+<blockquote>
+  <p><strong>最容易踩的坑：恢复时节点是「从头重跑」的。</strong><code>interrupt()</code> 不是协程挂起，不会从那一行接着往下走——LangGraph 会把整个节点函数重新执行一遍，只是这一次 <code>interrupt()</code> 直接返回你传的值。所以 <code>interrupt()</code> <strong>之前</strong>的代码会跑两次：写数据库、发邮件、扣费这类有副作用的操作千万不要放在它前面，要么移到 <code>interrupt()</code> 之后，要么拆到单独的节点里。</p>
+</blockquote>
 
 <h4>补充：编译期的静态断点</h4>
 
@@ -655,27 +618,20 @@ app.<span class="fn">update_state</span>(config, {<span class="str">"is_approved
 result <span class="op">=</span> app.<span class="fn">invoke</span>(<span class="kw">None</span>, config<span class="op">=</span>config)</code></pre>
 </div>
 
-<div class="callout callout-tip">
-  <strong>两种写法怎么选：</strong>需要把「问题」和「答案」都当数据传递（审批表单、工具调用确认、多轮改写）就用 <code>interrupt()</code>；只是想在固定位置打个断点看看 State，编译期的 <code>interrupt_after</code> 更轻。两者可以共存。
-</div>
+<blockquote>
+  <p><strong>两种写法怎么选：</strong>需要把「问题」和「答案」都当数据传递（审批表单、工具调用确认、多轮改写）就用 <code>interrupt()</code>；只是想在固定位置打个断点看看 State，编译期的 <code>interrupt_after</code> 更轻。两者可以共存。</p>
+</blockquote>
 
-<div class="callout callout-practice" id="prac-s3-6">
-  <div class="practice-header">
-    <span class="badge">✏️ 动手练习</span> 挑战
-  </div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>给「小说写作助手」加上人类审核关卡，用运行时 <code>interrupt()</code> 实现。</p>
-    <p>① 在 <code>editor</code> 节点里调 <code>interrupt()</code>，payload 把当前 <code>draft</code> 交出来。</p>
-    <p>② 第一次 <code>invoke()</code> 后，从返回值的 <code>__interrupt__</code> 里把 <code>draft</code> 打印出来读一读。</p>
-    <p>③ 用 <code>Command(resume=…)</code> 送回你的判断：满意就传 <code>{"final": True}</code>，要改就传 <code>{"final": False, "feedback": "…"}</code>。</p>
-    <p>④ 节点把 <code>decision</code> 写回 State，用条件边决定是收尾还是打回重写。</p>
-    <p><strong>观察：</strong>在 <code>interrupt()</code> 上一行加一句 <code>print("editor 进来了")</code>，恢复后你会看到它打印了两次—— 这就是「节点从头重跑」的直接证据。</p>
-  </div>
-<div class="practice-hint">
-    <strong>调试技巧：</strong><code>app.get_state(config).next</code> 告诉你恢复后下一步会跑哪个节点；<br>
-    <code>app.get_state(config).tasks[0].interrupts</code> 里能看到完整的中断 payload。
-  </div>
-</div>
+<blockquote id="prac-s3-6">
+  <p><strong>✏️ 动手练习（✏️ 动手练习）</strong></p>
+  <p><strong>场景：</strong>给「小说写作助手」加上人类审核关卡，用运行时 <code>interrupt()</code> 实现。</p>
+  <p>① 在 <code>editor</code> 节点里调 <code>interrupt()</code>，payload 把当前 <code>draft</code> 交出来。</p>
+  <p>② 第一次 <code>invoke()</code> 后，从返回值的 <code>__interrupt__</code> 里把 <code>draft</code> 打印出来读一读。</p>
+  <p>③ 用 <code>Command(resume=…)</code> 送回你的判断：满意就传 <code>{"final": True}</code>，要改就传 <code>{"final": False, "feedback": "…"}</code>。</p>
+  <p>④ 节点把 <code>decision</code> 写回 State，用条件边决定是收尾还是打回重写。</p>
+  <p><strong>观察：</strong>在 <code>interrupt()</code> 上一行加一句 <code>print("editor 进来了")</code>，恢复后你会看到它打印了两次—— 这就是「节点从头重跑」的直接证据。</p>
+  <p><strong>调试技巧：</strong><code>app.get_state(config).next</code> 告诉你恢复后下一步会跑哪个节点；<br> <code>app.get_state(config).tasks[0].interrupts</code> 里能看到完整的中断 payload。</p>
+</blockquote>
 </div>
 
 <h2 id="s-cheat-lc">📋 LangChain 代码速查表</h2>
@@ -723,9 +679,9 @@ result <span class="op">=</span> llm.<span class="fn">invoke</span>(<span class=
 <span class="fn">print</span>(result.content)  <span class="cmt"># 文本内容</span></code></pre>
 </div>
 
-<div class="callout callout-tip">
-  <strong>模型选择建议：</strong>Claude Sonnet 5 是编程和 Agent 场景的最佳默认选择 —— 速度快、能力强、价格合理。Opus 5 适合需要深度推理的复杂任务（如架构设计、数学证明）。Haiku 4.5 适合高并发、低成本的简单任务（如分类、提取）。
-</div>
+<blockquote>
+  <p><strong>模型选择建议：</strong>Claude Sonnet 5 是编程和 Agent 场景的最佳默认选择 —— 速度快、能力强、价格合理。Opus 5 适合需要深度推理的复杂任务（如架构设计、数学证明）。Haiku 4.5 适合高并发、低成本的简单任务（如分类、提取）。</p>
+</blockquote>
 
 <h3>3. PromptTemplate</h3>
 
@@ -821,9 +777,9 @@ result <span class="op">=</span> structured_llm.<span class="fn">invoke</span>(<
 <span class="fn">print</span>(result.is_approved, result.score)  <span class="cmt"># 直接访问属性</span></code></pre>
 </div>
 
-<div class="callout callout-key">
-  <strong>重要：</strong><code>with_structured_output()</code> 是 LangChain 最推荐的输出解析方式，比手动 <code>json.loads()</code> 可靠得多。两点需要说清楚：<strong>一是它不会自动重试</strong>——校验失败第一次就抛 <code>ValidationError</code>，要重试得自己叠加 <code>OutputFixingParser</code>，或在 LangGraph 里给节点配 <code>retry_policy</code>；<strong>二是「严格按 Schema 输出」只在模型服务端支持约束解码时才成立</strong>，其余情况仍是尽力而为。
-</div>
+<blockquote>
+  <p><strong>重要：</strong><code>with_structured_output()</code> 是 LangChain 最推荐的输出解析方式，比手动 <code>json.loads()</code> 可靠得多。两点需要说清楚：<strong>一是它不会自动重试</strong>——校验失败第一次就抛 <code>ValidationError</code>，要重试得自己叠加 <code>OutputFixingParser</code>，或在 LangGraph 里给节点配 <code>retry_policy</code>；<strong>二是「严格按 Schema 输出」只在模型服务端支持约束解码时才成立</strong>，其余情况仍是尽力而为。</p>
+</blockquote>
 
 <h3>7. 消息历史管理</h3>
 
@@ -867,23 +823,16 @@ result <span class="op">=</span> llm.<span class="fn">invoke</span>(history.mess
   <tr><td>管道</td><td><code>prompt | llm | parser</code></td><td>LCEL 链式组合</td></tr>
 </table>
 
-<div class="callout callout-practice" id="prac-lc">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>构建一个「智能客服分流系统」。用户发来一段文字，你需要：</p>
-    <p>① 用 <code>ChatPromptTemplate.from_messages()</code> 构建一个分类提示词（system + human）</p>
-    <p>② 用 <code>with_structured_output()</code> + Pydantic 让 LLM 输出结构化分类结果</p>
-    <p>③ 输出结构包含：<code>category</code>（"技术问题" / "退款" / "投诉" / "其他"）、<code>urgency</code>（1-5）、<code>summary</code>（一句话摘要）</p>
-    <p>④ 用 LCEL 管道 <code>prompt | llm</code> 串联，<code>invoke()</code> 测试 3 条不同的用户消息</p>
-    <p>⑤ 打印结果，验证结构化输出的字段是否正确</p>
-  </div>
-  <div class="practice-hint">
-    <strong>提示词参考：</strong><br>
-    system = "你是一个客服分流专家。分析用户消息，判断问题类别和紧急程度。"<br>
-    human = "用户消息：{message}"<br><br>
-    <strong>结构化输出：</strong>先定义 <code>class Classification(BaseModel)</code>，再用 <code>llm.with_structured_output(Classification)</code> 包装 LLM，返回值直接是 Pydantic 对象。
-  </div>
-</div>
+<blockquote id="prac-lc">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>构建一个「智能客服分流系统」。用户发来一段文字，你需要：</p>
+  <p>① 用 <code>ChatPromptTemplate.from_messages()</code> 构建一个分类提示词（system + human）</p>
+  <p>② 用 <code>with_structured_output()</code> + Pydantic 让 LLM 输出结构化分类结果</p>
+  <p>③ 输出结构包含：<code>category</code>（"技术问题" / "退款" / "投诉" / "其他"）、<code>urgency</code>（1-5）、<code>summary</code>（一句话摘要）</p>
+  <p>④ 用 LCEL 管道 <code>prompt | llm</code> 串联，<code>invoke()</code> 测试 3 条不同的用户消息</p>
+  <p>⑤ 打印结果，验证结构化输出的字段是否正确</p>
+  <p><strong>提示词参考：</strong><br> system = "你是一个客服分流专家。分析用户消息，判断问题类别和紧急程度。"<br> human = "用户消息：{message}"<br><br> <strong>结构化输出：</strong>先定义 <code>class Classification(BaseModel)</code>，再用 <code>llm.with_structured_output(Classification)</code> 包装 LLM，返回值直接是 Pydantic 对象。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION: LangGraph 速查表 ==================== -->
@@ -1070,31 +1019,26 @@ graph <span class="op">=</span> <span class="cls">StateGraph</span>(<span class=
   <tr><td><code>.get_state_history()</code></td><td>获取历史快照</td><td><code>list(app.get_state_history(cfg))</code></td></tr>
 </table>
 
-<div class="callout callout-practice" id="prac-lg">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>构建一个「面试模拟器」，包含循环 + 条件路由 + 持久化。</p>
-    <p>① <strong>State：</strong><code>topic</code>（面试主题）、<code>question</code>（当前问题）、<code>answer</code>（用户回答）、<code>feedback</code>（评估反馈）、<code>score</code>（得分 1-10）、<code>round</code>（第几轮）、<code>final_report</code>（最终报告）</p>
-    <p>② <strong>节点A 生成问题：</strong>根据主题和轮次生成面试题</p>
-    <p>③ <strong>节点B 模拟回答：</strong>让 LLM 扮演候选人回答问题</p>
-    <p>④ <strong>节点C 评估：</strong>给回答打分，给出反馈</p>
-    <p>⑤ <strong>条件路由：</strong>round ≥ 3 → 生成报告并结束；否则 → 回到节点A 问下一题</p>
-    <p>⑥ 加上 <code>InMemorySaver</code>，用 <code>stream_mode="updates"</code> 流式运行，观察每步的 State 变化</p>
-  </div>
-  <div class="practice-hint">
-    <strong>模式：</strong>这是一个「循环 N 次然后结束」的经典模式 —— 用 <code>round</code> 字段做计数器，条件边检查 <code>round >= 3</code>。<br>
-    <strong>加分：</strong>给 State 的 <code>history</code> 用 <code>Annotated[list[str], add]</code> 追加每轮的日志。
-  </div>
-</div>
+<blockquote id="prac-lg">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>构建一个「面试模拟器」，包含循环 + 条件路由 + 持久化。</p>
+  <p>① <strong>State：</strong><code>topic</code>（面试主题）、<code>question</code>（当前问题）、<code>answer</code>（用户回答）、<code>feedback</code>（评估反馈）、<code>score</code>（得分 1-10）、<code>round</code>（第几轮）、<code>final_report</code>（最终报告）</p>
+  <p>② <strong>节点A 生成问题：</strong>根据主题和轮次生成面试题</p>
+  <p>③ <strong>节点B 模拟回答：</strong>让 LLM 扮演候选人回答问题</p>
+  <p>④ <strong>节点C 评估：</strong>给回答打分，给出反馈</p>
+  <p>⑤ <strong>条件路由：</strong>round ≥ 3 → 生成报告并结束；否则 → 回到节点A 问下一题</p>
+  <p>⑥ 加上 <code>InMemorySaver</code>，用 <code>stream_mode="updates"</code> 流式运行，观察每步的 State 变化</p>
+  <p><strong>模式：</strong>这是一个「循环 N 次然后结束」的经典模式 —— 用 <code>round</code> 字段做计数器，条件边检查 <code>round >= 3</code>。<br> <strong>加分：</strong>给 State 的 <code>history</code> 用 <code>Annotated[list[str], add]</code> 追加每轮的日志。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 4: Sub-Agent ==================== -->
 <div class="section" id="lg-s4">
 <h2>Sub-Agent 模式详解</h2>
 
-<div class="callout callout-analogy">
-  <strong>类比：</strong>一个创业公司 —— CEO（主 Agent）不亲自写代码、不做设计、不搞销售，而是把任务分配给 CTO、CFO、CMO（Sub-Agents）。每个 Sub-Agent 有自己的专业领域和工具，CEO 负责协调和决策。
-</div>
+<blockquote>
+  <p><strong>类比：</strong>一个创业公司 —— CEO（主 Agent）不亲自写代码、不做设计、不搞销售，而是把任务分配给 CTO、CFO、CMO（Sub-Agents）。每个 Sub-Agent 有自己的专业领域和工具，CEO 负责协调和决策。</p>
+</blockquote>
 
 <p>Sub-Agent 模式是 LangGraph 构建多 Agent 系统的核心范式。掌握它，你就能构建任意复杂的 Agent 工作流。</p>
 
@@ -1179,30 +1123,24 @@ app <span class="op">=</span> graph.<span class="fn">compile</span>(
 )</code></pre>
 </div>
 
-<div class="callout callout-key">
-  <strong>掌握这个模式：</strong>你构建任何 Agent 工作流时，都遵循这个思路 —— ① 定义 State（确定需要哪些中间产物）→ ② 定义每个 Sub-Agent（读取哪些 State 字段、写入哪些字段）→ ③ 用边和条件路由控制流转顺序 → ④ 在关键节点用 interrupt 让人类介入。这就是 LangGraph 的核心工作方式。
-</div>
+<blockquote>
+  <p><strong>掌握这个模式：</strong>你构建任何 Agent 工作流时，都遵循这个思路 —— ① 定义 State（确定需要哪些中间产物）→ ② 定义每个 Sub-Agent（读取哪些 State 字段、写入哪些字段）→ ③ 用边和条件路由控制流转顺序 → ④ 在关键节点用 interrupt 让人类介入。这就是 LangGraph 的核心工作方式。</p>
+</blockquote>
 
-<div class="callout callout-info">
-  <strong>在接下来的实战项目中</strong>，我们会使用<strong>串行流水线 + 条件循环</strong>的模式：Generator → TestGen → Reviewer → [Fixer → Reviewer → ...] 直到审查通过。你会看到每个 Agent 如何读写 State，条件边如何控制流转。
-</div>
+<blockquote>
+  <p><strong>在接下来的实战项目中</strong>，我们会使用<strong>串行流水线 + 条件循环</strong>的模式：Generator → TestGen → Reviewer → [Fixer → Reviewer → ...] 直到审查通过。你会看到每个 Agent 如何读写 State，条件边如何控制流转。</p>
+</blockquote>
 
-<div class="callout callout-practice" id="prac-s4">
-  <div class="practice-header">✏️ 动手练习 <span class="badge">挑战</span></div>
-  <div class="practice-body">
-    <p><strong>场景：</strong>构建一个「旅行规划师」系统，使用 <strong>Sub-Agent 串行流水线</strong>模式：</p>
-    <p>① <strong>Agent 1 需求分析师</strong>：读取用户的旅行描述，输出结构化信息（目的地、天数、预算、偏好）</p>
-    <p>② <strong>Agent 2 行程规划师</strong>：读取结构化需求，生成每日行程安排</p>
-    <p>③ <strong>Agent 3 预算审核员</strong>：审查行程是否超预算，给出评分和意见</p>
-    <p>④ <strong>条件循环：</strong>如果预算审核不通过 → Agent 4（行程优化器）缩减行程 → 重新审核（最多 2 轮）</p>
-    <p>请完整实现：State 定义 → 4 个 Agent 函数 → Graph 组装 → 条件路由 → 运行测试。</p>
-  </div>
-  <div class="practice-hint">
-    <strong>State 设计参考：</strong><br>
-    <code>user_input</code>（原始描述）、<code>destination</code>、<code>days</code>、<code>budget</code>、<code>preferences</code>（需求分析输出）、<code>itinerary</code>（行程）、<code>budget_review</code>（审核意见）、<code>within_budget</code>（bool）、<code>revision_count</code><br><br>
-    <strong>核心：</strong>这道题综合了前面所有知识点 —— State 设计、节点函数、LCEL 管道、条件路由、循环控制。做完它，你就真正掌握了 LangGraph。
-  </div>
-</div>
+<blockquote id="prac-s4">
+  <p><strong>✏️ 动手练习（挑战）</strong></p>
+  <p><strong>场景：</strong>构建一个「旅行规划师」系统，使用 <strong>Sub-Agent 串行流水线</strong>模式：</p>
+  <p>① <strong>Agent 1 需求分析师</strong>：读取用户的旅行描述，输出结构化信息（目的地、天数、预算、偏好）</p>
+  <p>② <strong>Agent 2 行程规划师</strong>：读取结构化需求，生成每日行程安排</p>
+  <p>③ <strong>Agent 3 预算审核员</strong>：审查行程是否超预算，给出评分和意见</p>
+  <p>④ <strong>条件循环：</strong>如果预算审核不通过 → Agent 4（行程优化器）缩减行程 → 重新审核（最多 2 轮）</p>
+  <p>请完整实现：State 定义 → 4 个 Agent 函数 → Graph 组装 → 条件路由 → 运行测试。</p>
+  <p><strong>State 设计参考：</strong><br> <code>user_input</code>（原始描述）、<code>destination</code>、<code>days</code>、<code>budget</code>、<code>preferences</code>（需求分析输出）、<code>itinerary</code>（行程）、<code>budget_review</code>（审核意见）、<code>within_budget</code>（bool）、<code>revision_count</code><br><br> <strong>核心：</strong>这道题综合了前面所有知识点 —— State 设计、节点函数、LCEL 管道、条件路由、循环控制。做完它，你就真正掌握了 LangGraph。</p>
+</blockquote>
 </div>
 
 
@@ -1226,9 +1164,9 @@ result <span class="op">=</span> research_agent.<span class="fn">invoke</span>({
 <span class="fn">print</span>(result[<span class="str">"messages"</span>][<span class="num">-1</span>].content)</code></pre>
 </div>
 
-<div class="callout callout-key">
-  <strong>选择边界：</strong>单个 ReAct 循环优先使用 <code>create_agent</code>；当多个 Agent 需要串联、存在确定性分支或循环、需要检查中间产物，或者子图要跨项目复用时，应退回手写 <code>StateGraph</code>。多 Agent 系统通常是「若干个 <code>create_agent</code> + 一个显式 <code>StateGraph</code> 编排层」。
-</div>
+<blockquote>
+  <p><strong>选择边界：</strong>单个 ReAct 循环优先使用 <code>create_agent</code>；当多个 Agent 需要串联、存在确定性分支或循环、需要检查中间产物，或者子图要跨项目复用时，应退回手写 <code>StateGraph</code>。多 Agent 系统通常是「若干个 <code>create_agent</code> + 一个显式 <code>StateGraph</code> 编排层」。</p>
+</blockquote>
 
 <h3>MessagesState：消息如何安全地累积</h3>
 
@@ -1245,9 +1183,9 @@ result <span class="op">=</span> research_agent.<span class="fn">invoke</span>({
     handoff_count: <span class="cls">int</span></code></pre>
 </div>
 
-<div class="callout callout-warn">
-  <strong>这里容易出错：</strong>如果自己声明 <code>messages: list</code> 却没有消息 reducer，并行节点或连续节点可能互相覆盖历史。纯消息工作流直接使用 <code>MessagesState</code>；需要额外字段时继承它，不要重新定义同名 <code>messages</code> 字段。
-</div>
+<blockquote>
+  <p><strong>这里容易出错：</strong>如果自己声明 <code>messages: list</code> 却没有消息 reducer，并行节点或连续节点可能互相覆盖历史。纯消息工作流直接使用 <code>MessagesState</code>；需要额外字段时继承它，不要重新定义同名 <code>messages</code> 字段。</p>
+</blockquote>
 
 <h3>Supervisor 与 handoff：由谁决定下一位执行者</h3>
 
@@ -1327,9 +1265,9 @@ app <span class="op">=</span> graph.<span class="fn">compile</span>()</code></pr
   <tr><td>固定流水线</td><td>由静态边决定</td><td>步骤稳定、合规要求高、需要可预测执行</td></tr>
 </table>
 
-<div class="callout callout-warn">
-  <strong>这里容易出错：</strong>handoff 必须传递最小但完整的上下文，并设置最大移交次数或终止条件，否则 Agent 可能互相转交形成循环。涉及副作用的工具还要配合持久化与 HITL，不能只依赖 supervisor 的自然语言判断。
-</div>
+<blockquote>
+  <p><strong>这里容易出错：</strong>handoff 必须传递最小但完整的上下文，并设置最大移交次数或终止条件，否则 Agent 可能互相转交形成循环。涉及副作用的工具还要配合持久化与 HITL，不能只依赖 supervisor 的自然语言判断。</p>
+</blockquote>
 
 <!-- ==================== SECTION 5: 实战项目 ==================== -->
 <div class="section" id="lg-s5">
@@ -1376,9 +1314,9 @@ graph TD
   <tr><td>🔧 自动修复器</td><td>根据审查意见修复代码</td><td>code, review_feedback</td><td>code, revision_count, history</td></tr>
 </table>
 
-<div class="callout callout-tip">
-  <strong>注意读写关系：</strong>每个 Agent 从 State 的哪些字段读取、往哪些字段写入，就是你控制「信息流转」的核心手段。理解这张表 = 理解整个 Pipeline。
-</div>
+<blockquote>
+  <p><strong>注意读写关系：</strong>每个 Agent 从 State 的哪些字段读取、往哪些字段写入，就是你控制「信息流转」的核心手段。理解这张表 = 理解整个 Pipeline。</p>
+</blockquote>
 </div>
 
 <!-- 5.2 -->
@@ -1675,16 +1613,16 @@ checkpointer <span class="op">=</span> <span class="cls">InMemorySaver</span>()
 app <span class="op">=</span> graph.<span class="fn">compile</span>(checkpointer<span class="op">=</span>checkpointer)</code></pre>
 </div>
 
-<div class="callout callout-info">
-  <strong>图的执行顺序：</strong>
+<blockquote>
+  <p><strong>图的执行顺序：</strong></p>
   <ol>
-    <li>从 <code>generate</code> 节点开始（<code>START</code> → <code>"generate"</code>）</li>
-    <li>执行 <code>generate</code> → 普通边 → <code>test_gen</code></li>
-    <li>执行 <code>test_gen</code> → 普通边 → <code>review</code></li>
-    <li>执行 <code>review</code> → 条件边 → 根据 <code>should_continue</code> 返回值路由</li>
-    <li>如果去 <code>revise</code>，修复后通过普通边回到 <code>review</code>，形成循环</li>
+  <li>从 <code>generate</code> 节点开始（<code>START</code> → <code>"generate"</code>）</li>
+  <li>执行 <code>generate</code> → 普通边 → <code>test_gen</code></li>
+  <li>执行 <code>test_gen</code> → 普通边 → <code>review</code></li>
+  <li>执行 <code>review</code> → 条件边 → 根据 <code>should_continue</code> 返回值路由</li>
+  <li>如果去 <code>revise</code>，修复后通过普通边回到 <code>review</code>，形成循环</li>
   </ol>
-</div>
+</blockquote>
 </div>
 
 <!-- 5.8 -->
@@ -1785,9 +1723,9 @@ import pytest
 <div id="s-adv-1">
 <h3>6.1 Sub-Graph — 子图模块化</h3>
 
-<div class="callout callout-analogy">
-  <strong>类比：</strong>如果一个函数太长，你会拆成多个小函数。Sub-Graph 就是把一个大图拆成多个小图 —— 每个子图负责一个独立的功能模块，然后像搭积木一样组合起来。
-</div>
+<blockquote>
+  <p><strong>类比：</strong>如果一个函数太长，你会拆成多个小函数。Sub-Graph 就是把一个大图拆成多个小图 —— 每个子图负责一个独立的功能模块，然后像搭积木一样组合起来。</p>
+</blockquote>
 
 <p><strong>什么时候用 Sub-Graph？</strong></p>
 <ul>
@@ -1855,9 +1793,9 @@ graph TD
   <div class="caption">图 9：Sub-Graph 把「审查+修复循环」封装为独立模块</div>
 </div>
 
-<div class="callout callout-key">
-  <strong>关键点：</strong>子图和主图<strong>共享同一个 State 类型</strong>。子图内部的节点可以直接读写主图的 State 字段，数据自动流通，无需额外配置。
-</div>
+<blockquote>
+  <p><strong>关键点：</strong>子图和主图<strong>共享同一个 State 类型</strong>。子图内部的节点可以直接读写主图的 State 字段，数据自动流通，无需额外配置。</p>
+</blockquote>
 </div>
 
 <!-- 6.2 并行 -->
@@ -2007,9 +1945,9 @@ graph.<span class="fn">add_edge</span>(<span class="str">"summarize"</span>, <sp
     messages: <span class="cls">Annotated</span>[<span class="cls">list</span>[<span class="cls">str</span>], keep_last_n(<span class="num">10</span>)]</code></pre>
 </div>
 
-<div class="callout callout-tip">
-  <strong>实际用途：</strong>在构建聊天 Agent 时，<code>keep_last_n</code> Reducer 非常有用 —— 你不想把所有历史消息都塞进 LLM 的上下文窗口，只保留最近 10 轮对话就够了。
-</div>
+<blockquote>
+  <p><strong>实际用途：</strong>在构建聊天 Agent 时，<code>keep_last_n</code> Reducer 非常有用 —— 你不想把所有历史消息都塞进 LLM 的上下文窗口，只保留最近 10 轮对话就够了。</p>
+</blockquote>
 </div>
 
 <!-- 6.4 错误处理 -->
@@ -2116,9 +2054,9 @@ langgraph dev --port 8123
   <tr><td>自部署 Docker</td><td>私有化部署</td><td>完全控制，适合企业内网</td></tr>
 </table>
 
-<div class="callout callout-info">
-  <strong>推荐路径：</strong>开发阶段用 <code>langgraph dev</code> 本地调试，生产环境用 LangSmith Deployment 或 Docker 自部署。配合 LangSmith 做链路追踪和调试。
-</div>
+<blockquote>
+  <p><strong>推荐路径：</strong>开发阶段用 <code>langgraph dev</code> 本地调试，生产环境用 LangSmith Deployment 或 Docker 自部署。配合 LangSmith 做链路追踪和调试。</p>
+</blockquote>
 </div>
 </div>
 
@@ -2132,9 +2070,9 @@ langgraph dev --port 8123
 <div id="s-case-1">
 <h3>案例一：RAG 检索增强生成 Pipeline</h3>
 
-<div class="callout callout-analogy">
-  <strong>场景：</strong>你有一个公司的知识库（文档、PDF、网页），用户提问时，系统先检索相关文档片段，再用 LLM 基于这些片段生成回答，并附上来源引用。
-</div>
+<blockquote>
+  <p><strong>场景：</strong>你有一个公司的知识库（文档、PDF、网页），用户提问时，系统先检索相关文档片段，再用 LLM 基于这些片段生成回答，并附上来源引用。</p>
+</blockquote>
 
 <div class="diagram">
   <pre class="mermaid">
@@ -2286,18 +2224,18 @@ graph.<span class="fn">add_edge</span>(<span class="str">"direct"</span>, <span 
 app <span class="op">=</span> graph.<span class="fn">compile</span>()</code></pre>
 </div>
 
-<div class="callout callout-tip">
-  <strong>这个案例展示了：</strong>意图路由（条件边）、检索→评分→改写的循环（提高检索质量）、回答验证（确保有据可依）。这三者组合起来就是一个生产级 RAG 系统的核心骨架。
-</div>
+<blockquote>
+  <p><strong>这个案例展示了：</strong>意图路由（条件边）、检索→评分→改写的循环（提高检索质量）、回答验证（确保有据可依）。这三者组合起来就是一个生产级 RAG 系统的核心骨架。</p>
+</blockquote>
 </div>
 
 <!-- ====== Case 2: 多模型协作 ====== -->
 <div id="s-case-2">
 <h3>案例二：多模型协作系统</h3>
 
-<div class="callout callout-analogy">
-  <strong>场景：</strong>不同任务分配给最擅长的模型 —— Claude Opus 5 负责深度推理和架构设计，Claude Sonnet 5 负责代码生成和审查，Claude Haiku 4.5 负责快速分类和提取。各取所长，协作完成复杂任务。
-</div>
+<blockquote>
+  <p><strong>场景：</strong>不同任务分配给最擅长的模型 —— Claude Opus 5 负责深度推理和架构设计，Claude Sonnet 5 负责代码生成和审查，Claude Haiku 4.5 负责快速分类和提取。各取所长，协作完成复杂任务。</p>
+</blockquote>
 
 <div class="diagram">
   <pre class="mermaid">
@@ -2401,18 +2339,18 @@ graph.<span class="fn">add_edge</span>(<span class="str">"docs"</span>, <span cl
 app <span class="op">=</span> graph.<span class="fn">compile</span>()</code></pre>
 </div>
 
-<div class="callout callout-key">
-  <strong>核心思想：</strong>不要所有任务都用同一个模型。<strong>Opus 做规划</strong>（需要最强推理能力）、<strong>Sonnet 做实现</strong>（编程能力最强）、<strong>Haiku 做分类</strong>（速度最快成本最低）。这样既保证质量又控制成本。
-</div>
+<blockquote>
+  <p><strong>核心思想：</strong>不要所有任务都用同一个模型。<strong>Opus 做规划</strong>（需要最强推理能力）、<strong>Sonnet 做实现</strong>（编程能力最强）、<strong>Haiku 做分类</strong>（速度最快成本最低）。这样既保证质量又控制成本。</p>
+</blockquote>
 </div>
 
 <!-- ====== Case 3: 数据分析 ====== -->
 <div id="s-case-3">
 <h3>案例三：数据分析流水线</h3>
 
-<div class="callout callout-analogy">
-  <strong>场景：</strong>用户提供原始数据（CSV/JSON），系统自动进行数据清洗、分析、生成可视化建议，中间支持人工审核关键步骤。最终输出分析报告。
-</div>
+<blockquote>
+  <p><strong>场景：</strong>用户提供原始数据（CSV/JSON），系统自动进行数据清洗、分析、生成可视化建议，中间支持人工审核关键步骤。最终输出分析报告。</p>
+</blockquote>
 
 <div class="diagram">
   <pre class="mermaid">
@@ -2568,9 +2506,9 @@ result <span class="op">=</span> app.<span class="fn">invoke</span>(
 <span class="cmt"># 继续执行：app.invoke(None, config=config)</span></code></pre>
 </div>
 
-<div class="callout callout-tip">
-  <strong>这个案例展示了：</strong>Human-in-the-Loop 在实际业务中的应用 —— 数据分析是典型的「需要人工判断」场景。你可以审核分析结果，添加额外指令，再让系统继续生成报告。这就是 LangGraph 的价值：不是全自动，而是<strong>人机协作</strong>。
-</div>
+<blockquote>
+  <p><strong>这个案例展示了：</strong>Human-in-the-Loop 在实际业务中的应用 —— 数据分析是典型的「需要人工判断」场景。你可以审核分析结果，添加额外指令，再让系统继续生成报告。这就是 LangGraph 的价值：不是全自动，而是<strong>人机协作</strong>。</p>
+</blockquote>
 </div>
 </div>
 
@@ -2603,15 +2541,15 @@ result <span class="op">=</span> app.<span class="fn">invoke</span>(
 <div class="step"><div class="step-num">5</div><div class="step-content"><strong>多模型协作</strong> — 用案例二的模式，为你的实际项目设计模型分工方案</div></div>
 <div class="step"><div class="step-num">6</div><div class="step-content"><strong>部署上线</strong> — 用 <code>langgraph dev</code> 本地调试，然后部署到 LangSmith Deployment 或 Docker</div></div>
 
-<div class="callout callout-info">
-  <strong>推荐资源：</strong>
+<blockquote>
+  <p><strong>推荐资源：</strong></p>
   <ul>
-    <li><span class="ext-ref" title="外部链接已移除">LangGraph 官方文档</span></li>
-    <li><span class="ext-ref" title="外部链接已移除">LangGraph GitHub 仓库</span></li>
-    <li><span class="ext-ref" title="外部链接已移除">LangChain Academy</span>（免费课程）</li>
-    <li><span class="ext-ref" title="外部链接已移除">LangSmith 文档</span>（链路追踪和调试）</li>
+  <li><span class="ext-ref" title="外部链接已移除">LangGraph 官方文档</span></li>
+  <li><span class="ext-ref" title="外部链接已移除">LangGraph GitHub 仓库</span></li>
+  <li><span class="ext-ref" title="外部链接已移除">LangChain Academy</span>（免费课程）</li>
+  <li><span class="ext-ref" title="外部链接已移除">LangSmith 文档</span>（链路追踪和调试）</li>
   </ul>
-</div>
+</blockquote>
 
 <div class="footer">
   <p>📚 LangGraph Sub-Agents 实战教程 | 基于 LangGraph 1.x + LangChain v1 构建</p>

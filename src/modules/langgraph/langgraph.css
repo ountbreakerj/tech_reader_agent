@@ -188,11 +188,18 @@
   border: 1px solid var(--lc-border); }
 .lg-scope .hero h4 { color: var(--lc-text); margin: 0 0 0.5rem; font-size: 1.1rem; }
 .lg-scope .hero p { color: var(--lc-text-muted); }
-.lg-scope .section { background: var(--lc-bg); min-width: 0; max-width: 100%; overflow-x: hidden; border-radius: var(--radius-md); padding: 2rem 2.5rem;
-  margin: 2rem 0; box-shadow: none; border: 1px solid var(--lc-border);
+.lg-scope .section { background: transparent; min-width: 0; max-width: 100%; overflow-x: hidden; border-radius: 0; padding: 0;
+  margin: 2rem 0; box-shadow: none; border: 0;
   opacity: 0; transform: translateY(16px);
   transition: opacity 0.5s ease, transform 0.5s ease; }
 .lg-scope .section.visible { opacity: 1; transform: translateY(0); }
+/* 书页化：callout/practice 已重写为 blockquote（沿用深入理解 Agent 章节的引用块形态） */
+.lg-scope blockquote { margin: 1.25rem 0; padding: 14px 20px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-2); border-radius: 10px;
+  font-size: 0.93rem; }
+.lg-scope blockquote p { margin: .6em 0; }
+.lg-scope blockquote ul, .lg-scope blockquote ol { margin: .4em 0; }
 .lg-scope .callout { border-radius: var(--radius-sm); padding: 1rem 1.25rem; margin: 1.25rem 0;
   position: relative; padding-left: 2.75rem; font-size: 0.93rem;
   border: 1px solid; }
@@ -356,8 +363,7 @@
 .lg-scope h1 { font-size: 1.5rem; }
 .lg-scope .compare { grid-template-columns: 1fr; }
 .lg-scope pre { font-size: 0.8rem; padding: 1rem; }
-.lg-scope .section { padding: 1.25rem; border-radius: var(--radius-sm); }
-.lg-scope .hero { padding: 1.25rem; border-radius: var(--radius-sm); }
+.lg-scope .section { padding: 0; border-radius: 0; }
 .lg-scope .step { padding: 0.75rem 1rem; }
 }
 
