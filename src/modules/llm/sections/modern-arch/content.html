@@ -10,10 +10,10 @@
 
 <p>关键思想：利用 GPU 的 SRAM（片上内存，速度比 HBM 快 ~10x）进行分块（tiling）计算，将 Q、K、V 分成小块加载到 SRAM 中，在片上完成 softmax 和矩阵乘法，避免将中间注意力矩阵写回 HBM。</p>
 
-<div class="callout">
-    <strong>Flash Attention 核心公式</strong>
-    通过在线 softmax 算法（online softmax trick），可以逐块计算 softmax 而无需存储完整注意力矩阵。IO 复杂度从 O(N²) 降低到 O(N²d²/M)，其中 M 是 SRAM 大小。
-</div>
+<blockquote>
+<p><strong>Flash Attention 核心公式</strong>
+    通过在线 softmax 算法（online softmax trick），可以逐块计算 softmax 而无需存储完整注意力矩阵。IO 复杂度从 O(N²) 降低到 O(N²d²/M)，其中 M 是 SRAM 大小。</p>
+</blockquote>
 
 <h3>Flash Attention 2 / 3 改进</h3>
 <p><strong>Flash Attention 2</strong> 在 v1 基础上进一步优化：</p>
@@ -156,10 +156,10 @@ q_rope, k_rope = apply_rotary_pos_emb(q, k, cos, sin)</code></pre>
     <li><strong>无额外参数</strong>：不引入可学习参数，仅通过数学变换实现</li>
 </ul>
 
-<div class="callout callout-success">
-    <strong>为什么几乎所有现代 LLM 都用 RoPE？</strong>
-    RoPE 综合了绝对位置编码（实现简单）和相对位置编码（理论优雅）的优点。从 LLaMA、Mistral、Qwen、DeepSeek 到 Gemma，几乎所有 2023 年后的主流开源 LLM 都采用 RoPE。它与线性注意力、Flash Attention 等技术完全兼容，且通过 YaRN/NTK 可轻松扩展上下文窗口。
-</div>
+<blockquote>
+<p><strong>为什么几乎所有现代 LLM 都用 RoPE？</strong>
+    RoPE 综合了绝对位置编码（实现简单）和相对位置编码（理论优雅）的优点。从 LLaMA、Mistral、Qwen、DeepSeek 到 Gemma，几乎所有 2023 年后的主流开源 LLM 都采用 RoPE。它与线性注意力、Flash Attention 等技术完全兼容，且通过 YaRN/NTK 可轻松扩展上下文窗口。</p>
+</blockquote>
 
 <!-- ==================== Section 3 ==================== -->
 <h2><span class="section-number">14.3</span> GQA（分组查询注意力）</h2>
@@ -316,10 +316,10 @@ class MultiHeadLatentAttention(nn.Module):
     <tr><td>代表模型</td><td>Llama 2/3, Mistral</td><td>DeepSeek V2/V3</td></tr>
 </table>
 
-<div class="callout">
-    <strong>MLA 的实际效果</strong>
-    DeepSeek V2 使用 kv_lora_rank=512，相比 MHA 的完整 KV cache 压缩了约 93.3%，同时保持了与 MHA 相当甚至更优的性能。DeepSeek V3 和 R1 均延续了 MLA 设计。
-</div>
+<blockquote>
+<p><strong>MLA 的实际效果</strong>
+    DeepSeek V2 使用 kv_lora_rank=512，相比 MHA 的完整 KV cache 压缩了约 93.3%，同时保持了与 MHA 相当甚至更优的性能。DeepSeek V3 和 R1 均延续了 MLA 设计。</p>
+</blockquote>
 
 <!-- ==================== Section 5 ==================== -->
 <h2><span class="section-number">14.5</span> MoE（混合专家）详解</h2>
@@ -570,38 +570,38 @@ class SelectiveSSM(nn.Module):
     <li>支持 100 万+ token 的上下文长度，推理内存恒定</li>
 </ul>
 
-<div class="callout callout-success">
-    <strong>RWKV 的独特价值</strong>
-    RWKV 是唯一一个同时兼具"并行训练"和"恒定推理复杂度"的架构，且完全开源（Apache 2.0）。对于需要在边缘设备或低资源环境下部署长上下文应用的场景，RWKV 可能是最实用的选择。
-</div>
+<blockquote>
+<p><strong>RWKV 的独特价值</strong>
+    RWKV 是唯一一个同时兼具"并行训练"和"恒定推理复杂度"的架构，且完全开源（Apache 2.0）。对于需要在边缘设备或低资源环境下部署长上下文应用的场景，RWKV 可能是最实用的选择。</p>
+</blockquote>
 
 <!-- ==================== Section 8 ==================== -->
 <h2><span class="section-number">14.8</span> 动手练习</h2>
 
-<div class="callout callout-warn">
-    <strong>练习 1：实现简化版 Flash Attention</strong>
-    使用 Python/PyTorch 实现分块注意力（tiled attention），只使用 O(N) 额外内存。你可以参考在线 softmax 算法，逐块加载 K、V 并更新输出。验证你的实现与标准注意力在数学上等价（误差 < 1e-5）。
-</div>
+<blockquote>
+<p><strong>练习 1：实现简化版 Flash Attention</strong>
+    使用 Python/PyTorch 实现分块注意力（tiled attention），只使用 O(N) 额外内存。你可以参考在线 softmax 算法，逐块加载 K、V 并更新输出。验证你的实现与标准注意力在数学上等价（误差 < 1e-5）。</p>
+</blockquote>
 
-<div class="callout callout-warn">
-    <strong>练习 2：RoPE 外推实验</strong>
-    实现 NTK-aware RoPE 缩放（修改 base 频率），测试模型在超出训练长度时的困惑度变化。分别测试 base=10000（原始）、base=500000（NTK 缩放）在 2x 和 4x 训练长度下的表现。
-</div>
+<blockquote>
+<p><strong>练习 2：RoPE 外推实验</strong>
+    实现 NTK-aware RoPE 缩放（修改 base 频率），测试模型在超出训练长度时的困惑度变化。分别测试 base=10000（原始）、base=500000（NTK 缩放）在 2x 和 4x 训练长度下的表现。</p>
+</blockquote>
 
-<div class="callout callout-warn">
-    <strong>练习 3：GQA 对比实验</strong>
-    在小模型（如 125M 参数）上对比 MHA（32 heads）、GQA-8（32Q/8KV）、MQA（32Q/1KV）三种配置的训练收敛速度和推理吞吐量。统计不同序列长度下的 KV cache 内存占用。
-</div>
+<blockquote>
+<p><strong>练习 3：GQA 对比实验</strong>
+    在小模型（如 125M 参数）上对比 MHA（32 heads）、GQA-8（32Q/8KV）、MQA（32Q/1KV）三种配置的训练收敛速度和推理吞吐量。统计不同序列长度下的 KV cache 内存占用。</p>
+</blockquote>
 
-<div class="callout callout-warn">
-    <strong>练习 4：MoE 路由可视化</strong>
-    训练一个小型 MoE 模型（4 专家，top-2），记录每个 batch 的路由决策。可视化：(1) 每个专家的负载分布；(2) 不同 token 类型（名词、动词、标点等）的路由偏好；(3) 加入负载均衡损失前后的变化。
-</div>
+<blockquote>
+<p><strong>练习 4：MoE 路由可视化</strong>
+    训练一个小型 MoE 模型（4 专家，top-2），记录每个 batch 的路由决策。可视化：(1) 每个专家的负载分布；(2) 不同 token 类型（名词、动词、标点等）的路由偏好；(3) 加入负载均衡损失前后的变化。</p>
+</blockquote>
 
-<div class="callout callout-warn">
-    <strong>练习 5：Mamba vs Transformer 对比</strong>
-    在长序列任务上（如 16K、32K、64K token 的语言建模）对比 Mamba 和同等参数量 Transformer 的 (1) 训练速度，(2) 推理速度，(3) 内存占用，(4) 困惑度。绘制性能-序列长度曲线。
-</div>
+<blockquote>
+<p><strong>练习 5：Mamba vs Transformer 对比</strong>
+    在长序列任务上（如 16K、32K、64K token 的语言建模）对比 Mamba 和同等参数量 Transformer 的 (1) 训练速度，(2) 推理速度，(3) 内存占用，(4) 困惑度。绘制性能-序列长度曲线。</p>
+</blockquote>
 
 <p style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 0.9rem;">
     返回目录 | 上一章：分布式训练 | 下一章：模型评估进阶

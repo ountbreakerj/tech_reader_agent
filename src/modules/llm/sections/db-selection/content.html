@@ -19,9 +19,9 @@
 <div class="section" id="llm-db-selection-s1">
   <h2>数据库类型概览</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>选择数据库就像选择交通工具——去近的地方骑自行车（简单快速），去远的地方开车（功能强大），运大量货物用货车（高吞吐）。不同的场景需要不同的工具。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>选择数据库就像选择交通工具——去近的地方骑自行车（简单快速），去远的地方开车（功能强大），运大量货物用货车（高吞吐）。不同的场景需要不同的工具。</p>
+</blockquote>
 
   <h3>主流数据库分类</h3>
 
@@ -37,9 +37,9 @@
     <tr><td><strong>向量扩展</strong></td><td>pgvector (PostgreSQL), MySQL 9.x VECTOR</td><td>向量（嵌入关系型）</td><td>已有PG/MySQL团队、中小规模向量检索</td></tr>
   </table>
 
-  <div class="callout callout-info">
-    <strong>扩展知识：</strong>现代应用往往需要多种数据库协同工作（多库架构）。例如：MySQL存用户数据 + Milvus存向量 + Redis做缓存。此外，越来越多的数据库开始<strong>原生支持混合搜索</strong>（向量+全文检索），如 PostgreSQL 的 pgvector + tsvector 组合、Milvus 2.5+ 内置的 BM25 全文检索等，使得单库即可完成多种检索任务。
-  </div>
+  <blockquote>
+<p><strong>扩展知识：</strong>现代应用往往需要多种数据库协同工作（多库架构）。例如：MySQL存用户数据 + Milvus存向量 + Redis做缓存。此外，越来越多的数据库开始<strong>原生支持混合搜索</strong>（向量+全文检索），如 PostgreSQL 的 pgvector + tsvector 组合、Milvus 2.5+ 内置的 BM25 全文检索等，使得单库即可完成多种检索任务。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 2 ==================== -->
@@ -85,9 +85,9 @@
     <tr><td>JSON查询</td><td>⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>PostgreSQL JSONB远胜</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>我的建议：</strong>如果是新项目且没有历史包袱，推荐PostgreSQL。它的功能更全面，长期来看更不容易遇到瓶颈。
-  </div>
+  <blockquote>
+<p><strong>我的建议：</strong>如果是新项目且没有历史包袱，推荐PostgreSQL。它的功能更全面，长期来看更不容易遇到瓶颈。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 3 ==================== -->
@@ -130,21 +130,21 @@
     </div>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>pgvector：已有PostgreSQL团队的最佳选择</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>pgvector：已有PostgreSQL团队的最佳选择</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li>pgvector 是 PostgreSQL 的向量检索扩展，安装后即可在熟悉的 PG 实例中存储和查询向量</li>
       <li>无需额外部署和运维独立的向量数据库，降低架构复杂度</li>
       <li>支持 IVFFlat、HNSW 索引，千万级向量数据性能表现良好</li>
       <li>可与 PostgreSQL 的 SQL 能力无缝结合——在同一查询中同时做向量检索和结构化过滤</li>
       <li>适合中小规模 RAG 项目、需要向量+关系数据联合查询的场景</li>
     </ul>
-  </div>
+</blockquote>
 
-  <div class="callout callout-info">
-    <strong>MySQL 9.x VECTOR 类型（实验性）</strong>
-    <p style="margin-top: 0.3rem;">MySQL 9.0+ 开始引入原生 <code>VECTOR</code> 数据类型和向量距离函数，标志着 MySQL 也在向量检索领域发力。目前该特性仍处于实验性阶段，功能和索引支持远不如 pgvector 成熟。如果你的团队使用 MySQL 且对向量检索需求较轻，可以持续关注其演进；生产环境仍建议搭配 Milvus 或 pgvector。</p>
-  </div>
+  <blockquote>
+<p><strong>MySQL 9.x VECTOR 类型（实验性）</strong></p>
+<p style="margin-top: 0.3rem;">MySQL 9.0+ 开始引入原生 <code>VECTOR</code> 数据类型和向量距离函数，标志着 MySQL 也在向量检索领域发力。目前该特性仍处于实验性阶段，功能和索引支持远不如 pgvector 成熟。如果你的团队使用 MySQL 且对向量检索需求较轻，可以持续关注其演进；生产环境仍建议搭配 Milvus 或 pgvector。</p>
+</blockquote>
 
   <h3>性能基准对比（向量检索）</h3>
 
@@ -161,9 +161,9 @@
 <div class="section" id="llm-db-selection-s4">
   <h2>混合数据库架构</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>混合数据库架构就像一个完整的公司——MySQL是财务部（处理结构化交易数据），Milvus是市场部（处理用户行为向量），Redis是前台（快速响应请求）。每个部门专注自己的领域，通过协作完成整体目标。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>混合数据库架构就像一个完整的公司——MySQL是财务部（处理结构化交易数据），Milvus是市场部（处理用户行为向量），Redis是前台（快速响应请求）。每个部门专注自己的领域，通过协作完成整体目标。</p>
+</blockquote>
 
   <h3>典型的多库架构</h3>
 
@@ -198,23 +198,22 @@ graph TB
     <tr><td><strong>弱一致</strong></td><td>低</td><td>最低</td><td>低</td><td>非关键数据</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>实践建议：</strong>大多数RAG应用采用最终一致性方案即可。用户数据存MySQL，向量数据存Milvus，通过CDC或双写保持同步，允许几秒钟的延迟。
-  </div>
+  <blockquote>
+<p><strong>实践建议：</strong>大多数RAG应用采用最终一致性方案即可。用户数据存MySQL，向量数据存Milvus，通过CDC或双写保持同步，允许几秒钟的延迟。</p>
+</blockquote>
 
-  <div class="callout callout-info">
-    <strong>混合搜索新趋势：</strong>传统架构需要 MySQL + Milvus 两套系统分别负责关键词检索和向量检索。随着技术演进，<strong>混合搜索正逐渐走向原生化</strong>：PostgreSQL 通过 pgvector + tsvector 可在单库内同时完成语义搜索和全文搜索；Milvus 2.5+ 内置了 BM25 全文检索能力，不再需要为关键词搜索单独维护一个 MySQL。对于新建项目，简化架构、减少数据同步复杂度是一个值得考虑的方向。
-  </div>
+  <blockquote>
+<p><strong>混合搜索新趋势：</strong>传统架构需要 MySQL + Milvus 两套系统分别负责关键词检索和向量检索。随着技术演进，<strong>混合搜索正逐渐走向原生化</strong>：PostgreSQL 通过 pgvector + tsvector 可在单库内同时完成语义搜索和全文搜索；Milvus 2.5+ 内置了 BM25 全文检索能力，不再需要为关键词搜索单独维护一个 MySQL。对于新建项目，简化架构、减少数据同步复杂度是一个值得考虑的方向。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 5 ==================== -->
 <div class="section" id="llm-db-selection-s5">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：电商平台数据库设计 <span class="badge">综合</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>为一个电商平台设计完整的多库架构。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（综合）</strong></p>
+<p><strong>目标：</strong>为一个电商平台设计完整的多库架构。</p>
       <p><strong>需求：</strong></p>
       <p>① 用户管理（注册、登录、个人信息）</p>
       <p>② 商品管理（商品信息、分类、价格）</p>
@@ -226,13 +225,11 @@ graph TB
       <p>② 说明每个数据库的选择理由</p>
       <p>③ 设计数据同步方案</p>
       <p>④ 给出数据库Schema设计</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习2：技术选型报告 <span class="badge">进阶</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>针对一个具体场景写技术选型报告。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（进阶）</strong></p>
+<p><strong>目标：</strong>针对一个具体场景写技术选型报告。</p>
       <p><strong>场景（三选一）：</strong></p>
       <p>A. 企业知识库问答系统</p>
       <p>B. 电商商品搜索和推荐</p>
@@ -243,8 +240,7 @@ graph TB
       <p>③ 给出推荐方案和理由</p>
       <p>④ 画出架构图</p>
       <p>⑤ 评估成本和风险</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 <!-- 底部导航 -->

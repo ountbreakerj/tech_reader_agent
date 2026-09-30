@@ -8,9 +8,9 @@
 <div class="section" id="llm-hitl-memory-s1">
   <h2>为什么需要 Human-in-the-Loop</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>自动驾驶汽车——大部分时候自动行驶，但在复杂路口、施工区域、突发状况时，系统会提示"请人类接管方向盘"。HITL 就是这个"人类接管"机制，让 AI Agent 在关键决策点暂停，等待人类审核或提供额外信息。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>自动驾驶汽车——大部分时候自动行驶，但在复杂路口、施工区域、突发状况时，系统会提示"请人类接管方向盘"。HITL 就是这个"人类接管"机制，让 AI Agent 在关键决策点暂停，等待人类审核或提供额外信息。</p>
+</blockquote>
 
   <p>在生产环境中，完全自主的 Agent 存在风险。HITL 让你在以下场景中保持控制：</p>
 
@@ -30,9 +30,9 @@
 
   <p><code>interrupt()</code> 是 LangGraph 推荐的人机交互方式（0.2+ 版本）。它在节点函数内部调用，暂停图执行，将上下文信息发送给人类，并等待人类响应后恢复执行。</p>
 
-  <div class="callout callout-key">
-    <strong>核心机制：</strong><code>interrupt(value)</code> 暂停图执行并将 <code>value</code> 作为"人类看到的信息"返回给调用方。当人类准备好回复时，通过 <code>Command(resume=response)</code> 恢复执行，<code>interrupt()</code> 的返回值就是人类的 <code>response</code>。
-  </div>
+  <blockquote>
+<p><strong>核心机制：</strong><code>interrupt(value)</code> 暂停图执行并将 <code>value</code> 作为"人类看到的信息"返回给调用方。当人类准备好回复时，通过 <code>Command(resume=response)</code> 恢复执行，<code>interrupt()</code> 的返回值就是人类的 <code>response</code>。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header">
@@ -112,9 +112,9 @@ result = app.<span class="fn">invoke</span>(
 )</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>关键要点：</strong><code>Command(resume=value)</code> 中的 <code>value</code> 可以是任何 Python 对象——字符串、字典、列表、甚至自定义类实例。在节点函数中，<code>interrupt()</code> 的返回值就是这个对象。设计好数据结构即可。
-  </div>
+  <blockquote>
+<p><strong>关键要点：</strong><code>Command(resume=value)</code> 中的 <code>value</code> 可以是任何 Python 对象——字符串、字典、列表、甚至自定义类实例。在节点函数中，<code>interrupt()</code> 的返回值就是这个对象。设计好数据结构即可。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 4: interrupt_after 对比 ==================== -->
@@ -165,18 +165,18 @@ app.<span class="fn">update_state</span>(config, {<span class="str">"approved"</
 result = app.<span class="fn">invoke</span>(<span class="kw">None</span>, config=config)</code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>推荐使用 <code>interrupt()</code>：</strong>新项目请使用 <code>interrupt()</code> + <code>Command(resume=)</code> 模式。<code>interrupt_after</code> 仍可用但功能受限，未来可能逐步弃用。
-  </div>
+  <blockquote>
+<p><strong>推荐使用 <code>interrupt()</code>：</strong>新项目请使用 <code>interrupt()</code> + <code>Command(resume=)</code> 模式。<code>interrupt_after</code> 仍可用但功能受限，未来可能逐步弃用。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 5: Checkpointing ==================== -->
 <div class="section" id="llm-hitl-memory-s5">
   <h2>Checkpointing：状态持久化</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>Checkpoint 就像游戏的<strong>自动存档</strong>系统。图每执行一个节点就自动存档一次。你可以随时读档回到任意一步，查看历史状态，或者从断点恢复执行。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>Checkpoint 就像游戏的<strong>自动存档</strong>系统。图每执行一个节点就自动存档一次。你可以随时读档回到任意一步，查看历史状态，或者从断点恢复执行。</p>
+</blockquote>
 
   <p>Checkpoint 是 LangGraph 的核心特性之一。它在每个节点执行后自动保存 State 的快照，支持暂停/恢复、时间回溯、断点续跑。</p>
 
@@ -242,9 +242,9 @@ app = graph.<span class="fn">compile</span>(checkpointer=checkpointer)
 
   <p>Checkpoint 是<strong>线程内</strong>的短期记忆——同一个 <code>thread_id</code> 内的历史。而 <code>Store</code> 抽象提供了<strong>跨线程</strong>的长期记忆，适合存储用户偏好、历史摘要等需要在多次对话之间共享的信息。</p>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>Checkpoint 是"短期工作记忆"——你记得这次对话的上下文。Store 是"长期记忆"——你记得这个用户的偏好、历史交互，不管是不是同一次对话。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>Checkpoint 是"短期工作记忆"——你记得这次对话的上下文。Store 是"长期记忆"——你记得这个用户的偏好、历史交互，不管是不是同一次对话。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header">
@@ -320,9 +320,9 @@ result_b = app.<span class="fn">invoke</span>(
 <span class="cmt"># -> "我不知道你叫什么名字"</span></code></pre>
   </div>
 
-  <div class="callout callout-info">
-    <strong>Thread 与 Checkpoint 的关系：</strong>每个 thread 拥有独立的 checkpoint 链。同一 thread 的 checkpoint 形成一条时间线，不同 thread 的 checkpoint 完全隔离。这使得你可以同时运行数千个独立对话而互不干扰。
-  </div>
+  <blockquote>
+<p><strong>Thread 与 Checkpoint 的关系：</strong>每个 thread 拥有独立的 checkpoint 链。同一 thread 的 checkpoint 形成一条时间线，不同 thread 的 checkpoint 完全隔离。这使得你可以同时运行数千个独立对话而互不干扰。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 8: 实战 ==================== -->

@@ -1,4 +1,6 @@
-<section class="llm-mod llm-m-happy-source llm-happy-transformer" id="llm-happy-transformer"><div class="module-wrapper"><div class="llm-hero" style="--hero-a:#0f766e;--hero-b:#2563eb;"><h1>🔬 Happy-LLM：Transformer 架构原文融合</h1><p>从注意力机制、位置编码到完整 Encoder-Decoder，实现级拆解</p><div class="source-meta">来源：Datawhale China · Happy-LLM（本地离线融合）</div></div><div class="callout callout-info"><p>📌 本节保留 Happy-LLM 原教程的概念、公式、代码与图示，并按 Tech Reader 的单文件离线规范转换。外部图片已复制并登记为本地资源。</p></div><div class="happy-source-file"><div class="source-file-label">来源文件 · docs/chapter2/第二章 Transformer架构.md</div><div class="section" id="llm-happy-transformer-src1-s1"><h2>2.1 注意力机制</h2>
+<section class="llm-mod llm-m-happy-source llm-happy-transformer" id="llm-happy-transformer"><div class="module-wrapper"><div class="llm-hero" style="--hero-a:#0f766e;--hero-b:#2563eb;"><h1>🔬 Happy-LLM：Transformer 架构原文融合</h1><p>从注意力机制、位置编码到完整 Encoder-Decoder，实现级拆解</p><div class="source-meta">来源：Datawhale China · Happy-LLM（本地离线融合）</div></div><blockquote>
+<p>📌 本节保留 Happy-LLM 原教程的概念、公式、代码与图示，并按 Tech Reader 的单文件离线规范转换。外部图片已复制并登记为本地资源。</p>
+</blockquote><div class="happy-source-file"><div class="source-file-label">来源文件 · docs/chapter2/第二章 Transformer架构.md</div><div class="section" id="llm-happy-transformer-src1-s1"><h2>2.1 注意力机制</h2>
 <h3>2.1.1 什么是注意力机制</h3>
 <p>随着 NLP 从统计机器学习向深度学习迈进，作为 NLP 核心问题的文本表示方法也逐渐从统计学习向深度学习迈进。正如我们在第一章所介绍的，文本表示从最初的通过统计学习模型进行计算的向量空间模型、语言模型，通过 Word2Vec 的单层神经网络进入到通过神经网络学习文本表示的时代。但是，从 计算机视觉（Computer Vision，CV）为起源发展起来的神经网络，其核心架构有三种：</p>
 <ul>

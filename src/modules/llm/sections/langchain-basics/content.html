@@ -8,9 +8,9 @@
 <div class="section" id="llm-langchain-basics-s1">
   <h2>LangChain 生态系统概览</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>如果把构建 LLM 应用比作盖房子，LangChain 生态系统就是一整套建筑工具箱。<code>langchain-core</code> 是地基和钢筋（核心抽象），<code>langchain</code> 是预制件（高层接口），<code>langchain-community</code> 是各种五金配件（第三方集成），各 provider 包则是专业设备（如 OpenAI、Anthropic 的专用接口）。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>如果把构建 LLM 应用比作盖房子，LangChain 生态系统就是一整套建筑工具箱。<code>langchain-core</code> 是地基和钢筋（核心抽象），<code>langchain</code> 是预制件（高层接口），<code>langchain-community</code> 是各种五金配件（第三方集成），各 provider 包则是专业设备（如 OpenAI、Anthropic 的专用接口）。</p>
+</blockquote>
 
   <h3>包结构与职责</h3>
 
@@ -25,14 +25,14 @@
     <tr><td><code>langgraph</code>（1.2.11）</td><td>图编排引擎、Agent、HITL、持久化</td><td><code>from langgraph.graph import StateGraph</code></td></tr>
   </table>
 
-  <div class="callout callout-warn">
-    <strong>导入迁移：</strong>LangChain v1 已将核心抽象和集成拆到独立 provider 包。新代码应从 <code>langchain_core</code>、<code>langchain_community</code> 或具体 provider 包导入；例如 <code>from langchain.prompts</code> 应改为 <code>from langchain_core.prompts</code>。直接安装 <code>langchain</code> 仍然可用，但它主要提供高层 Agent API。
-  </div>
+  <blockquote>
+<p><strong>导入迁移：</strong>LangChain v1 已将核心抽象和集成拆到独立 provider 包。新代码应从 <code>langchain_core</code>、<code>langchain_community</code> 或具体 provider 包导入；例如 <code>from langchain.prompts</code> 应改为 <code>from langchain_core.prompts</code>。直接安装 <code>langchain</code> 仍然可用，但它主要提供高层 Agent API。</p>
+</blockquote>
 </div>
 
-<div class="callout callout-info" id="llm-langchain-v1-migration">
-  <strong>LangChain v1 迁移要点（截至 2026-09-04）：</strong>新代码使用 <code>from langchain.agents import create_agent</code> 构建 Agent；<code>LLMChain</code>、<code>AgentExecutor</code>、<code>create_tool_calling_agent</code> 等旧式 API 已移入 <code>langchain-classic</code>，用于维护存量项目。动态提示词、工具筛选、重试和 HITL 等横切能力通过 middleware 配置。提示词、消息和文本分割器分别从 <code>langchain_core</code>、<code>langchain_core.messages</code>、<code>langchain_text_splitters</code> 导入。需要自定义循环、supervisor 或 handoff 时，再使用 LangGraph 的 <code>StateGraph</code> 编排 <code>create_agent</code> 实例。
-</div>
+<blockquote id="llm-langchain-v1-migration">
+<p><strong>LangChain v1 迁移要点（截至 2026-09-04）：</strong>新代码使用 <code>from langchain.agents import create_agent</code> 构建 Agent；<code>LLMChain</code>、<code>AgentExecutor</code>、<code>create_tool_calling_agent</code> 等旧式 API 已移入 <code>langchain-classic</code>，用于维护存量项目。动态提示词、工具筛选、重试和 HITL 等横切能力通过 middleware 配置。提示词、消息和文本分割器分别从 <code>langchain_core</code>、<code>langchain_core.messages</code>、<code>langchain_text_splitters</code> 导入。需要自定义循环、supervisor 或 handoff 时，再使用 LangGraph 的 <code>StateGraph</code> 编排 <code>create_agent</code> 实例。</p>
+</blockquote>
 
 <!-- ==================== SECTION 2: 核心组件 ==================== -->
 <div class="section" id="llm-langchain-basics-s2">
@@ -49,9 +49,9 @@
     <tr><td><strong>Tools</strong></td><td>让 LLM 调用外部能力</td><td><code>@tool</code>, <code>StructuredTool</code></td></tr>
   </table>
 
-  <div class="callout callout-key">
-    <strong>关键理解：</strong>这些组件都实现了 <code>Runnable</code> 协议，意味着它们可以像管道一样用 <code>|</code> 操作符串联起来，形成 LCEL（LangChain Expression Language）链。这是 LangChain 1.x 的核心设计理念。
-  </div>
+  <blockquote>
+<p><strong>关键理解：</strong>这些组件都实现了 <code>Runnable</code> 协议，意味着它们可以像管道一样用 <code>|</code> 操作符串联起来，形成 LCEL（LangChain Expression Language）链。这是 LangChain 1.x 的核心设计理念。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 3: Chat Models ==================== -->
@@ -115,9 +115,9 @@ response = llm.<span class="fn">invoke</span>(<span class="str">"用简洁的语
     <span class="fn">print</span>(chunk.content, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
   </div>
 
-  <div class="callout callout-info">
-    <strong>模型标识符说明：</strong>截至 2026-09，示例使用 Claude Sonnet 5（<code>claude-sonnet-5</code>）。模型 ID 会随版本更新，部署前请以各厂商的 models 列表和当前 provider 包文档为准。
-  </div>
+  <blockquote>
+<p><strong>模型标识符说明：</strong>截至 2026-09，示例使用 Claude Sonnet 5（<code>claude-sonnet-5</code>）。模型 ID 会随版本更新，部署前请以各厂商的 models 列表和当前 provider 包文档为准。</p>
+</blockquote>
 
   <h3>主流模型对比</h3>
 
@@ -197,9 +197,9 @@ few_shot_prompt = <span class="cls">ChatPromptTemplate</span>.<span class="fn">f
 ])</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>选择建议：</strong><code>PromptTemplate</code> 适合纯文本补全模型（如旧版 GPT-3）；<code>ChatPromptTemplate</code> 专为对话模型设计，支持 system/human/ai 多角色消息，是当前的推荐用法。
-  </div>
+  <blockquote>
+<p><strong>选择建议：</strong><code>PromptTemplate</code> 适合纯文本补全模型（如旧版 GPT-3）；<code>ChatPromptTemplate</code> 专为对话模型设计，支持 system/human/ai 多角色消息，是当前的推荐用法。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 5: Output Parsers ==================== -->
@@ -279,9 +279,9 @@ review = structured_llm.<span class="fn">invoke</span>(<span class="str">"评价
 <span class="fn">print</span>(review.rating)   <span class="cmt"># 9.0</span></code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>实践建议：</strong>优先使用 <code>with_structured_output()</code>，它利用了模型原生的结构化输出能力（如 OpenAI 的 function calling），比 <code>JsonOutputParser</code> 更可靠。但要注意，不同模型对结构化输出的支持程度不同。
-  </div>
+  <blockquote>
+<p><strong>实践建议：</strong>优先使用 <code>with_structured_output()</code>，它利用了模型原生的结构化输出能力（如 OpenAI 的 function calling），比 <code>JsonOutputParser</code> 更可靠。但要注意，不同模型对结构化输出的支持程度不同。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 6: 第一个应用 ==================== -->
@@ -346,9 +346,9 @@ results = chain.<span class="fn">batch</span>([
     <span class="fn">print</span>(chunk, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
   </div>
 
-  <div class="callout callout-key">
-    <strong>核心要点：</strong>这就是 LangChain 1.x 的基本开发模式——定义组件，用 <code>|</code> 管道串联，通过 <code>invoke</code>/<code>batch</code>/<code>stream</code> 调用。下一章将详细讲解 LCEL 管道语法的高级用法。
-  </div>
+  <blockquote>
+<p><strong>核心要点：</strong>这就是 LangChain 1.x 的基本开发模式——定义组件，用 <code>|</code> 管道串联，通过 <code>invoke</code>/<code>batch</code>/<code>stream</code> 调用。下一章将详细讲解 LCEL 管道语法的高级用法。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 7: Agent 工作流模式 ==================== -->
@@ -357,9 +357,9 @@ results = chain.<span class="fn">batch</span>([
 
   <p>Agent 的差别不只在模型，也在于<strong>谁决定下一步</strong>以及<strong>状态如何流动</strong>。先根据任务的可控性、延迟预算和失败代价选择编排模式，再决定是否需要引入更复杂的 Agent 框架。</p>
 
-  <div class="callout callout-info">
-    <strong>快速判断：</strong>流程可以事先画出来就用 Workflow；需要模型根据工具结果逐步决定就用 ReAct；步骤很多但可以先拆解就用 Plan-and-Execute；任务可以按角色拆分且需要并行或互审时再考虑 Multi-Agent。
-  </div>
+  <blockquote>
+<p><strong>快速判断：</strong>流程可以事先画出来就用 Workflow；需要模型根据工具结果逐步决定就用 ReAct；步骤很多但可以先拆解就用 Plan-and-Execute；任务可以按角色拆分且需要并行或互审时再考虑 Multi-Agent。</p>
+</blockquote>
 
   <h3>四种模式对比</h3>
   <table>
@@ -382,9 +382,9 @@ results = chain.<span class="fn">batch</span>([
     <li><strong>Multi-Agent：</strong>把研究、执行、审查等职责交给不同角色，可采用 supervisor、顺序流水线或并行 fan-out。要明确消息协议、共享状态边界和最终汇总者，避免重复劳动、冲突写入和责任不清。</li>
   </ul>
 
-  <div class="callout callout-tip">
-    <strong>工程建议：</strong>从最简单的模式开始，先用单次调用或 Workflow 验证业务规则，再逐步引入 ReAct、规划和多 Agent。复杂度应由真实的分支、并行或隔离需求驱动，而不是由框架名称驱动。
-  </div>
+  <blockquote>
+<p><strong>工程建议：</strong>从最简单的模式开始，先用单次调用或 Workflow 验证业务规则，再逐步引入 ReAct、规划和多 Agent。复杂度应由真实的分支、并行或隔离需求驱动，而不是由框架名称驱动。</p>
+</blockquote>
 </div>
 
 <div class="footer">

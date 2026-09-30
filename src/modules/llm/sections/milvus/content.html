@@ -19,9 +19,9 @@
 <div class="section" id="llm-milvus-s1">
   <h2>向量数据库基础</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>传统数据库就像图书馆的目录系统，通过书名、作者等关键词找到书籍。向量数据库则像是能"理解语义"的图书管理员——你描述"一本关于太空冒险的科幻小说"，它能帮你找到最相关的内容，即使书名中没有这些词。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>传统数据库就像图书馆的目录系统，通过书名、作者等关键词找到书籍。向量数据库则像是能"理解语义"的图书管理员——你描述"一本关于太空冒险的科幻小说"，它能帮你找到最相关的内容，即使书名中没有这些词。</p>
+</blockquote>
 
   <h3>什么是向量嵌入（Embedding）</h3>
   <p>向量嵌入是将文本、图片、音频等非结构化数据转换成高维数值向量（数组）的过程。</p>
@@ -114,9 +114,9 @@ euclidean_dist = np.linalg.norm(vec1 - vec2)
     <tr><td><strong>Pinecone</strong></td><td>云服务</td><td>全托管，开箱即用</td><td>不想运维，快速上线</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>选型建议：</strong>学习阶段推荐Milvus或Chroma（开源、文档完善）。生产环境推荐Milvus（支持分布式、高可用）。
-  </div>
+  <blockquote>
+<p><strong>选型建议：</strong>学习阶段推荐Milvus或Chroma（开源、文档完善）。生产环境推荐Milvus（支持分布式、高可用）。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 2 ==================== -->
@@ -162,15 +162,15 @@ graph TB
     <tr><td><strong>Milvus Distributed</strong></td><td>生产环境，大规模数据</td><td>复杂</td></tr>
   </table>
 
-  <div class="callout callout-info">
-    <strong>三种部署模式详解：</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>三种部署模式详解：</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li><strong>Milvus Lite</strong>：嵌入式模式，数据存储在本地文件（如 <code>./milvus_demo.db</code>），无需启动任何服务，适合开发和测试</li>
       <li><strong>Milvus Standalone</strong>：单机服务模式，通过 Docker 部署，监听 <code>localhost:19530</code>，适合中小规模生产环境</li>
       <li><strong>Milvus Distributed</strong>：分布式集群模式，基于 Kubernetes 部署，支持水平扩展和高可用，适合大规模生产环境</li>
     </ul>
     <p style="margin-top: 0.5rem;">三种模式的 API 完全兼容，代码无需修改即可切换。</p>
-  </div>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 3 ==================== -->
@@ -222,9 +222,9 @@ connections.connect(
 )</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>学习建议：</strong>初学阶段使用Milvus Lite，零配置，数据存在本地文件。需要测试更多功能时用Standalone。生产环境用Distributed。
-  </div>
+  <blockquote>
+<p><strong>学习建议：</strong>初学阶段使用Milvus Lite，零配置，数据存在本地文件。需要测试更多功能时用Standalone。生产环境用Distributed。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 4 ==================== -->
@@ -334,9 +334,9 @@ search_results = client.search(
 <div class="section" id="llm-milvus-s5">
   <h2>索引算法详解</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>索引就像是图书馆的检索系统。IVF索引像是先按类别分架，再在每个架子内搜索；HNSW索引像是建立了一个楼层导航系统，从高层快速定位到目标区域。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>索引就像是图书馆的检索系统。IVF索引像是先按类别分架，再在每个架子内搜索；HNSW索引像是建立了一个楼层导航系统，从高层快速定位到目标区域。</p>
+</blockquote>
 
   <!-- 5.1 IVF -->
   <div id="llm-milvus-s5-1">
@@ -428,14 +428,14 @@ search_results = client.search(
 )</code></pre>
     </div>
 
-    <div class="callout callout-key">
-      <strong>HNSW参数详解：</strong>
-      <ul style="margin-top: 0.5rem;">
+    <blockquote>
+<p><strong>HNSW参数详解：</strong></p>
+<ul style="margin-top: 0.5rem;">
         <li><strong>M</strong>：每个节点的最大连接数。越大召回率越高，但内存占用越大</li>
         <li><strong>efConstruction</strong>：构建索引时的搜索范围。越大索引质量越好，但构建时间越长</li>
         <li><strong>ef</strong>：搜索时的搜索范围。越大召回率越高，但搜索速度越慢</li>
       </ul>
-    </div>
+</blockquote>
   </div>
 
   <!-- 5.3 索引选择指南 -->
@@ -452,16 +452,16 @@ search_results = client.search(
       <tr><td><code>DISKANN</code></td><td>中</td><td>高</td><td>低</td><td>超大规模数据，内存受限</td></tr>
     </table>
 
-    <div class="callout callout-tip">
-      <strong>选择建议：</strong>
-      <ul style="margin-top: 0.5rem;">
+    <blockquote>
+<p><strong>选择建议：</strong></p>
+<ul style="margin-top: 0.5rem;">
         <li>学习阶段：用 <code>IVF_FLAT</code>，参数少，容易理解</li>
         <li>生产环境：用 <code>HNSW</code>，性能最好</li>
         <li>内存紧张：用 <code>IVF_SQ8</code> 或 <code>DISKANN</code></li>
         <li>超大规模（亿级）：用 <code>IVF_PQ</code> 或 <code>DISKANN</code></li>
         <li>不确定选哪个：<code>AUTOINDEX</code> 会自动选择合适的索引类型</li>
       </ul>
-    </div>
+</blockquote>
   </div>
 </div>
 
@@ -496,9 +496,9 @@ search_results = client.search(
 
   <h3>数据一致性处理</h3>
 
-  <div class="callout callout-warn">
-    <strong>注意：</strong>Milvus默认是最终一致性，插入数据后可能需要几秒钟才能搜索到。需要强一致性时设置 <code>consistency_level="Strong"</code>。
-  </div>
+  <blockquote>
+<p><strong>注意：</strong>Milvus默认是最终一致性，插入数据后可能需要几秒钟才能搜索到。需要强一致性时设置 <code>consistency_level="Strong"</code>。</p>
+</blockquote>
 
   <h3>Milvus 2.5+ 新特性</h3>
 
@@ -593,10 +593,9 @@ results = vectorstore.similarity_search(<span class="str">"什么是机器学习
 <div class="section" id="llm-milvus-s8">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：文档语义搜索 <span class="badge">基础</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>用Milvus构建一个简单的文档语义搜索系统。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（基础）</strong></p>
+<p><strong>目标：</strong>用Milvus构建一个简单的文档语义搜索系统。</p>
       <p><strong>要求：</strong></p>
       <p>① 准备5-10个不同主题的文本段落</p>
       <p>② 使用Sentence-Transformers生成嵌入向量</p>
@@ -604,33 +603,28 @@ results = vectorstore.similarity_search(<span class="str">"什么是机器学习
       <p>④ 创建IVF_FLAT索引</p>
       <p>⑤ 实现语义搜索，输入查询返回最相关的3个段落</p>
       <p>⑥ 测试不同查询的效果</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习2：索引性能对比 <span class="badge">进阶</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>对比不同索引类型的性能。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（进阶）</strong></p>
+<p><strong>目标：</strong>对比不同索引类型的性能。</p>
       <p><strong>要求：</strong></p>
       <p>① 生成10000个128维的随机向量</p>
       <p>② 分别创建FLAT、IVF_FLAT、HNSW三种索引</p>
       <p>③ 对比三种索引的：构建时间、搜索速度、召回率、内存占用</p>
       <p>④ 改变参数（nlist、M、ef）观察性能变化</p>
       <p>⑤ 总结不同场景下应该选择哪种索引</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习3：混合检索 <span class="badge">进阶</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>实现向量搜索+标量过滤的混合检索。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（进阶）</strong></p>
+<p><strong>目标：</strong>实现向量搜索+标量过滤的混合检索。</p>
       <p><strong>要求：</strong></p>
       <p>① 创建一个商品数据集（包含名称、描述、类别、价格、嵌入向量）</p>
       <p>② 实现：语义搜索"性价比高的手机" + 过滤价格<3000</p>
       <p>③ 实现：语义搜索"轻薄笔记本" + 过滤类别="电脑"</p>
       <p>④ 对比纯向量搜索和混合检索的效果差异</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 <!-- 底部导航 -->

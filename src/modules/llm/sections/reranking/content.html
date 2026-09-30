@@ -7,9 +7,9 @@
 <div class="section" id="llm-reranking-s1">
   <h2>为什么需要重排序</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>初步检索（粗排）就像图书馆的目录检索——快速找到一堆可能相关的书。重排序（精排）就像图书管理员仔细翻阅这些书，挑出最相关的几本——虽然慢一点，但质量高很多。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>初步检索（粗排）就像图书馆的目录检索——快速找到一堆可能相关的书。重排序（精排）就像图书管理员仔细翻阅这些书，挑出最相关的几本——虽然慢一点，但质量高很多。</p>
+</blockquote>
 
   <h3>检索流程</h3>
 
@@ -34,9 +34,9 @@ graph LR
 <div class="section" id="llm-reranking-s2">
   <h2>Cross-Encoder重排序</h2>
 
-  <div class="callout callout-info">
-    <strong>Cross-Encoder原理：</strong>将查询和文档拼接在一起，直接输入BERT等模型，输出相关性分数。相比双塔模型，Cross-Encoder能更深入地理解查询和文档的交互关系。
-  </div>
+  <blockquote>
+<p><strong>Cross-Encoder原理：</strong>将查询和文档拼接在一起，直接输入BERT等模型，输出相关性分数。相比双塔模型，Cross-Encoder能更深入地理解查询和文档的交互关系。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header"><span class="code-lang">Python</span>
@@ -75,9 +75,9 @@ ranked_indices = np.argsort(scores)[::-<span class="num">1</span>]
 <div class="section" id="llm-reranking-s3">
   <h2>ColBERT模型</h2>
 
-  <div class="callout callout-key">
-    <strong>ColBERT的核心定位：</strong>ColBERT（Contextualized Late Interaction over BERT）首先是一个<strong>高效检索模型</strong>（Khattab & Zaharia, 2020），同时也可用于重排序。它在检索阶段就能实现接近Cross-Encoder的精度，同时保持接近双塔模型的速度。
-  </div>
+  <blockquote>
+<p><strong>ColBERT的核心定位：</strong>ColBERT（Contextualized Late Interaction over BERT）首先是一个<strong>高效检索模型</strong>（Khattab & Zaharia, 2020），同时也可用于重排序。它在检索阶段就能实现接近Cross-Encoder的精度，同时保持接近双塔模型的速度。</p>
+</blockquote>
 
   <h3>ColBERT工作原理</h3>
 
@@ -96,9 +96,9 @@ ranked_indices = np.argsort(scores)[::-<span class="num">1</span>]
     <div class="step-content"><strong>预计算优化：</strong>文档端的token向量可以<strong>离线预计算</strong>并建立索引，查询时只需编码查询向量，极大加速在线检索。</div>
   </div>
 
-  <div class="callout callout-info">
-    <strong>ColBERT v2改进：</strong>ColBERT v2引入了<strong>残差压缩（Residual Compression）</strong>，将token向量存储为聚类中心+残差的形式，大幅降低存储开销（每个向量仅需几个比特），同时保持检索精度。
-  </div>
+  <blockquote>
+<p><strong>ColBERT v2改进：</strong>ColBERT v2引入了<strong>残差压缩（Residual Compression）</strong>，将token向量存储为聚类中心+残差的形式，大幅降低存储开销（每个向量仅需几个比特），同时保持检索精度。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header"><span class="code-lang">Python</span></div>
@@ -150,9 +150,9 @@ results = searcher.search(<span class="str">"机器学习"</span>, k=<span class
     <tr><td><strong>Cohere Rerank 3.5</strong></td><td>商用API</td><td>100+语言支持，BEIR榜单SOTA</td><td>对精度要求极高的商业应用</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>选型建议：</strong>对大多数中文场景，<code>bge-reranker-v2-m3</code>是性价比最高的选择；多语言场景优先考虑<code>Jina Reranker v2</code>或<code>Cohere Rerank 3.5</code>；追求极致精度可选<code>bge-reranker-v2-gemma</code>。
-  </div>
+  <blockquote>
+<p><strong>选型建议：</strong>对大多数中文场景，<code>bge-reranker-v2-m3</code>是性价比最高的选择；多语言场景优先考虑<code>Jina Reranker v2</code>或<code>Cohere Rerank 3.5</code>；追求极致精度可选<code>bge-reranker-v2-gemma</code>。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-reranking-s5">
@@ -213,25 +213,23 @@ results = searcher.search(<span class="str">"机器学习"</span>, k=<span class
     </div>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>注意：</strong>LLM-as-Reranker的效果通常优于传统Cross-Encoder，但<strong>推理成本显著更高</strong>（尤其listwise方法需要发送完整文档内容）。在生产环境中需权衡精度与成本，通常只对Top-10~Top-20的候选文档使用LLM重排序。
-  </div>
+  <blockquote>
+<p><strong>注意：</strong>LLM-as-Reranker的效果通常优于传统Cross-Encoder，但<strong>推理成本显著更高</strong>（尤其listwise方法需要发送完整文档内容）。在生产环境中需权衡精度与成本，通常只对Top-10~Top-20的候选文档使用LLM重排序。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-reranking-s6">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：实现重排序Pipeline</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>构建完整的粗排+精排Pipeline。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>构建完整的粗排+精排Pipeline。</p>
       <p><strong>要求：</strong></p>
       <p>① 使用BM25/向量检索做粗排，返回Top-20</p>
       <p>② 使用Cross-Encoder对Top-20重排序</p>
       <p>③ 对比有/无重排序的效果差异</p>
       <p>④ 测量重排序的延迟开销</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 

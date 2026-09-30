@@ -130,9 +130,9 @@ print(f"隐藏状态: {hidden.shape}")     # [4, 32, 256] (2层*2方向)</code><
 <tr><td>使用建议</td><td>序列很长、数据充足</td><td>数据有限、需要快速训练</td></tr>
 
   </table>
-    <div class="callout callout-tip">
-    <p><strong>选型建议：</strong>在现代NLP中，LSTM/GRU已被Transformer大幅取代。但在时序预测、边缘设备推理等场景，GRU仍然是不错的选择。</p>
-  </div>
+    <blockquote>
+<p><strong>选型建议：</strong>在现代NLP中，LSTM/GRU已被Transformer大幅取代。但在时序预测、边缘设备推理等场景，GRU仍然是不错的选择。</p>
+</blockquote>
   </div><div class="section" id="llm-rnn-evolution-s5">
     <h2>从RNN到Transformer</h2>
     
@@ -146,9 +146,9 @@ print(f"隐藏状态: {hidden.shape}")     # [4, 32, 256] (2层*2方向)</code><
 <tr><td>信息瓶颈</td><td>Seq2Seq将整个输入压缩为固定向量</td><td>注意力机制直接访问所有输入位置</td></tr>
 
   </table>
-    <div class="callout callout-key">
-    <p><strong>关键转折点：</strong>2017年Google发表"Attention Is All You Need"，提出完全基于注意力机制的Transformer架构，摒弃了RNN的循环结构，开启了大模型时代。</p>
-  </div>
+    <blockquote>
+<p><strong>关键转折点：</strong>2017年Google发表"Attention Is All You Need"，提出完全基于注意力机制的Transformer架构，摒弃了RNN的循环结构，开启了大模型时代。</p>
+</blockquote>
   </div><div class="section" id="llm-rnn-evolution-s6">
     <h2>实践：LSTM文本分类</h2>
     
@@ -183,8 +183,8 @@ x = torch.randint(0, 30000, (32, 50))  # [batch=32, seq_len=50]
 logits = model(x)
 print(f"分类输出: {logits.shape}")  # [32, 2]</code></pre>
   </div>
-    <div class="callout callout-tip">
-    <p>这个LSTM分类器在小数据集上效果不错，但随着数据量增加，BERT微调会显著超越它。</p>
-  </div>
+    <blockquote>
+<p>这个LSTM分类器在小数据集上效果不错，但随着数据量增加，BERT微调会显著超越它。</p>
+</blockquote>
   </div>
 </div></section>

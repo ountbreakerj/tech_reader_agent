@@ -8,9 +8,9 @@
 <div class="section" id="llm-lcel-s1">
   <h2>LCEL 设计哲学</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>LCEL 就像是 Unix 的管道 <code>|</code>。在终端里，<code>cat file | grep error | sort | uniq</code> 将多个简单工具串联成复杂操作。LCEL 同样用 <code>|</code> 将 Prompt、LLM、Parser 等组件串联，数据在管道中流动，每一步做一件事。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>LCEL 就像是 Unix 的管道 <code>|</code>。在终端里，<code>cat file | grep error | sort | uniq</code> 将多个简单工具串联成复杂操作。LCEL 同样用 <code>|</code> 将 Prompt、LLM、Parser 等组件串联，数据在管道中流动，每一步做一件事。</p>
+</blockquote>
 
   <p>LCEL（LangChain Expression Language）是 LangChain 1.x 的核心设计理念。它的基础是 <strong>Runnable 协议</strong>——所有组件都实现了统一的接口：</p>
 
@@ -24,9 +24,9 @@
     <tr><td><code>astream(input)</code></td><td>异步流式输出</td><td>异步流式场景</td></tr>
   </table>
 
-  <div class="callout callout-key">
-    <strong>核心优势：</strong>因为所有组件共享同一接口，任意两个 Runnable 都可以 <code>A | B</code> 串联。不管 A 是 Prompt、LLM 还是自定义函数，不管 B 是 Parser、另一个 LLM 还是检索器——它们的输入输出协议是一致的。
-  </div>
+  <blockquote>
+<p><strong>核心优势：</strong>因为所有组件共享同一接口，任意两个 Runnable 都可以 <code>A | B</code> 串联。不管 A 是 Prompt、LLM 还是自定义函数，不管 B 是 Parser、另一个 LLM 还是检索器——它们的输入输出协议是一致的。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 2: Pipe 语法 ==================== -->
@@ -59,9 +59,9 @@ result = chain.<span class="fn">invoke</span>({<span class="str">"text"</span>: 
 <span class="cmt"># -> "Hello World"</span></code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>类型转换链：</strong><code>PromptTemplate</code> 接收 <code>dict</code> 输出 <code>str</code>；<code>ChatPromptTemplate</code> 接收 <code>dict</code> 输出 <code>list[BaseMessage]</code>；<code>ChatModel</code> 接收消息列表输出 <code>AIMessage</code>；<code>StrOutputParser</code> 接收 <code>AIMessage</code> 输出 <code>str</code>。这就是为什么它们能用 <code>|</code> 串联——输入输出类型是匹配的。
-  </div>
+  <blockquote>
+<p><strong>类型转换链：</strong><code>PromptTemplate</code> 接收 <code>dict</code> 输出 <code>str</code>；<code>ChatPromptTemplate</code> 接收 <code>dict</code> 输出 <code>list[BaseMessage]</code>；<code>ChatModel</code> 接收消息列表输出 <code>AIMessage</code>；<code>StrOutputParser</code> 接收 <code>AIMessage</code> 输出 <code>str</code>。这就是为什么它们能用 <code>|</code> 串联——输入输出类型是匹配的。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 3: 核心 Runnable 方法 ==================== -->
@@ -202,9 +202,9 @@ rag_setup = <span class="cls">RunnableParallel</span>({
 })</code></pre>
   </div>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong><code>RunnableParallel</code> 就像是餐厅的"套餐"——你点了一个订单，厨房同时开始做主菜（检索上下文）和配菜（保留原始问题），最后一起端上来组成完整的套餐（prompt 输入字典）。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong><code>RunnableParallel</code> 就像是餐厅的"套餐"——你点了一个订单，厨房同时开始做主菜（检索上下文）和配菜（保留原始问题），最后一起端上来组成完整的套餐（prompt 输入字典）。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 5: 链式组合 ==================== -->
@@ -296,9 +296,9 @@ result = branch_chain.<span class="fn">invoke</span>({
 full_chain = branch_chain | <span class="cls">RunnableLambda</span>(merge_results)</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>并行执行：</strong><code>RunnableParallel</code> 中的多个分支是真正并行执行的（利用线程池或异步），所以"翻译"和"摘要"同时进行，总耗时约等于最慢的那个分支，而不是两者之和。
-  </div>
+  <blockquote>
+<p><strong>并行执行：</strong><code>RunnableParallel</code> 中的多个分支是真正并行执行的（利用线程池或异步），所以"翻译"和"摘要"同时进行，总耗时约等于最慢的那个分支，而不是两者之和。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 7: 错误处理 ==================== -->
@@ -346,9 +346,9 @@ chain = prompt | llm_with_retry | parser
 chain_with_retry = chain.<span class="fn">with_retry</span>(stop_after_attempt=<span class="num">2</span>)</code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>注意：</strong><code>with_retry</code> 只重试可重试的异常（如网络超时、429 速率限制）。对于 400 参数错误等不可重试异常，不会触发重试。建议搭配 <code>with_fallbacks</code> 使用，实现"重试后回退"的完整容错链。
-  </div>
+  <blockquote>
+<p><strong>注意：</strong><code>with_retry</code> 只重试可重试的异常（如网络超时、429 速率限制）。对于 400 参数错误等不可重试异常，不会触发重试。建议搭配 <code>with_fallbacks</code> 使用，实现"重试后回退"的完整容错链。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 8: 实战 RAG ==================== -->
@@ -413,9 +413,9 @@ answer = rag_chain.<span class="fn">invoke</span>(<span class="str">"什么是�
     <span class="fn">print</span>(chunk, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
   </div>
 
-  <div class="callout callout-key">
-    <strong>LCEL 的价值：</strong>整个 RAG 管道只有约 10 行核心代码，但包含了检索、格式化、提示词构建、LLM 调用、输出解析五个步骤，且支持流式输出、批量调用、异步执行、错误重试——这些都不需要额外代码。这就是 LCEL 管道语法的威力。
-  </div>
+  <blockquote>
+<p><strong>LCEL 的价值：</strong>整个 RAG 管道只有约 10 行核心代码，但包含了检索、格式化、提示词构建、LLM 调用、输出解析五个步骤，且支持流式输出、批量调用、异步执行、错误重试——这些都不需要额外代码。这就是 LCEL 管道语法的威力。</p>
+</blockquote>
 </div>
 
 <div class="footer">

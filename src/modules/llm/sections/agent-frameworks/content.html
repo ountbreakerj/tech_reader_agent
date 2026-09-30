@@ -68,9 +68,9 @@ graph.add_edge("tools", "agent")
 
 app = graph.compile()</code></pre>
   </div>
-    <div class="callout callout-tip">
-    <p>LangGraph的优势：状态持久化、人类介入(HITL)、检查点恢复，适合生产级Agent系统。</p>
-  </div>
+    <blockquote>
+<p>LangGraph的优势：状态持久化、人类介入(HITL)、检查点恢复，适合生产级Agent系统。</p>
+</blockquote>
   </div><div class="section" id="llm-agent-frameworks-s3">
     <h2>多Agent协作<sup class="tp-mark" data-tp="multi-agent" role="button" tabindex="0" title="查看技术点详情" aria-label="查看技术点详情">?</sup></h2>
     
@@ -142,8 +142,8 @@ result = agent.invoke(inputs, config=config)
 for message in result["messages"]:
     print(message.type, message.content)</code></pre>
   </div>
-    <div class="callout callout-tip">
-    <p>Agent开发的最佳实践：先用简单任务验证单步能力，再逐步增加复杂度。始终设置超时和最大步数限制。</p>
-  </div>
+    <blockquote>
+<p>Agent开发的最佳实践：先用简单任务验证单步能力，再逐步增加复杂度。始终设置超时和最大步数限制。</p>
+</blockquote>
   </div>
 </div></section>

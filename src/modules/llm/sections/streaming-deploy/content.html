@@ -85,9 +85,9 @@
 
   <p><code>astream_events</code> 提供了最细粒度的事件流，可以捕获管道中每个组件的执行细节。</p>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>如果 <code>stream</code> 是看"每道菜端上桌"，那 <code>astream_events</code> 就是看"厨师的每个操作步骤"——洗菜、切菜、下锅、翻炒、装盘，每一步都看得到。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>如果 <code>stream</code> 是看"每道菜端上桌"，那 <code>astream_events</code> 就是看"厨师的每个操作步骤"——洗菜、切菜、下锅、翻炒、装盘，每一步都看得到。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header">
@@ -125,9 +125,9 @@
             <span class="fn">print</span>(<span class="str">f"[完成] {name}"</span>)</code></pre>
   </div>
 
-  <div class="callout callout-info">
-    <strong>事件类型：</strong><code>astream_events</code> 的事件类型包括：<code>on_chat_model_stream</code>（LLM token）、<code>on_tool_start</code>/<code>on_tool_end</code>（工具调用）、<code>on_chain_start</code>/<code>on_chain_end</code>（链执行）、<code>on_retriever_start</code>/<code>on_retriever_end</code>（检索）等。通过 <code>include_names</code> 参数可以过滤只关注的组件。
-  </div>
+  <blockquote>
+<p><strong>事件类型：</strong><code>astream_events</code> 的事件类型包括：<code>on_chat_model_stream</code>（LLM token）、<code>on_tool_start</code>/<code>on_tool_end</code>（工具调用）、<code>on_chain_start</code>/<code>on_chain_end</code>（链执行）、<code>on_retriever_start</code>/<code>on_retriever_end</code>（检索）等。通过 <code>include_names</code> 参数可以过滤只关注的组件。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 3: Token-by-Token ==================== -->
@@ -162,9 +162,9 @@ agent = <span class="fn">create_agent</span>(model=llm, tools=tools)
             <span class="fn">print</span>(msg.content, end=<span class="str">""</span>, flush=<span class="kw">True</span>)</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>前端集成：</strong>在 Web 应用中，通常使用 Server-Sent Events (SSE) 将 token 流式推送到前端。LangGraph 的 <code>stream</code> 方法返回的迭代器天然适合转换为 SSE 格式。
-  </div>
+  <blockquote>
+<p><strong>前端集成：</strong>在 Web 应用中，通常使用 Server-Sent Events (SSE) 将 token 流式推送到前端。LangGraph 的 <code>stream</code> 方法返回的迭代器天然适合转换为 SSE 格式。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 4: LangGraph Platform ==================== -->
@@ -239,9 +239,9 @@ langgraph dev
 <span class="cmt"># POST /threads/{id}/runs — 在线程中运行</span></code></pre>
   </div>
 
-  <div class="callout callout-warn">
-<strong>注意：</strong><code>langgraph dev</code> 仅用于本地开发测试。生产环境请使用 <code>langgraph deploy</code> 部署到 LangSmith Deployment，或使用下方的 FastAPI 自行集成。
-  </div>
+  <blockquote>
+<p><strong>注意：</strong><code>langgraph dev</code> 仅用于本地开发测试。生产环境请使用 <code>langgraph deploy</code> 部署到 LangSmith Deployment，或使用下方的 FastAPI 自行集成。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 6: API 端点 ==================== -->
@@ -341,9 +341,9 @@ app = <span class="cls">FastAPI</span>(title=<span class="str">"LangGraph API"</
     )</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>运行方式：</strong><code>uvicorn server:app --host 0.0.0.0 --port 8000</code>。前端使用 <code>EventSource</code> 或 <code>fetch</code> API 连接 <code>/chat/stream</code> 端点即可接收 token 流。
-  </div>
+  <blockquote>
+<p><strong>运行方式：</strong><code>uvicorn server:app --host 0.0.0.0 --port 8000</code>。前端使用 <code>EventSource</code> 或 <code>fetch</code> API 连接 <code>/chat/stream</code> 端点即可接收 token 流。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 8: 最佳实践 ==================== -->
@@ -402,16 +402,16 @@ semaphore = asyncio.<span class="cls">Semaphore</span>(<span class="num">10</spa
     <tr><td>质量评估</td><td>定期评估 Agent 输出质量</td><td>LangSmith Evaluation</td></tr>
   </table>
 
-  <div class="callout callout-key">
-    <strong>生产检查清单：</strong>
+  <blockquote>
+<p><strong>生产检查清单：</strong>
     <br>1. LLM 调用配置重试和超时
     <br>2. 敏感操作使用 HITL 人工审核
     <br>3. 使用持久化 Checkpoint（SqliteSaver 或 PostgresSaver）
     <br>4. 前端使用流式输出提升用户体验
     <br>5. 接入监控和告警系统
     <br>6. 控制并发数和速率限制
-    <br>7. 定期评估和优化 Agent 质量
-  </div>
+    <br>7. 定期评估和优化 Agent 质量</p>
+</blockquote>
 </div>
 
 <div class="footer">

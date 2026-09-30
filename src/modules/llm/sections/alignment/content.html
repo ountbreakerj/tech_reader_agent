@@ -32,7 +32,9 @@
     <tr><td>3. 对齐</td><td>RLHF / DPO / GRPO</td><td>人类偏好（排名/评分）</td><td>有用、安全、诚实</td></tr>
   </table>
 
-  <div class="callout-info">Anthropic 的研究发现，RLHF 训练后的 Claude 模型在"有帮助"和"无害"之间找到了更好的平衡点——既能拒绝真正有害的请求，又不会过度拒绝合理的问题。</div>
+  <blockquote>
+<p>Anthropic 的研究发现，RLHF 训练后的 Claude 模型在"有帮助"和"无害"之间找到了更好的平衡点——既能拒绝真正有害的请求，又不会过度拒绝合理的问题。</p>
+</blockquote>
 </div>
 
 <!-- ==================== RLHF 流程 ==================== -->
@@ -127,7 +129,9 @@ ppo_trainer = PPOTrainer(
 )
 ppo_trainer.<span class="fn">train</span>()</code></pre>
 
-  <div class="callout-warn">PPO 训练的工程复杂度很高：需要同时维护 4 个模型（策略模型、参考模型、Reward Model、Value 模型），显存需求约为普通 SFT 的 4 倍。这也是 DPO 等方法兴起的重要原因。</div>
+  <blockquote>
+<p>PPO 训练的工程复杂度很高：需要同时维护 4 个模型（策略模型、参考模型、Reward Model、Value 模型），显存需求约为普通 SFT 的 4 倍。这也是 DPO 等方法兴起的重要原因。</p>
+</blockquote>
 </div>
 
 <!-- ==================== DPO ==================== -->
@@ -182,7 +186,9 @@ trainer = DPOTrainer(
 )
 trainer.train()</code></pre>
 
-  <div class="callout-tip">DPO 的 beta 参数非常关键：beta 越大，模型越保守（越接近 SFT 模型）；beta 越小，模型越激进（可能过拟合偏好数据）。推荐从 0.1 开始尝试。</div>
+  <blockquote>
+<p>DPO 的 beta 参数非常关键：beta 越大，模型越保守（越接近 SFT 模型）；beta 越小，模型越激进（可能过拟合偏好数据）。推荐从 0.1 开始尝试。</p>
+</blockquote>
 </div>
 
 <!-- ==================== ORPO ==================== -->
@@ -217,7 +223,9 @@ trainer = ORPOTrainer(
 )
 trainer.train()</code></pre>
 
-  <div class="callout-info">ORPO 的优势：显存只需 DPO 的约 60%（无需加载参考模型），训练流程更简单。实验表明 ORPO 在 AlpacaEval 等基准上能达到与 DPO 相当甚至更好的效果。</div>
+  <blockquote>
+<p>ORPO 的优势：显存只需 DPO 的约 60%（无需加载参考模型），训练流程更简单。实验表明 ORPO 在 AlpacaEval 等基准上能达到与 DPO 相当甚至更好的效果。</p>
+</blockquote>
 </div>
 
 <!-- ==================== KTO ==================== -->
@@ -257,7 +265,9 @@ trainer = KTOTrainer(
 )
 trainer.train()</code></pre>
 
-  <div class="callout-tip">KTO 特别适合从真实用户反馈中学习——你可以直接从用户的点赞/点踩数据中构建训练集，不需要人工标注配对的偏好数据。</div>
+  <blockquote>
+<p>KTO 特别适合从真实用户反馈中学习——你可以直接从用户的点赞/点踩数据中构建训练集，不需要人工标注配对的偏好数据。</p>
+</blockquote>
 </div>
 
 <!-- ==================== GRPO ==================== -->
@@ -317,7 +327,9 @@ trainer.train()</code></pre>
 
     <span class="kw">return</span> policy_loss + kl_loss</code></pre>
 
-  <div class="callout-info">DeepSeek-R1 使用 GRPO 训练时，reward 信号主要来自规则奖励（如数学题答案正确性、代码测试通过率），而非神经网络 Reward Model。这使得训练更加稳定和可扩展。</div>
+  <blockquote>
+<p>DeepSeek-R1 使用 GRPO 训练时，reward 信号主要来自规则奖励（如数学题答案正确性、代码测试通过率），而非神经网络 Reward Model。这使得训练更加稳定和可扩展。</p>
+</blockquote>
 </div>
 
 <!-- ==================== 各方法对比 ==================== -->
@@ -332,7 +344,9 @@ trainer.train()</code></pre>
     <tr><td>GRPO</td><td>可选（规则奖励）</td><td>是</td><td>prompt + 奖励函数</td><td>中（2 个模型 + 采样）</td><td>中高</td></tr>
   </table>
 
-  <div class="callout-tip">2026 年的实践建议：数据充足且需要最高质量时用 PPO/DPO；数据有限或想简化流程用 ORPO/KTO；有明确规则奖励（数学、代码）时优先考虑 GRPO。DeepSeek V4-Pro 即采用 GRPO + 规则奖励训练策略。</div>
+  <blockquote>
+<p>2026 年的实践建议：数据充足且需要最高质量时用 PPO/DPO；数据有限或想简化流程用 ORPO/KTO；有明确规则奖励（数学、代码）时优先考虑 GRPO。DeepSeek V4-Pro 即采用 GRPO + 规则奖励训练策略。</p>
+</blockquote>
 </div>
 
 <!-- ==================== 实战：SFT -> DPO ==================== -->
@@ -404,7 +418,9 @@ trainer = DPOTrainer(
 trainer.train()
 trainer.save_model(<span class="str">"./aligned_model"</span>)</code></pre>
 
-  <div class="callout-warn">DPO 训练中的常见陷阱：学习率过大会导致模型退化；beta 过小会导致 reward hacking（模型找到 shortcut 提高 chosen 概率但质量没提升）；偏好数据质量比数量更重要，通常几万条高质量数据就够了。</div>
+  <blockquote>
+<p>DPO 训练中的常见陷阱：学习率过大会导致模型退化；beta 过小会导致 reward hacking（模型找到 shortcut 提高 chosen 概率但质量没提升）；偏好数据质量比数量更重要，通常几万条高质量数据就够了。</p>
+</blockquote>
 </div>
 
 </div>

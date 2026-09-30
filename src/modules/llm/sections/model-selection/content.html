@@ -7,9 +7,9 @@
 <div class="section" id="llm-model-selection-s1">
   <h2>选型原则</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>选模型就像选车——日常代步选经济型（小模型），长途旅行选SUV（中等模型），赛车比赛选超跑（大模型）。没有最好的车，只有最适合你需求的车。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>选模型就像选车——日常代步选经济型（小模型），长途旅行选SUV（中等模型），赛车比赛选超跑（大模型）。没有最好的车，只有最适合你需求的车。</p>
+</blockquote>
 
   <h3>核心考虑因素</h3>
 
@@ -59,9 +59,9 @@
     <tr><td><strong>超大模型</strong></td><td>参数量未公开（云端 API）</td><td>GPT-5.5, Claude Opus 5, Fable 5</td><td>云端</td><td>最复杂的任务</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>推荐起点：</strong>从<strong>7B参数模型</strong>开始，这是性能和成本的最佳平衡点。在你的 RTX 4090 Laptop（16GB显存）上，可以QLoRA微调7-13B模型。新增的 <strong>DeepSeek-R1-distill</strong> 系列（蒸馏推理模型）也是高性价比选择。
-  </div>
+  <blockquote>
+<p><strong>推荐起点：</strong>从<strong>7B参数模型</strong>开始，这是性能和成本的最佳平衡点。在你的 RTX 4090 Laptop（16GB显存）上，可以QLoRA微调7-13B模型。新增的 <strong>DeepSeek-R1-distill</strong> 系列（蒸馏推理模型）也是高性价比选择。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-model-selection-s3">
@@ -76,20 +76,20 @@
     <tr><td><strong>40GB+</strong></td><td>A100, H100</td><td>70B模型（QLoRA）</td><td>Full FT / LoRA</td></tr>
   </table>
 
-  <div class="callout callout-info">
-    <strong>RTX 4090 Laptop (16GB) 配置建议：</strong>
-    <ul>
+  <blockquote>
+<p><strong>RTX 4090 Laptop (16GB) 配置建议：</strong></p>
+<ul>
       <li><strong>注意</strong>：RTX 4090 Laptop = 16GB GDDR6（不同于Desktop版的24GB GDDR6X）</li>
       <li>最佳模型：Qwen3-8B / Llama 3.1-8B / Phi-4 (14B QLoRA)</li>
       <li>微调方法：QLoRA（4-bit量化 + LoRA），或LoRA（16-bit）</li>
       <li>Batch size：4-8（序列长度512时）</li>
       <li>序列长度：512-1024</li>
     </ul>
-  </div>
+</blockquote>
 
-  <div class="callout callout-tip">
-    <strong>RTX 5090 (32GB GDDR7)：</strong>2025年发布的顶级消费级显卡，32GB显存可全参微调13B模型或QLoRA微调约40B模型，是目前消费级最强选择。
-  </div>
+  <blockquote>
+<p><strong>RTX 5090 (32GB GDDR7)：</strong>2025年发布的顶级消费级显卡，32GB显存可全参微调13B模型或QLoRA微调约40B模型，是目前消费级最强选择。</p>
+</blockquote>
 
   <h3>MoE模型：大容量低推理成本</h3>
 
@@ -103,9 +103,9 @@
     <tr><td><strong>DeepSeek V4 Pro</strong></td><td>1.6T</td><td>49B</td><td>云端</td><td>MIT开源，CSA+HCA</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>边缘部署推荐：</strong>使用 <strong>GGUF量化格式</strong> + <strong>llama.cpp</strong> 或 <strong>Ollama</strong>，可以在CPU/低显存设备上运行7-14B模型。例如 <code>ollama run qwen2.5:7b</code> 即可一键部署。
-  </div>
+  <blockquote>
+<p><strong>边缘部署推荐：</strong>使用 <strong>GGUF量化格式</strong> + <strong>llama.cpp</strong> 或 <strong>Ollama</strong>，可以在CPU/低显存设备上运行7-14B模型。例如 <code>ollama run qwen2.5:7b</code> 即可一键部署。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-model-selection-s3b">
@@ -134,9 +134,9 @@
     <tr><td><strong>Gemma</strong></td><td>Google</td><td>Gemma 2/3</td><td>1B-27B</td><td>Google技术、多尺寸、性能均衡</td></tr>
   </table>
 
-  <div class="callout callout-key">
-    <strong>选型建议：</strong>中文场景首选 <strong>Qwen3</strong> 或 <strong>DeepSeek</strong>；英文通用选 <strong>Llama 3.1/4</strong>；边缘部署选 <strong>Phi-4-mini</strong> 或 <strong>Qwen3-4B</strong>；追求极致推理能力选 <strong>DeepSeek-R1</strong> 蒸馏系列。
-  </div>
+  <blockquote>
+<p><strong>选型建议：</strong>中文场景首选 <strong>Qwen3</strong> 或 <strong>DeepSeek</strong>；英文通用选 <strong>Llama 3.1/4</strong>；边缘部署选 <strong>Phi-4-mini</strong> 或 <strong>Qwen3-4B</strong>；追求极致推理能力选 <strong>DeepSeek-R1</strong> 蒸馏系列。</p>
+</blockquote>
 
   <h3>模型发展趋势（2024-2026）</h3>
 
@@ -153,17 +153,15 @@
 <div class="section" id="llm-model-selection-s4">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：模型对比测试</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>在相同任务上对比不同规模模型的效果。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>在相同任务上对比不同规模模型的效果。</p>
       <p><strong>要求：</strong></p>
       <p>① 选择3个不同规模的模型（1B, 3B, 7B）</p>
       <p>② 在同一个分类任务上测试</p>
       <p>③ 对比：准确率、推理速度、内存占用</p>
       <p>④ 给出最佳性价比推荐</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 

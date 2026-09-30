@@ -183,9 +183,9 @@ chunks = splitter.split_text(document_content)</code></pre>
     <tr><td>法律/合同</td><td>1000</td><td>150</td><td>段落完整性优先</td></tr>
   </table>
 
-  <div class="callout callout-warn">
-    <strong>注意事项：</strong>chunk_size 不是越大越好。过大的块会稀释语义信号，降低检索精度；过小的块会丢失上下文，影响生成质量。建议在实际数据上做 A/B 测试。
-  </div>
+  <blockquote>
+<p><strong>注意事项：</strong>chunk_size 不是越大越好。过大的块会稀释语义信号，降低检索精度；过小的块会丢失上下文，影响生成质量。建议在实际数据上做 A/B 测试。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-enterprise-qa-s4">
@@ -376,10 +376,9 @@ rag = EnterpriseRAG()
 <div class="section" id="llm-enterprise-qa-s6">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：构建完整企业问答系统</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>从零构建一个可运行的企业问答系统。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>从零构建一个可运行的企业问答系统。</p>
       <p><strong>要求：</strong></p>
       <p>① 设计并创建MySQL数据库（users, documents, chat_history）</p>
       <p>② 创建Milvus Collection</p>
@@ -389,21 +388,18 @@ rag = EnterpriseRAG()
       <p>⑥ 实现简单的权限过滤</p>
       <p>⑦ 用FastAPI搭建API服务</p>
       <p>⑧ 测试完整的问答流程</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习2：优化与扩展</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>优化系统性能和功能。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>优化系统性能和功能。</p>
       <p><strong>可选方向：</strong></p>
       <p>① 添加重排序模块提升检索精度</p>
       <p>② 实现多轮对话上下文管理</p>
       <p>③ 添加前端界面（Streamlit或Gradio）</p>
       <p>④ 实现文档版本管理</p>
       <p>⑤ 添加用户反馈学习机制</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 

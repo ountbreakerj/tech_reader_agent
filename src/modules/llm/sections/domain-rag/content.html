@@ -53,9 +53,9 @@ results = milvus.search(
 )</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>设计原则：</strong>在设计文档入库流程时，务必为每个文档块添加丰富的元数据标签（来源、时间、类型、权限等级、部门等）。这些元数据是后续实现精准过滤的基础。
-  </div>
+  <blockquote>
+<p><strong>设计原则：</strong>在设计文档入库流程时，务必为每个文档块添加丰富的元数据标签（来源、时间、类型、权限等级、部门等）。这些元数据是后续实现精准过滤的基础。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-domain-rag-s2">
@@ -149,9 +149,9 @@ code_splitter = RecursiveCharacterTextSplitter.from_language(
 
   <h3>提示词注入防御</h3>
 
-  <div class="callout callout-key">
-    <strong>三明治防御（Sandwich Defense）：</strong>将检索到的上下文"夹"在系统指令中间，防止注入指令逃逸。结构为：系统指令（含安全约束）→ 检索上下文 → 再次强调安全约束 → 用户问题。
-  </div>
+  <blockquote>
+<p><strong>三明治防御（Sandwich Defense）：</strong>将检索到的上下文"夹"在系统指令中间，防止注入指令逃逸。结构为：系统指令（含安全约束）→ 检索上下文 → 再次强调安全约束 → 用户问题。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header"><span class="code-lang">Python</span></div>
@@ -193,9 +193,9 @@ anonymizer = AnonymizerEngine()
 
   <h3>GraphRAG（微软，2024）</h3>
 
-  <div class="callout callout-info">
-    <strong>核心思想：</strong>从文档中构建<strong>知识图谱</strong>（实体-关系网络），对图进行社区检测，为每个社区生成层级化摘要。面对"这批文档的主要主题是什么"类全局问题时，效果远超传统RAG。
-  </div>
+  <blockquote>
+<p><strong>核心思想：</strong>从文档中构建<strong>知识图谱</strong>（实体-关系网络），对图进行社区检测，为每个社区生成层级化摘要。面对"这批文档的主要主题是什么"类全局问题时，效果远超传统RAG。</p>
+</blockquote>
 
   <div class="diagram">
     <pre class="mermaid">
@@ -267,9 +267,9 @@ graph LR
     <li><strong>Validation Agent：</strong>验证生成答案的一致性和准确性</li>
   </ul>
 
-  <div class="callout callout-warn">
-    <strong>选型建议：</strong>Agentic RAG效果最好但架构最复杂、延迟最高。建议从传统RAG开始，逐步引入CRAG（纠错）或Adaptive RAG（自适应），最后在高要求场景中采用GraphRAG或Agentic RAG。
-  </div>
+  <blockquote>
+<p><strong>选型建议：</strong>Agentic RAG效果最好但架构最复杂、延迟最高。建议从传统RAG开始，逐步引入CRAG（纠错）或Adaptive RAG（自适应），最后在高要求场景中采用GraphRAG或Agentic RAG。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-domain-rag-s6">
@@ -291,26 +291,24 @@ graph LR
 
   <p>传统方案需要先OCR提取文字再检索，<strong>ColPali</strong>将每页文档当作图像直接编码为向量，使用ColBERT式的延迟交互进行检索。这样既保留了排版、图表等视觉信息，又省去了OCR的误差和开销。</p>
 
-  <div class="callout callout-tip">
-    <strong>实用建议：</strong>对于包含大量图表的文档（如金融研报、医疗报告），建议采用"双通道"策略：文字部分走传统RAG流程，图表/图片部分走VLM描述后再检索，最后合并结果。
-  </div>
+  <blockquote>
+<p><strong>实用建议：</strong>对于包含大量图表的文档（如金融研报、医疗报告），建议采用"双通道"策略：文字部分走传统RAG流程，图表/图片部分走VLM描述后再检索，最后合并结果。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-domain-rag-s7">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：企业问答系统</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>构建一个带权限控制的企业问答系统。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>构建一个带权限控制的企业问答系统。</p>
       <p><strong>要求：</strong></p>
       <p>① 设计用户权限模型（admin、manager、employee）</p>
       <p>② 文档标记所属部门和权限级别</p>
       <p>③ 查询时根据用户权限过滤文档</p>
       <p>④ 实现答案引用溯源</p>
       <p>⑤ 添加输入安全过滤</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 

@@ -19,9 +19,9 @@
 <div class="section" id="llm-dataset-s1">
   <h2>数据集划分</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>数据集划分就像考试——训练集是平时做的练习题，验证集是模拟考试，测试集是真正的高考。练习题要足够多才能学好，模拟考试用来检验学习效果，高考才是最终评判。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>数据集划分就像考试——训练集是平时做的练习题，验证集是模拟考试，测试集是真正的高考。练习题要足够多才能学好，模拟考试用来检验学习效果，高考才是最终评判。</p>
+</blockquote>
 
   <h3>划分原则</h3>
 
@@ -32,14 +32,14 @@
     <tr><td><strong>测试集</strong></td><td>最终评估</td><td>10-15%</td><td>完全隔离</td></tr>
   </table>
 
-  <div class="callout callout-warn">
-    <strong>LLM训练的划分差异：</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>LLM训练的划分差异：</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li><strong>预训练阶段</strong>：通常不做严格的train/test划分——数据全部用于训练，评估通过下游benchmark完成</li>
       <li><strong>指令微调阶段</strong>：常用 <strong>95/5</strong> 或 <strong>98/2</strong> 的比例（而非80/10/10），因为高质量指令数据稀缺，需要尽量多用于训练</li>
       <li><strong>以上80/10/10比例</strong>更适用于传统的NLP分类/回归任务</li>
     </ul>
-  </div>
+</blockquote>
 
   <h3>划分代码</h3>
 
@@ -81,18 +81,18 @@ val_data, test_data = <span class="fn">train_test_split</span>(
             f.write(json.dumps(item, ensure_ascii=<span class="kw">False</span>) + <span class="str">'\n'</span>)</code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>避免数据泄漏：</strong>划分时要确保训练集和测试集没有重叠，否则会高估模型性能。
-  </div>
+  <blockquote>
+<p><strong>避免数据泄漏：</strong>划分时要确保训练集和测试集没有重叠，否则会高估模型性能。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 2 ==================== -->
 <div class="section" id="llm-dataset-s2">
   <h2>HuggingFace Datasets</h2>
 
-  <div class="callout callout-info">
-    <strong>什么是HuggingFace Datasets：</strong>一个强大的数据集处理库，支持流式处理、内存映射、并行处理，可以高效处理大规模数据集。
-  </div>
+  <blockquote>
+<p><strong>什么是HuggingFace Datasets：</strong>一个强大的数据集处理库，支持流式处理、内存映射、并行处理，可以高效处理大规模数据集。</p>
+</blockquote>
 
   <h3>基础用法</h3>
 
@@ -213,13 +213,13 @@ dataloader = DataLoader(
 <div class="section" id="llm-dataset-s4">
   <h2>数据增强</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>数据增强就像用不同的方式说同一句话——用同义词替换、改变语序、翻译后再翻译回来——这样能增加数据的多样性，防止模型过拟合。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>数据增强就像用不同的方式说同一句话——用同义词替换、改变语序、翻译后再翻译回来——这样能增加数据的多样性，防止模型过拟合。</p>
+</blockquote>
 
-  <div class="callout callout-warn">
-    <strong>注意：</strong>下面展示的回译、同义词替换等方法主要用于<strong>传统NLP分类任务</strong>（如文本分类、情感分析）的数据增强。对于<strong>LLM预训练和指令微调</strong>，更主流的做法是使用<strong>合成数据生成</strong>（见下一节）。
-  </div>
+  <blockquote>
+<p><strong>注意：</strong>下面展示的回译、同义词替换等方法主要用于<strong>传统NLP分类任务</strong>（如文本分类、情感分析）的数据增强。对于<strong>LLM预训练和指令微调</strong>，更主流的做法是使用<strong>合成数据生成</strong>（见下一节）。</p>
+</blockquote>
 
   <h3>常见数据增强方法</h3>
 
@@ -261,9 +261,9 @@ dataloader = DataLoader(
 <div class="section" id="llm-dataset-s4-5">
   <h2>合成数据生成（2025-2026主流方案）</h2>
 
-  <div class="callout callout-key">
-    <strong>核心趋势：</strong>在2025-2026年的LLM训练中，<strong>合成数据</strong>已成为指令微调数据的主要来源。其核心思路是用更强的LLM来生成训练数据，训练较弱的模型。
-  </div>
+  <blockquote>
+<p><strong>核心趋势：</strong>在2025-2026年的LLM训练中，<strong>合成数据</strong>已成为指令微调数据的主要来源。其核心思路是用更强的LLM来生成训练数据，训练较弱的模型。</p>
+</blockquote>
 
   <h3>主流合成数据方法</h3>
 
@@ -302,14 +302,14 @@ seed_instructions = [
     <span class="kw">return</span> json.loads(response)</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>实践建议：</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>实践建议：</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li>合成数据需要<strong>严格质量过滤</strong>——低质量的合成数据反而会降低模型性能</li>
       <li>建议混合人工标注数据和合成数据，比例约 1:5 到 1:10</li>
       <li>DeepSeek-V3（~$5.5M训练成本）的成功证明了合成数据路线的可行性</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 5 ==================== -->
@@ -366,43 +366,39 @@ seed_instructions = [
     <span class="kw">return</span> sampled_data, sampled_labels</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>选择建议：</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>选择建议：</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li><strong>过采样</strong>：数据量小时使用，可能增加训练时间</li>
       <li><strong>欠采样</strong>：数据量大时使用，可能丢失重要信息</li>
       <li><strong>权重调整</strong>：在损失函数中给少数类更高权重（推荐）</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 6 ==================== -->
 <div class="section" id="llm-dataset-s6">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：构建指令微调数据集 <span class="badge">基础</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>构建一个指令微调数据集。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（基础）</strong></p>
+<p><strong>目标：</strong>构建一个指令微调数据集。</p>
       <p><strong>要求：</strong></p>
       <p>① 准备50条指令数据（instruction-input-output格式）</p>
       <p>② 划分为训练集（40条）和验证集（10条）</p>
       <p>③ 保存为JSONL格式</p>
       <p>④ 统计平均文本长度</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习2：数据增强实战 <span class="badge">进阶</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>对一个小数据集进行数据增强。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（进阶）</strong></p>
+<p><strong>目标：</strong>对一个小数据集进行数据增强。</p>
       <p><strong>要求：</strong></p>
       <p>① 使用HuggingFace Datasets加载一个小型数据集</p>
       <p>② 实现至少2种数据增强方法</p>
       <p>③ 对比增强前后的数据分布</p>
       <p>④ 评估数据增强对模型性能的影响</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 <!-- 底部导航 -->

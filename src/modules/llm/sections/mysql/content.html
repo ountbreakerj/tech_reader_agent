@@ -19,9 +19,9 @@
 <div class="section" id="llm-mysql-s1">
   <h2>为什么需要数据库？</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>想象你有一个巨大的图书馆。如果所有书都堆在地上（文件存储），想找到一本特定的书会非常困难。但如果你有图书管理系统（数据库），按照类别、作者、书名等分类存放，就能快速找到需要的书。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>想象你有一个巨大的图书馆。如果所有书都堆在地上（文件存储），想找到一本特定的书会非常困难。但如果你有图书管理系统（数据库），按照类别、作者、书名等分类存放，就能快速找到需要的书。</p>
+</blockquote>
 
   <h3>文件存储的问题</h3>
   <p>在早期的应用程序中，数据通常存储在文件中。但这种方式存在很多问题：</p>
@@ -77,9 +77,9 @@
     <li><strong>稳定可靠</strong>：经过20多年生产验证</li>
   </ul>
 
-  <div class="callout callout-tip">
-    <strong>典型应用场景：</strong>Web应用（WordPress、Laravel）、电商平台、内容管理系统、日志系统、企业应用等。
-  </div>
+  <blockquote>
+<p><strong>典型应用场景：</strong>Web应用（WordPress、Laravel）、电商平台、内容管理系统、日志系统、企业应用等。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 2 ==================== -->
@@ -105,9 +105,9 @@
     <div class="step-content"><strong>启动服务</strong> — 在 Windows 服务中启动 MySQL80</div>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>注意：</strong>一定要记住设置的 root 密码，忘记密码需要重置，比较麻烦。
-  </div>
+  <blockquote>
+<p><strong>注意：</strong>一定要记住设置的 root 密码，忘记密码需要重置，比较麻烦。</p>
+</blockquote>
 
   <h3>Linux安装（Ubuntu/Debian）</h3>
 
@@ -171,13 +171,13 @@ character-set-server=<span class="str">utf8mb4</span>
 collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>最佳实践：</strong>生产环境中，<code>innodb_buffer_pool_size</code> 应该设置为物理内存的60%-80%，这是影响性能的最重要参数。
-  </div>
+  <blockquote>
+<p><strong>最佳实践：</strong>生产环境中，<code>innodb_buffer_pool_size</code> 应该设置为物理内存的60%-80%，这是影响性能的最重要参数。</p>
+</blockquote>
 
-  <div class="callout callout-info">
-    <strong>MySQL 版本说明：</strong>MySQL 目前采用 LTS + Innovation 双轨发布策略。<strong>MySQL 8.4 LTS</strong>（2024年发布）是当前推荐的生产版本，提供长期支持。<strong>MySQL 9.x Innovation</strong> 版本则包含最新特性，如原生 <code>VECTOR</code> 数据类型（支持 AI/ML 向量存储和检索），适合体验前沿功能。生产环境建议使用 LTS 版本。
-  </div>
+  <blockquote>
+<p><strong>MySQL 版本说明：</strong>MySQL 目前采用 LTS + Innovation 双轨发布策略。<strong>MySQL 8.4 LTS</strong>（2024年发布）是当前推荐的生产版本，提供长期支持。<strong>MySQL 9.x Innovation</strong> 版本则包含最新特性，如原生 <code>VECTOR</code> 数据类型（支持 AI/ML 向量存储和检索），适合体验前沿功能。生产环境建议使用 LTS 版本。</p>
+</blockquote>
 
   <h3>常用命令</h3>
 
@@ -195,9 +195,9 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
 <div class="section" id="llm-mysql-s3">
   <h2>SQL基础语法</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>SQL（Structured Query Language）就像是和数据库对话的语言。你用SQL告诉数据库"创建一个表"、"插入数据"、"查询数据"等操作。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>SQL（Structured Query Language）就像是和数据库对话的语言。你用SQL告诉数据库"创建一个表"、"插入数据"、"查询数据"等操作。</p>
+</blockquote>
 
   <h3>创建数据库和表</h3>
 
@@ -241,9 +241,9 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
     <tr><td><code>BOOLEAN</code></td><td>布尔值，实际是TINYINT(1)</td><td>开关、标志位</td></tr>
   </table>
 
-  <div class="callout callout-key">
-    <strong>关键点：</strong>金额等精确数值务必使用 <code>DECIMAL</code> 类型，不要使用 <code>FLOAT</code> 或 <code>DOUBLE</code>，因为浮点数有精度问题。
-  </div>
+  <blockquote>
+<p><strong>关键点：</strong>金额等精确数值务必使用 <code>DECIMAL</code> 类型，不要使用 <code>FLOAT</code> 或 <code>DOUBLE</code>，因为浮点数有精度问题。</p>
+</blockquote>
 
   <h3>约束条件</h3>
 
@@ -338,9 +338,9 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
 <span class="kw">UPDATE</span> <span class="cls">users</span> <span class="kw">SET</span> <span class="var">status</span> = <span class="str">'active'</span>;  <span class="cmt"># 不要这样做！</span></code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>警告：</strong>执行 <code>UPDATE</code> 或 <code>DELETE</code> 操作前，一定要先用 <code>SELECT</code> 确认WHERE条件是否正确，避免误操作导致数据丢失！
-  </div>
+  <blockquote>
+<p><strong>警告：</strong>执行 <code>UPDATE</code> 或 <code>DELETE</code> 操作前，一定要先用 <code>SELECT</code> 确认WHERE条件是否正确，避免误操作导致数据丢失！</p>
+</blockquote>
 
   <h4>删除数据（DELETE）</h4>
 
@@ -369,9 +369,9 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
   <div id="llm-mysql-s4-1">
     <h3>聚合函数</h3>
 
-    <div class="callout callout-analogy">
-      <strong>类比：</strong>聚合函数就像是统计员，帮你计算"总数"、"平均值"、"最大值"等统计数据。
-    </div>
+    <blockquote>
+<p><strong>类比：</strong>聚合函数就像是统计员，帮你计算"总数"、"平均值"、"最大值"等统计数据。</p>
+</blockquote>
 
     <div class="code-block-wrapper">
       <div class="code-header">
@@ -410,18 +410,18 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
 <span class="kw">HAVING</span> <span class="fn">COUNT</span>(*) > <span class="num">5</span>;  <span class="cmt"># 只显示订单数大于5的用户</span></code></pre>
     </div>
 
-    <div class="callout callout-tip">
-      <strong>WHERE vs HAVING：</strong><code>WHERE</code> 在分组前过滤行，<code>HAVING</code> 在分组后过滤组。聚合函数的结果只能用 <code>HAVING</code> 过滤。
-    </div>
+    <blockquote>
+<p><strong>WHERE vs HAVING：</strong><code>WHERE</code> 在分组前过滤行，<code>HAVING</code> 在分组后过滤组。聚合函数的结果只能用 <code>HAVING</code> 过滤。</p>
+</blockquote>
   </div>
 
   <!-- 4.2 多表连接 -->
   <div id="llm-mysql-s4-2">
     <h3>多表连接（JOIN）</h3>
 
-    <div class="callout callout-analogy">
-      <strong>类比：</strong>JOIN就像是把两个表格按照某个共同字段合并在一起。比如，把"用户表"和"订单表"通过 <code>user_id</code> 关联起来，就能看到每个用户的订单信息。
-    </div>
+    <blockquote>
+<p><strong>类比：</strong>JOIN就像是把两个表格按照某个共同字段合并在一起。比如，把"用户表"和"订单表"通过 <code>user_id</code> 关联起来，就能看到每个用户的订单信息。</p>
+</blockquote>
 
     <div class="code-block-wrapper">
       <div class="code-header">
@@ -504,9 +504,9 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
 <div class="section" id="llm-mysql-s5">
   <h2>索引优化</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>索引就像书的目录。没有目录的书，找某一页需要从头翻到尾（全表扫描）。有了目录，直接翻到对应页码（索引查找）。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>索引就像书的目录。没有目录的书，找某一页需要从头翻到尾（全表扫描）。有了目录，直接翻到对应页码（索引查找）。</p>
+</blockquote>
 
   <h3>索引原理</h3>
   <p>MySQL默认使用<strong>B+树</strong>作为索引结构。B+树的特点：</p>
@@ -541,16 +541,16 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
 
   <h3>索引失效场景</h3>
 
-  <div class="callout callout-pitfall">
-    <strong>🚨 常见索引失效场景：</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>🚨 常见索引失效场景：</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li>对索引列使用函数：<code>WHERE YEAR(created_at) = 2024</code></li>
       <li>对索引列进行计算：<code>WHERE id + 1 = 10</code></li>
       <li>使用 <code>LIKE '%abc'</code>（前导通配符）</li>
       <li>使用 <code>OR</code> 连接非索引列</li>
       <li>类型隐式转换：<code>WHERE varchar_column = 123</code></li>
     </ul>
-  </div>
+</blockquote>
 
   <h3>EXPLAIN执行计划</h3>
 
@@ -570,24 +570,24 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
 <span class="cmt"># Extra: 额外信息（Using index表示使用了覆盖索引）</span></code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>索引优化原则：</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>索引优化原则：</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li>在WHERE、JOIN、ORDER BY的字段上创建索引</li>
       <li>选择性高的字段更适合建索引（如用户名、邮箱）</li>
       <li>复合索引遵循最左前缀原则</li>
       <li>不要过度索引，索引会占用存储空间并降低写入性能</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 6 ==================== -->
 <div class="section" id="llm-mysql-s6">
   <h2>事务与锁</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>事务就像银行转账。从A账户扣钱和给B账户加钱必须作为一个整体完成——要么都成功，要么都失败，不能只完成一半。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>事务就像银行转账。从A账户扣钱和给B账户加钱必须作为一个整体完成——要么都成功，要么都失败，不能只完成一半。</p>
+</blockquote>
 
   <h3>事务ACID特性</h3>
 
@@ -641,13 +641,13 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
     <tr><td>SERIALIZABLE</td><td>✗</td><td>✗</td><td>✗</td><td>最低</td></tr>
   </table>
 
-  <div class="callout callout-info">
-    <strong>InnoDB 与幻读：</strong>上表中标 * 的幻读列是 SQL 标准的定义。但实际上，MySQL 默认引擎 <strong>InnoDB</strong> 在 REPEATABLE READ 级别下通过 <strong>MVCC（多版本并发控制）+ Next-Key Locking</strong> 已经能防止大部分幻读场景，其行为比 SQL 标准定义的更加严格。这也是为什么 MySQL 官方文档推荐使用默认的 REPEATABLE READ 而非 SERIALIZABLE。
-  </div>
+  <blockquote>
+<p><strong>InnoDB 与幻读：</strong>上表中标 * 的幻读列是 SQL 标准的定义。但实际上，MySQL 默认引擎 <strong>InnoDB</strong> 在 REPEATABLE READ 级别下通过 <strong>MVCC（多版本并发控制）+ Next-Key Locking</strong> 已经能防止大部分幻读场景，其行为比 SQL 标准定义的更加严格。这也是为什么 MySQL 官方文档推荐使用默认的 REPEATABLE READ 而非 SERIALIZABLE。</p>
+</blockquote>
 
-  <div class="callout callout-tip">
-    <strong>选择建议：</strong>大多数Web应用使用 <code>READ COMMITTED</code> 或 <code>REPEATABLE READ</code> 即可。金融等高一致性要求的场景使用 <code>SERIALIZABLE</code>。
-  </div>
+  <blockquote>
+<p><strong>选择建议：</strong>大多数Web应用使用 <code>READ COMMITTED</code> 或 <code>REPEATABLE READ</code> 即可。金融等高一致性要求的场景使用 <code>SERIALIZABLE</code>。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 7 ==================== -->
@@ -684,9 +684,9 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
 );</code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>反范式原则：</strong>只在读取频率远高于写入频率的场景使用反范式，并确保数据同步机制（如触发器、应用层同步）。
-  </div>
+  <blockquote>
+<p><strong>反范式原则：</strong>只在读取频率远高于写入频率的场景使用反范式，并确保数据同步机制（如触发器、应用层同步）。</p>
+</blockquote>
 
   <h3>常见设计模式</h3>
 
@@ -725,10 +725,9 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
 <div class="section" id="llm-mysql-s8">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：基础CRUD <span class="badge">基础</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>创建一个博客系统数据库，包含用户表、文章表、评论表。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（基础）</strong></p>
+<p><strong>目标：</strong>创建一个博客系统数据库，包含用户表、文章表、评论表。</p>
       <p><strong>要求：</strong></p>
       <p>① 创建 <code>blog_db</code> 数据库</p>
       <p>② 创建 <code>users</code> 表（id、username、email、password_hash、created_at）</p>
@@ -736,13 +735,11 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
       <p>④ 创建 <code>comments</code> 表（id、post_id、user_id、content、created_at）</p>
       <p>⑤ 插入测试数据（至少3个用户、5篇文章、10条评论）</p>
       <p>⑥ 查询所有文章及其作者、评论数</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习2：索引优化 <span class="badge">进阶</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>优化练习1中创建的数据库。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（进阶）</strong></p>
+<p><strong>目标：</strong>优化练习1中创建的数据库。</p>
       <p><strong>要求：</strong></p>
       <p>① 为 <code>users.username</code> 创建唯一索引</p>
       <p>② 为 <code>posts.user_id</code> 和 <code>posts.created_at</code> 创建复合索引</p>
@@ -752,13 +749,11 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
       <p>&nbsp;&nbsp;&nbsp;• 查询某篇文章的所有评论</p>
       <p>&nbsp;&nbsp;&nbsp;• 按时间排序查询最新文章</p>
       <p>⑤ 优化执行计划中的性能问题</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习3：事务实践 <span class="badge">进阶</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>实现一个简单的转账功能，理解事务的重要性。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（进阶）</strong></p>
+<p><strong>目标：</strong>实现一个简单的转账功能，理解事务的重要性。</p>
       <p><strong>要求：</strong></p>
       <p>① 创建 <code>accounts</code> 表（id、user_id、balance）</p>
       <p>② 插入两个账户，余额分别为 1000 和 500</p>
@@ -766,8 +761,7 @@ collation-server=<span class="str">utf8mb4_unicode_ci</span></code></pre>
       <p>④ 测试正常情况（成功转账）</p>
       <p>⑤ 测试异常情况（余额不足时回滚）</p>
       <p>⑥ 验证事务的原子性（转账前后总金额不变）</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 <!-- 底部导航 -->

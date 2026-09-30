@@ -1,6 +1,8 @@
 <section class="llm-mod minimind-mod" id="llm-minimind">
   <div class="llm-hero"><h1>MiniMind：从零训练到 Agent 部署</h1><p>用一个可运行的小模型项目，把 LLM 的数据、架构、训练、对齐、强化学习与部署串成一条完整工程链。</p></div>
-  <div class="callout-tip"><strong>学习方式：</strong>每节先讲原理，再对应 MiniMind 源码，正文只摘录关键片段；完整文件在本章末尾附录，可从代码块下方快速跳转。</div>
+  <blockquote>
+<p><strong>学习方式：</strong>每节先讲原理，再对应 MiniMind 源码，正文只摘录关键片段；完整文件在本章末尾附录，可从代码块下方快速跳转。</p>
+</blockquote>
   <h2 id="llm-minimind-s1">1. 项目地图：先建立全局心智模型</h2>
   <p>MiniMind 的价值不在于模型参数量小，而在于它把“一个语言模型如何从数据变成可服务产品”压缩进了可读的 Python 文件。阅读时可以沿着四条线索走：<strong>数据线</strong>负责把文本变成 token，<strong>模型线</strong>负责把 token 变成概率，<strong>训练线</strong>负责不断修正参数，<strong>应用线</strong>负责把权重变成推理、工具调用和 API。</p>
   <div class="table-wrap"><table><thead><tr><th>主题</th><th>MiniMind 文件</th><th>要回答的问题</th></tr></thead><tbody><tr><td>Tokenizer 与数据</td><td><code>model/tokenizer.json</code>、<code>dataset/lm_dataset.py</code></td><td>文本如何变成训练样本？</td></tr><tr><td>模型结构</td><td><code>model/model_minimind.py</code></td><td>Transformer 的每层做什么？</td></tr><tr><td>训练</td><td><code>trainer/train_pretrain.py</code>、<code>train_full_sft.py</code></td><td>损失如何反向传播并保存检查点？</td></tr><tr><td>后训练与 Agent</td><td><code>train_lora.py</code>、<code>train_dpo.py</code>、<code>train_grpo.py</code>、<code>train_agent.py</code></td><td>模型如何学会遵循指令、偏好和工具协议？</td></tr><tr><td>服务与部署</td><td><code>scripts/chat_api.py</code>、<code>scripts/web_demo.py</code></td><td>如何让模型被应用调用？</td></tr></tbody></table></div>

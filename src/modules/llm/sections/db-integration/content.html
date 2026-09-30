@@ -19,9 +19,9 @@
 <div class="section" id="llm-db-integration-s1">
   <h2>数据同步概述</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>数据同步就像是银行的账务系统——你在ATM机取钱（写入MySQL），几分钟后手机银行就能看到余额变化（同步到Milvus）。这个过程需要保证数据的一致性和及时性。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>数据同步就像是银行的账务系统——你在ATM机取钱（写入MySQL），几分钟后手机银行就能看到余额变化（同步到Milvus）。这个过程需要保证数据的一致性和及时性。</p>
+</blockquote>
 
   <h3>为什么需要多库同步</h3>
 
@@ -225,23 +225,23 @@
         <span class="fn">print</span>(<span class="str">f"❌ 超过最大重试次数，丢弃: doc_id=<span class="var">{item['id']}</span>"</span>)</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>异步双写优势：</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>异步双写优势：</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li>MySQL写入不被Milvus延迟影响</li>
       <li>通过队列削峰，应对突发流量</li>
       <li>失败重试机制保证最终一致性</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 4 ==================== -->
 <div class="section" id="llm-db-integration-s4">
   <h2>CDC方案详解</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>CDC（Change Data Capture）就像是数据库的"新闻发言人"——每当数据库发生变化，它就会自动通知外界："嘿，我刚插入了一条新数据！"
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>CDC（Change Data Capture）就像是数据库的"新闻发言人"——每当数据库发生变化，它就会自动通知外界："嘿，我刚插入了一条新数据！"</p>
+</blockquote>
 
   <h3>CDC原理</h3>
 
@@ -300,10 +300,10 @@ sequenceDiagram
 }</code></pre>
   </div>
 
-  <div class="callout callout-info">
-    <strong>Milvus 2.5+ 原生全文检索（BM25）</strong>
-    <p style="margin-top: 0.3rem;">Milvus 2.5 开始内置 BM25 全文检索功能，支持稀疏向量（Sparse Vector）和倒排索引。这意味着在某些架构中，<strong>不再需要单独维护一个 MySQL 来做关键词检索</strong>——Milvus 可以同时处理语义搜索和关键词搜索，从而减少 CDC 同步链路的复杂度和维护成本。对于只关心"全文 + 向量"混合检索的场景，这是一条值得关注的简化路径。</p>
-  </div>
+  <blockquote>
+<p><strong>Milvus 2.5+ 原生全文检索（BM25）</strong></p>
+<p style="margin-top: 0.3rem;">Milvus 2.5 开始内置 BM25 全文检索功能，支持稀疏向量（Sparse Vector）和倒排索引。这意味着在某些架构中，<strong>不再需要单独维护一个 MySQL 来做关键词检索</strong>——Milvus 可以同时处理语义搜索和关键词搜索，从而减少 CDC 同步链路的复杂度和维护成本。对于只关心"全文 + 向量"混合检索的场景，这是一条值得关注的简化路径。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 5 ==================== -->
@@ -528,36 +528,35 @@ sync_lag = Gauge(
     <span class="kw">return</span> <span class="fn">len</span>(missing_in_milvus) == <span class="num">0</span> <span class="kw">and</span> <span class="fn">len</span>(extra_in_milvus) == <span class="num">0</span></code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>多库同步的数据一致性挑战</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>多库同步的数据一致性挑战</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li><strong>分布式事务缺失：</strong>MySQL 和 Milvus 之间无法使用 ACID 事务，双写或 CDC 都可能出现一侧成功、另一侧失败的情况</li>
       <li><strong>顺序性保证：</strong>CDC 消费者需要保证事件的顺序处理，否则可能出现"先删除后插入"被乱序为"先插入后删除"的问题</li>
       <li><strong>延迟窗口：</strong>最终一致性模型下，数据写入 MySQL 到 Milvus 可查询之间存在秒级到分钟级的延迟窗口，用户可能看到不一致的检索结果</li>
       <li><strong>重试幂等性：</strong>重试机制必须保证幂等——同一条数据重复写入 Milvus 不应产生重复向量</li>
       <li><strong>删除同步：</strong>删除操作最容易被忽略，务必在同步链路中处理 DELETE 事件，否则 Milvus 中会残留"僵尸"向量</li>
     </ul>
-  </div>
+</blockquote>
 
-  <div class="callout callout-tip">
-    <strong>监控建议：</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>监控建议：</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li>使用Prometheus + Grafana监控同步延迟和QPS</li>
       <li>设置告警：同步延迟超过60秒告警</li>
       <li>定期运行一致性检查，记录差异</li>
       <li>保留同步日志，便于问题排查</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 7 ==================== -->
 <div class="section" id="llm-db-integration-s7">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：实现双写方案 <span class="badge">基础</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>实现一个简单的MySQL+Milvus双写方案。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（基础）</strong></p>
+<p><strong>目标：</strong>实现一个简单的MySQL+Milvus双写方案。</p>
       <p><strong>要求：</strong></p>
       <p>① 创建MySQL文档表（id、title、content、created_at）</p>
       <p>② 创建Milvus Collection（id、embedding、title）</p>
@@ -565,13 +564,11 @@ sync_lag = Gauge(
       <p>④ 插入10条测试数据</p>
       <p>⑤ 验证两个数据库的数据一致性</p>
       <p>⑥ 实现基本的错误处理和日志</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习2：增量同步Pipeline <span class="badge">进阶</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>实现一个完整的增量同步Pipeline。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（进阶）</strong></p>
+<p><strong>目标：</strong>实现一个完整的增量同步Pipeline。</p>
       <p><strong>要求：</strong></p>
       <p>① 实现基于ID的增量同步</p>
       <p>② 支持批量同步（每次最多1000条）</p>
@@ -579,13 +576,11 @@ sync_lag = Gauge(
       <p>④ 实现定时同步循环（每5秒检查一次）</p>
       <p>⑤ 添加基本的监控指标（Prometheus）</p>
       <p>⑥ 实现数据一致性检查函数</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习3：生产环境方案设计 <span class="badge">综合</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>设计一个生产环境的MySQL+Milvus同步方案。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（综合）</strong></p>
+<p><strong>目标：</strong>设计一个生产环境的MySQL+Milvus同步方案。</p>
       <p><strong>需求：</strong></p>
       <p>① 每天新增10万条文档</p>
       <p>② 要求秒级延迟</p>
@@ -597,8 +592,7 @@ sync_lag = Gauge(
       <p>③ 设计错误处理和重试机制</p>
       <p>④ 列出需要监控的指标和告警阈值</p>
       <p>⑤ 编写核心代码实现</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 <!-- 底部导航 -->

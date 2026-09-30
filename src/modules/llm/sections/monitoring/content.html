@@ -7,9 +7,9 @@
 <div class="section" id="llm-monitoring-s1">
   <h2>损失曲线监控</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>损失曲线就像是心电图——正常情况下应该是平稳下降然后趋于平稳。如果剧烈震荡、突然上升或长期不动，都说明训练出了问题。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>损失曲线就像是心电图——正常情况下应该是平稳下降然后趋于平稳。如果剧烈震荡、突然上升或长期不动，都说明训练出了问题。</p>
+</blockquote>
 
   <h3>训练曲线解读</h3>
 
@@ -78,14 +78,14 @@ writer.close()</code></pre>
 
   <h3>过拟合信号</h3>
 
-  <div class="callout callout-warn">
-    <strong>过拟合警告信号：</strong>
-    <ul>
+  <blockquote>
+<p><strong>过拟合警告信号：</strong></p>
+<ul>
       <li>训练损失持续下降，但验证损失开始上升</li>
       <li>验证准确率在达到峰值后开始下降</li>
       <li>模型在训练集上表现完美，但在新数据上表现很差</li>
     </ul>
-  </div>
+</blockquote>
 
   <h3>解决方案</h3>
 
@@ -136,9 +136,9 @@ early_stopping = EarlyStopping(patience=<span class="num">5</span>)
 <div class="section" id="llm-monitoring-s3b">
   <h2>梯度范数监控</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>梯度范数就像血压——正常范围内说明训练健康，突然飙升说明有问题（梯度爆炸），持续过低说明模型学不动了（梯度消失）。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>梯度范数就像血压——正常范围内说明训练健康，突然飙升说明有问题（梯度爆炸），持续过低说明模型学不动了（梯度消失）。</p>
+</blockquote>
 
   <h3>为什么监控梯度范数</h3>
 
@@ -175,9 +175,9 @@ writer.add_scalar(<span class="str">'Gradient/norm'</span>, grad_norm.item(), gl
 optimizer.step()</code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>梯度裁剪值选择：</strong>max_norm=1.0是常用默认值。LLM训练中常见范围为0.5-5.0。如果梯度范数频繁触及裁剪阈值，说明学习率可能过大。
-  </div>
+  <blockquote>
+<p><strong>梯度裁剪值选择：</strong>max_norm=1.0是常用默认值。LLM训练中常见范围为0.5-5.0。如果梯度范数频繁触及裁剪阈值，说明学习率可能过大。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-monitoring-s3c">
@@ -193,9 +193,9 @@ optimizer.step()</code></pre>
     <tr><td><strong>显存占用</strong></td><td>GPU显存使用量</td><td>越接近上限越好</td></tr>
   </table>
 
-  <div class="callout callout-info">
-    <strong>MFU（Model FLOPs Utilization）：</strong>衡量实际训练速度与GPU理论峰值算力的比值。MFU = 实际FLOPs / 峰值FLOPs。这是衡量训练效率的黄金指标。PaLM论文报告的MFU约46%，现代优化后可达50%-60%。
-  </div>
+  <blockquote>
+<p><strong>MFU（Model FLOPs Utilization）：</strong>衡量实际训练速度与GPU理论峰值算力的比值。MFU = 实际FLOPs / 峰值FLOPs。这是衡量训练效率的黄金指标。PaLM论文报告的MFU约46%，现代优化后可达50%-60%。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header"><span class="code-lang">Python</span></div>
@@ -237,9 +237,9 @@ gpu_util = torch.cuda.utilization()
 <div class="section" id="llm-monitoring-s3d">
   <h2>训练损失突刺（Loss Spike）处理</h2>
 
-  <div class="callout callout-warn">
-    <strong>真实训练中的常见问题：</strong>在长时间的大模型训练中，损失曲线偶尔会出现突然飙升（loss spike），这是非常常见的现象。如何处理loss spike是LLM训练工程师的核心技能之一。
-  </div>
+  <blockquote>
+<p><strong>真实训练中的常见问题：</strong>在长时间的大模型训练中，损失曲线偶尔会出现突然飙升（loss spike），这是非常常见的现象。如何处理loss spike是LLM训练工程师的核心技能之一。</p>
+</blockquote>
 
   <h3>Loss Spike的常见原因</h3>
 
@@ -272,9 +272,9 @@ loss = outputs.loss
         pg[<span class="str">'lr'</span>] *= <span class="num">0.5</span>  <span class="cmt"># 学习率减半</span></code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>业界经验：</strong>GPT-4的训练报告中提到，整个训练过程出现了约20次loss spike。Meta的LLaMA训练中也观察到类似现象。关键是：保存足够频繁的checkpoint，以及有自动检测和回滚机制。
-  </div>
+  <blockquote>
+<p><strong>业界经验：</strong>GPT-4的训练报告中提到，整个训练过程出现了约20次loss spike。Meta的LLaMA训练中也观察到类似现象。关键是：保存足够频繁的checkpoint，以及有自动检测和回滚机制。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-monitoring-s3e">
@@ -350,22 +350,22 @@ mlflow.set_experiment(<span class="str">"llm-training"</span>)
 <span class="cmt"># 访问 http://localhost:5000</span></code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>工具选择建议：</strong>
-    <ul>
+  <blockquote>
+<p><strong>工具选择建议：</strong></p>
+<ul>
       <li><strong>TensorBoard</strong>：轻量，适合个人实验，PyTorch内置支持</li>
       <li><strong>WandB</strong>：功能最丰富，支持协作，免费额度足够个人使用</li>
       <li><strong>MLflow</strong>：完全开源，可自建服务器，适合企业内部部署，数据不外流</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <div class="section" id="llm-monitoring-s3f">
   <h2>权重分布监控</h2>
 
-  <div class="callout callout-info">
-    <strong>权重分布监控：</strong>除了损失和准确率，监控模型权重和激活值的分布变化也很重要。权重突然变大或变小可能预示训练问题。
-  </div>
+  <blockquote>
+<p><strong>权重分布监控：</strong>除了损失和准确率，监控模型权重和激活值的分布变化也很重要。权重突然变大或变小可能预示训练问题。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header"><span class="code-lang">Python</span></div>
@@ -394,26 +394,24 @@ mlflow.set_experiment(<span class="str">"llm-training"</span>)
             module.register_forward_hook(hook_fn)</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>监控要点：</strong>如果某层的权重标准差持续增大，可能出现权重爆炸；如果梯度标准差持续接近0，该层可能无法学习。关注"dead neurons"——输出恒为0的神经元。
-  </div>
+  <blockquote>
+<p><strong>监控要点：</strong>如果某层的权重标准差持续增大，可能出现权重爆炸；如果梯度标准差持续接近0，该层可能无法学习。关注"dead neurons"——输出恒为0的神经元。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-monitoring-s4">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：完整的训练监控系统</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>构建一个完整的训练监控系统。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>构建一个完整的训练监控系统。</p>
       <p><strong>要求：</strong></p>
       <p>① 使用TensorBoard或MLflow记录训练过程</p>
       <p>② 实现Early Stopping和梯度裁剪</p>
       <p>③ 记录：训练损失、验证损失、准确率、学习率、梯度范数</p>
       <p>④ 监控吞吐量（tokens/sec）和GPU利用率</p>
       <p>⑤ 可视化训练曲线，诊断过拟合问题并解决</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 

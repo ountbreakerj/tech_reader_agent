@@ -16,10 +16,10 @@
 
 <h3>现实文档中的多模态数据</h3>
 
-<div class="callout callout-blue">
-  <strong>企业文档中 80% 的关键信息以非纯文本形式存在</strong>
-  McKinsey 的报告指出，企业知识管理中，结构化表格、可视化图表和扫描图片占据信息总量的绝大多数。纯文本 RAG 只触及了冰山一角。
-</div>
+<blockquote>
+<p><strong>企业文档中 80% 的关键信息以非纯文本形式存在</strong>
+  McKinsey 的报告指出，企业知识管理中，结构化表格、可视化图表和扫描图片占据信息总量的绝大多数。纯文本 RAG 只触及了冰山一角。</p>
+</blockquote>
 
 <table>
   <thead>
@@ -141,10 +141,10 @@ for line in result[0]:
     print(f"文字: {text}, 置信度: {confidence:.2f}")
     # 输出: 文字: 2025年第三季度财务报告, 置信度: 0.98</code></pre>
 
-<div class="callout callout-yellow">
-  <strong>实践建议</strong>
-  优先使用原生数字 PDF 解析（PyMuPDF/PDFPlumber），仅对扫描件和图片使用 OCR。混合使用两种方式通常比单一方案效果更好。PaddleOCR 在中文场景下明显优于 Tesseract。
-</div>
+<blockquote>
+<p><strong>实践建议</strong>
+  优先使用原生数字 PDF 解析（PyMuPDF/PDFPlumber），仅对扫描件和图片使用 OCR。混合使用两种方式通常比单一方案效果更好。PaddleOCR 在中文场景下明显优于 Tesseract。</p>
+</blockquote>
 
 <!-- ==================== 第3节 ==================== -->
 <h2>3. ColPali：文档图像检索</h2>
@@ -205,10 +205,10 @@ print(f"相关性得分: {relevance_score.item():.4f}")</code></pre>
   </tbody>
 </table>
 
-<div class="callout callout-green">
-  <strong>ColPali 适用场景</strong>
-  文档版式复杂（如杂志、海报、信息图）、表格密集、多语言混合、或者需要快速搭建原型而不愿投入 OCR pipeline 建设的场景。对于纯文本文档，传统方法仍然高效。
-</div>
+<blockquote>
+<p><strong>ColPali 适用场景</strong>
+  文档版式复杂（如杂志、海报、信息图）、表格密集、多语言混合、或者需要快速搭建原型而不愿投入 OCR pipeline 建设的场景。对于纯文本文档，传统方法仍然高效。</p>
+</blockquote>
 
 <!-- ==================== 第4节 ==================== -->
 <h2>4. 视觉语言模型（VLM）文档理解</h2>
@@ -364,10 +364,10 @@ print(f"文本-图表相似度: {sim_text_image:.4f}")</code></pre>
 
 <h3>5.3 统一 Embedding 空间</h3>
 
-<div class="callout callout-purple">
-  <strong>核心思想</strong>
-  将文本片段、表格截图、图表图片、公式渲染图全部通过同一个 embedding 模型编码，存入同一个向量数据库。查询时，无论是文本查询还是图像查询，都能命中所有相关模态的内容。
-</div>
+<blockquote>
+<p><strong>核心思想</strong>
+  将文本片段、表格截图、图表图片、公式渲染图全部通过同一个 embedding 模型编码，存入同一个向量数据库。查询时，无论是文本查询还是图像查询，都能命中所有相关模态的内容。</p>
+</blockquote>
 
 <table>
   <thead>
@@ -691,8 +691,8 @@ for hit in results[0]:
   <p><strong>验收标准：</strong>输入问题后，系统返回的回答同时引用了文本段落和图表数据，答案准确且有据可查。</p>
 </div>
 
-<div class="callout callout-blue">
-  <strong>扩展方向</strong>
-  尝试 ColPali 方案作为对照实验 — 同样的文档，跳过 OCR 直接以图像检索，对比两种方案的检索质量和速度差异。这将帮助你理解不同技术路线的取舍。
-</div>
+<blockquote>
+<p><strong>扩展方向</strong>
+  尝试 ColPali 方案作为对照实验 — 同样的文档，跳过 OCR 直接以图像检索，对比两种方案的检索质量和速度差异。这将帮助你理解不同技术路线的取舍。</p>
+</blockquote>
 </div></section>

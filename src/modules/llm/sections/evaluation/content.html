@@ -177,9 +177,9 @@ results = evaluator.simple_evaluate(
 <div class="section" id="llm-evaluation-s3b">
   <h2>LLM-as-Judge评估方法</h2>
 
-  <div class="callout callout-info">
-    <strong>LLM-as-Judge：</strong>用一个强大的LLM（如GPT-4、Claude）作为"裁判"来评估其他模型的输出质量。这种方法在2025-2026年已成为评估开放式对话质量的主流方法，MT-Bench、Arena-Hard、AlpacaEval 2.0均基于此。
-  </div>
+  <blockquote>
+<p><strong>LLM-as-Judge：</strong>用一个强大的LLM（如GPT-4、Claude）作为"裁判"来评估其他模型的输出质量。这种方法在2025-2026年已成为评估开放式对话质量的主流方法，MT-Bench、Arena-Hard、AlpacaEval 2.0均基于此。</p>
+</blockquote>
 
   <h3>主要框架</h3>
 
@@ -218,23 +218,23 @@ judge_prompt = <span class="str">"""请评估以下AI助手的回答质量（1-1
     <span class="kw">return</span> response.choices[<span class="num">0</span>].message.content</code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>LLM-as-Judge的局限性：</strong>
-    <ul>
+  <blockquote>
+<p><strong>LLM-as-Judge的局限性：</strong></p>
+<ul>
       <li><strong>位置偏见</strong>：倾向于偏好出现在特定位置的回答</li>
       <li><strong>冗长偏见</strong>：倾向于给更长的回答更高分</li>
       <li><strong>自我偏见</strong>：GPT-4可能偏好GPT-4风格的回答</li>
       <li><strong>缓解方法</strong>：交换回答顺序取平均、使用长度控制、多裁判投票</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <div class="section" id="llm-evaluation-s3c">
   <h2>数据污染与评估可靠性</h2>
 
-  <div class="callout callout-warn">
-    <strong>数据污染（Data Contamination）：</strong>如果模型的训练数据中包含了评估基准的测试集，那么评估结果就不可信——相当于"考试前看了答案"。这是2025-2026年LLM评估领域最关注的问题之一。
-  </div>
+  <blockquote>
+<p><strong>数据污染（Data Contamination）：</strong>如果模型的训练数据中包含了评估基准的测试集，那么评估结果就不可信——相当于"考试前看了答案"。这是2025-2026年LLM评估领域最关注的问题之一。</p>
+</blockquote>
 
   <h3>污染的常见形式</h3>
 
@@ -257,9 +257,9 @@ judge_prompt = <span class="str">"""请评估以下AI助手的回答质量（1-1
 <div class="section" id="llm-evaluation-s3d">
   <h2>最新模型基准成绩参考（2025-2026）</h2>
 
-  <div class="callout callout-info">
-    <strong>注意：</strong>以下成绩来自各模型官方报告和第三方评测，仅作参考。不同评测条件（prompt格式、采样参数）可能导致结果差异。
-  </div>
+  <blockquote>
+<p><strong>注意：</strong>以下成绩来自各模型官方报告和第三方评测，仅作参考。不同评测条件（prompt格式、采样参数）可能导致结果差异。</p>
+</blockquote>
 
   <table>
     <tr><th>模型</th><th>SWE-Bench Verified</th><th>GPQA Diamond</th><th>LiveCodeBench</th><th>Chatbot Arena ELO</th></tr>
@@ -269,32 +269,30 @@ judge_prompt = <span class="str">"""请评估以下AI助手的回答质量（1-1
     <tr><td><strong>GPT-5.5</strong></td><td>-</td><td>-</td><td>-</td><td>Top tier</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>解读建议：</strong>
-    <ul>
+  <blockquote>
+<p><strong>解读建议：</strong></p>
+<ul>
       <li>没有任何单一基准能全面反映模型能力——需要综合多个维度</li>
       <li>SWE-Bench Verified是当前代码能力最权威的指标</li>
       <li>Chatbot Arena的ELO排名最能反映真实用户体验</li>
       <li>注意区分"官方自报"和"第三方复现"的成绩</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <div class="section" id="llm-evaluation-s4">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：模型评估Pipeline</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>构建完整的模型评估Pipeline。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>构建完整的模型评估Pipeline。</p>
       <p><strong>要求：</strong></p>
       <p>① 在测试集上评估微调后的模型</p>
       <p>② 使用sacrebleu计算BLEU，使用rouge-score计算ROUGE-L</p>
       <p>③ 使用lm-eval-harness运行MMLU-Pro和GSM8K基准测试</p>
       <p>④ 对比不同模型在同一测试集上的表现</p>
       <p>⑤ 生成评估报告，讨论可能的数据污染风险</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 

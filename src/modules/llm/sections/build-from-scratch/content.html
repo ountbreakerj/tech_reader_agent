@@ -1,4 +1,6 @@
-<section class="llm-mod llm-m-happy-source llm-build-from-scratch" id="llm-build-from-scratch"><div class="module-wrapper"><div class="llm-hero" style="--hero-a:#0f766e;--hero-b:#2563eb;"><h1>🧱 Happy-LLM：从零搭建 LLaMA2</h1><p>RMSNorm、RoPE、多头注意力、Tokenizer 与小型预训练实践</p><div class="source-meta">来源：Datawhale China · Happy-LLM（本地离线融合）</div></div><div class="callout callout-info"><p>📌 本节保留 Happy-LLM 原教程的概念、公式、代码与图示，并按 Tech Reader 的单文件离线规范转换。外部图片已复制并登记为本地资源。</p></div><div class="happy-source-file"><div class="source-file-label">来源文件 · docs/chapter5/第五章 动手搭建大模型.md</div><div class="section" id="llm-build-from-scratch-src1-s1"><h2>5.1 动手实现一个 LLaMA2 大模型</h2>
+<section class="llm-mod llm-m-happy-source llm-build-from-scratch" id="llm-build-from-scratch"><div class="module-wrapper"><div class="llm-hero" style="--hero-a:#0f766e;--hero-b:#2563eb;"><h1>🧱 Happy-LLM：从零搭建 LLaMA2</h1><p>RMSNorm、RoPE、多头注意力、Tokenizer 与小型预训练实践</p><div class="source-meta">来源：Datawhale China · Happy-LLM（本地离线融合）</div></div><blockquote>
+<p>📌 本节保留 Happy-LLM 原教程的概念、公式、代码与图示，并按 Tech Reader 的单文件离线规范转换。外部图片已复制并登记为本地资源。</p>
+</blockquote><div class="happy-source-file"><div class="source-file-label">来源文件 · docs/chapter5/第五章 动手搭建大模型.md</div><div class="section" id="llm-build-from-scratch-src1-s1"><h2>5.1 动手实现一个 LLaMA2 大模型</h2>
 <p>Meta（原Facebook）于2023年2月发布第一款基于Transformer结构的大型语言模型LLaMA，并于同年7月发布同系列模型LLaMA2。我们在第四章已经学习和了解了LLM，以及如何训练LLM等内容。本小节我们就来学习如何动手实现一个LLaMA2模型。</p>
 <p>LLaMA2 模型结构如下图5.1所示：</p>
 <div align='center'>

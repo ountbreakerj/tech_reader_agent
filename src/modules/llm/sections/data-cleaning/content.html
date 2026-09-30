@@ -60,9 +60,9 @@
     <tr><td><strong>OpenWebText</strong></td><td>~38GB</td><td>Reddit高赞链接</td><td>GPT系列模型训练</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>数据集选择建议：</strong>学习阶段使用小规模数据集（如C4的子集或Wikipedia），生产环境使用The Pile或完整C4。
-  </div>
+  <blockquote>
+<p><strong>数据集选择建议：</strong>学习阶段使用小规模数据集（如C4的子集或Wikipedia），生产环境使用The Pile或完整C4。</p>
+</blockquote>
 
   <h3>私有数据</h3>
 
@@ -74,18 +74,18 @@
     <li><strong>领域数据</strong>：金融报告、医疗记录、法律文书</li>
   </ul>
 
-  <div class="callout callout-warn">
-    <strong>数据版权注意：</strong>使用公开数据集前，务必检查其许可证（License）。有些数据集（如CommonCrawl）可能包含受版权保护的内容。
-  </div>
+  <blockquote>
+<p><strong>数据版权注意：</strong>使用公开数据集前，务必检查其许可证（License）。有些数据集（如CommonCrawl）可能包含受版权保护的内容。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 2 ==================== -->
 <div class="section" id="llm-data-cleaning-s2">
   <h2>文本清洗</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>文本清洗就像是做饭前的洗菜——把烂叶子（乱码）、泥土（HTML标签）、虫子（特殊字符）都去掉，只留下干净的食材。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>文本清洗就像是做饭前的洗菜——把烂叶子（乱码）、泥土（HTML标签）、虫子（特殊字符）都去掉，只留下干净的食材。</p>
+</blockquote>
 
   <h3>常见清洗操作</h3>
 
@@ -155,9 +155,9 @@
     <span class="kw">return True</span></code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>语言检测推荐：</strong>生产环境建议使用 <strong>fastText lid.176</strong> 模型进行语言识别（支持176种语言），准确率远高于简单的字符比例判断。FineWeb、RedPajama、Dolma等主流数据集均采用此方案。
-  </div>
+  <blockquote>
+<p><strong>语言检测推荐：</strong>生产环境建议使用 <strong>fastText lid.176</strong> 模型进行语言识别（支持176种语言），准确率远高于简单的字符比例判断。FineWeb、RedPajama、Dolma等主流数据集均采用此方案。</p>
+</blockquote>
 
   <h3>困惑度（Perplexity）质量过滤</h3>
 
@@ -211,18 +211,18 @@ model = kenlm.<span class="fn">Model</span>(<span class="str">"zh.arpa.klm"</spa
     <span class="kw">return</span> text</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>PII去除推荐：</strong>仅使用正则表达式容易遗漏边界情况。生产环境建议使用微软开源的 <strong>Presidio</strong> 库（<code>pip install presidio-analyzer presidio-anonymizer</code>），它结合了正则、NLP实体识别和上下文分析，能更准确地识别姓名、地址、信用卡号等PII信息。
-  </div>
+  <blockquote>
+<p><strong>PII去除推荐：</strong>仅使用正则表达式容易遗漏边界情况。生产环境建议使用微软开源的 <strong>Presidio</strong> 库（<code>pip install presidio-analyzer presidio-anonymizer</code>），它结合了正则、NLP实体识别和上下文分析，能更准确地识别姓名、地址、信用卡号等PII信息。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 3 ==================== -->
 <div class="section" id="llm-data-cleaning-s3">
   <h2>文本分词（Tokenization）</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>分词就像是把一篇文章拆成一个个单词或字符。但LLM使用的分词更智能——它不是按空格分词，而是学习最有用的子词单元（如"un"、"##ing"等）。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>分词就像是把一篇文章拆成一个个单词或字符。但LLM使用的分词更智能——它不是按空格分词，而是学习最有用的子词单元（如"un"、"##ing"等）。</p>
+</blockquote>
 
   <!-- 3.1 BPE -->
   <div id="llm-data-cleaning-s3-1">
@@ -318,14 +318,14 @@ tokens = enc.<span class="fn">encode</span>(text)
 <span class="fn">print</span>(enc.n_vocab)   <span class="cmt"># 100277</span></code></pre>
     </div>
 
-    <div class="callout callout-info">
-      <strong>分词器对比：</strong>
-      <ul style="margin-top: 0.5rem;">
+    <blockquote>
+<p><strong>分词器对比：</strong></p>
+<ul style="margin-top: 0.5rem;">
         <li><strong>BPE</strong>：GPT系列、LLaMA系列使用</li>
         <li><strong>WordPiece</strong>：BERT系列使用</li>
         <li><strong>SentencePiece</strong>：T5、ALBERT等使用（语言无关）</li>
       </ul>
-    </div>
+</blockquote>
   </div>
 </div>
 
@@ -333,9 +333,9 @@ tokens = enc.<span class="fn">encode</span>(text)
 <div class="section" id="llm-data-cleaning-s4">
   <h2>文本编码</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>如果说分词是把句子拆成单词，那么编码就是给每个单词分配一个唯一的编号。就像给每个学生分配学号一样。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>如果说分词是把句子拆成单词，那么编码就是给每个单词分配一个唯一的编号。就像给每个学生分配学号一样。</p>
+</blockquote>
 
   <h3>特殊Token</h3>
 
@@ -548,25 +548,24 @@ lsh = MinHashLSH(threshold=<span class="num">0.8</span>, num_perm=<span class="n
         <span class="fn">print</span>(<span class="str">f"文档 <span class="var">{idx}</span> 与 <span class="var">{result}</span> 近似重复"</span>)</code></pre>
   </div>
 
-  <div class="callout callout-info">
-    <strong>主流去重工具推荐：</strong>
-    <ul style="margin-top: 0.5rem;">
+  <blockquote>
+<p><strong>主流去重工具推荐：</strong></p>
+<ul style="margin-top: 0.5rem;">
       <li><strong>text-dedup</strong>：集成多种去重算法（MinHash、SimHash、Suffix Array等），开箱即用</li>
       <li><strong>datatrove</strong>（HuggingFace）：大规模数据处理pipeline，包含MinHash去重模块</li>
       <li><strong>NVIDIA NeMo Curator</strong>：GPU加速的去重和质量过滤，适合超大规模数据</li>
       <li><strong>Dolma Toolkit</strong>（AI2）：Allen AI开源，被Dolma/OLMo数据集使用</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 7 ==================== -->
 <div class="section" id="llm-data-cleaning-s7">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：清洗真实数据 <span class="badge">基础</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>清洗一个真实的文本数据集。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（基础）</strong></p>
+<p><strong>目标：</strong>清洗一个真实的文本数据集。</p>
       <p><strong>数据集：</strong>下载一个小型Wikipedia数据集（或使用提供的样例数据）</p>
       <p><strong>要求：</strong></p>
       <p>① 实现文本清洗函数（去除HTML、URL、特殊字符等）</p>
@@ -574,34 +573,29 @@ lsh = MinHashLSH(threshold=<span class="num">0.8</span>, num_perm=<span class="n
       <p>③ 批量处理1000条数据</p>
       <p>④ 统计清洗前后的数据量变化</p>
       <p>⑤ 输出清洗后的数据到JSONL文件</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习2：训练BPE分词器 <span class="badge">进阶</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>用自己准备的数据训练一个BPE分词器。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（进阶）</strong></p>
+<p><strong>目标：</strong>用自己准备的数据训练一个BPE分词器。</p>
       <p><strong>要求：</strong></p>
       <p>① 准备1000条中文文本数据</p>
       <p>② 使用tokenizers库训练BPE分词器</p>
       <p>③ 设置词表大小为10000</p>
       <p>④ 对比训练前后的分词效果</p>
       <p>⑤ 统计词频分布</p>
-    </div>
-  </div>
+</blockquote>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习3：数据集质量报告 <span class="badge">综合</span></div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>生成一份完整的数据集质量报告。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习（综合）</strong></p>
+<p><strong>目标：</strong>生成一份完整的数据集质量报告。</p>
       <p><strong>要求：</strong></p>
       <p>① 加载JSONL格式的数据集</p>
       <p>② 统计：样本数、平均长度、长度分布、来源分布</p>
       <p>③ 检测并报告重复数据</p>
       <p>④ 生成可视化图表（长度分布、来源饼图）</p>
       <p>⑤ 输出质量报告（JSON格式）</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 <!-- 底部导航 -->

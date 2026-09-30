@@ -7,9 +7,9 @@
 <div class="section" id="llm-rag-fundamentals-s1">
   <h2>什么是RAG</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>RAG（Retrieval-Augmented Generation）就像是给LLM配了一个"图书管理员"——当你问问题时，图书管理员先帮你从图书馆找到最相关的几本书（检索），然后你再根据这些书来回答问题（生成）。这样就解决了LLM知识过时和幻觉的问题。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>RAG（Retrieval-Augmented Generation）就像是给LLM配了一个"图书管理员"——当你问问题时，图书管理员先帮你从图书馆找到最相关的几本书（检索），然后你再根据这些书来回答问题（生成）。这样就解决了LLM知识过时和幻觉的问题。</p>
+</blockquote>
 
   <h3>RAG vs Fine-Tuning vs Prompt Engineering</h3>
 
@@ -166,9 +166,9 @@ docs = text_splitter.split_documents(documents)
     <tr><td><strong>父子分块（Parent-Child Chunking）</strong></td><td>小chunk用于精确检索，返回其所属的大chunk提供完整上下文</td><td>兼顾检索精度和上下文完整性</td><td>大多数生产RAG系统（推荐）</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>父子分块实践建议：</strong>小chunk通常为128-256 tokens用于embedding检索，父chunk为512-1024 tokens用于提供上下文。检索命中小chunk后，返回其对应的父chunk给LLM，这样既保证检索精度又不丢失上下文。
-  </div>
+  <blockquote>
+<p><strong>父子分块实践建议：</strong>小chunk通常为128-256 tokens用于embedding检索，父chunk为512-1024 tokens用于提供上下文。检索命中小chunk后，返回其对应的父chunk给LLM，这样既保证检索精度又不丢失上下文。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-rag-fundamentals-s4-2">
@@ -185,18 +185,17 @@ docs = text_splitter.split_documents(documents)
   <h3>查询分解（Query Decomposition）</h3>
   <p>将复杂的多跳问题分解为多个简单子问题，分别检索后综合回答。例如"对比BERT和GPT在文本分类上的优劣"可分解为："BERT在文本分类上的表现"和"GPT在文本分类上的表现"两个子查询。</p>
 
-  <div class="callout callout-info">
-    <strong>选择建议：</strong>HyDE实现最简单，适合作为查询优化的起点；多查询扩展在大多数场景下能稳定提升召回率；查询分解适合处理复杂多跳问题。三者可以组合使用。
-  </div>
+  <blockquote>
+<p><strong>选择建议：</strong>HyDE实现最简单，适合作为查询优化的起点；多查询扩展在大多数场景下能稳定提升召回率；查询分解适合处理复杂多跳问题。三者可以组合使用。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-rag-fundamentals-s5">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：构建简单RAG系统</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>从零构建一个简单的RAG问答系统。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>从零构建一个简单的RAG问答系统。</p>
       <p><strong>要求：</strong></p>
       <p>① 准备5-10个文本文档</p>
       <p>② 使用LangChain进行文本分割</p>
@@ -204,8 +203,7 @@ docs = text_splitter.split_documents(documents)
       <p>④ 存储到Milvus</p>
       <p>⑤ 实现相似度搜索</p>
       <p>⑥ 测试3个不同的查询</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 

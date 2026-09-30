@@ -77,7 +77,9 @@
         x = <span class="dec">self</span>.norm2(x + ffn_out)
         <span class="kw">return</span> x</code></pre>
 
-  <div class="callout-tip">原始 Transformer 使用 Post-LN（先残差再归一化），GPT 系列使用 Pre-LN（先归一化再残差），后者训练更稳定。</div>
+  <blockquote>
+<p>原始 Transformer 使用 Post-LN（先残差再归一化），GPT 系列使用 Pre-LN（先归一化再残差），后者训练更稳定。</p>
+</blockquote>
 </div>
 
 <!-- ==================== BERT ==================== -->
@@ -131,7 +133,9 @@
         logits = <span class="dec">self</span>.mlm_head(x)
         <span class="kw">return</span> logits  <span class="cmt"># (B, L, vocab_size)</span></code></pre>
 
-  <div class="callout-info">BERT 的 MLM 任务会随机替换 15% 的 token：其中 80% 替换为 [MASK]，10% 替换为随机 token，10% 保持不变，以缓解预训练与微调之间的分布差异。</div>
+  <blockquote>
+<p>BERT 的 MLM 任务会随机替换 15% 的 token：其中 80% 替换为 [MASK]，10% 替换为随机 token，10% 保持不变，以缓解预训练与微调之间的分布差异。</p>
+</blockquote>
 </div>
 
 <!-- ==================== GPT-2 ==================== -->
@@ -184,7 +188,9 @@
         x = x + <span class="dec">self</span>.mlp(<span class="dec">self</span>.ln2(x))
         <span class="kw">return</span> x</code></pre>
 
-  <div class="callout-warn">GPT-2 的 token embedding 和最终 lm_head 权重是<strong>共享的</strong>（weight tying），这可以大幅减少参数量。BERT 的 MLM 头则通常不共享权重。</div>
+  <blockquote>
+<p>GPT-2 的 token embedding 和最终 lm_head 权重是<strong>共享的</strong>（weight tying），这可以大幅减少参数量。BERT 的 MLM 头则通常不共享权重。</p>
+</blockquote>
 </div>
 
 <!-- ==================== T5 ==================== -->
@@ -227,7 +233,9 @@
         x = x + <span class="dec">self</span>.ffn(<span class="dec">self</span>.norm2(x))
         <span class="kw">return</span> x</code></pre>
 
-  <div class="callout-info">T5 使用 <strong>相对位置编码</strong>（Relative Position Bias），在注意力分数中加入可学习的偏置项，泛化到更长序列的能力优于绝对位置编码。</div>
+  <blockquote>
+<p>T5 使用 <strong>相对位置编码</strong>（Relative Position Bias），在注意力分数中加入可学习的偏置项，泛化到更长序列的能力优于绝对位置编码。</p>
+</blockquote>
 </div>
 
 <!-- ==================== LLaMA ==================== -->
@@ -305,7 +313,9 @@
         out = h + <span class="dec">self</span>.ffn(<span class="dec">self</span>.ffn_norm(h))
         <span class="kw">return</span> out</code></pre>
 
-  <div class="callout-tip">SwiGLU 的 d_ff 通常设为 (2/3) * 4 * d_model（而不是原版的 4 倍），因为有 3 个线性层，保持总参数量相当。LLaMA 7B 的 d_ff=11008 就是这个比例。</div>
+  <blockquote>
+<p>SwiGLU 的 d_ff 通常设为 (2/3) * 4 * d_model（而不是原版的 4 倍），因为有 3 个线性层，保持总参数量相当。LLaMA 7B 的 d_ff=11008 就是这个比例。</p>
+</blockquote>
 </div>
 
 <!-- ==================== 对比总结 ==================== -->
@@ -321,7 +331,9 @@
     <tr><td>DeepSeek V4</td><td>Dec-Only</td><td>RoPE</td><td>RMSNorm</td><td>SwiGLU</td><td>CSA/HCA</td></tr>
   </table>
 
-  <div class="callout-info">从 Transformer 到 LLaMA 的演进趋势：Post-LN -> Pre-LN -> RMSNorm；ReLU -> GELU -> SwiGLU；绝对位置编码 -> RoPE。这些改进共同提升了训练稳定性和模型性能。</div>
+  <blockquote>
+<p>从 Transformer 到 LLaMA 的演进趋势：Post-LN -> Pre-LN -> RMSNorm；ReLU -> GELU -> SwiGLU；绝对位置编码 -> RoPE。这些改进共同提升了训练稳定性和模型性能。</p>
+</blockquote>
 
   <h3>快速搭建一个 LLaMA 风格模型</h3>
 <pre><code><span class="kw">class</span> <span class="cls">MiniLLaMA</span>(nn.Module):

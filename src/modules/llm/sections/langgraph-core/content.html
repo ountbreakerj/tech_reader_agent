@@ -33,9 +33,9 @@
     </div>
   </div>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>LangChain 的 Chain 像是<strong>工厂流水线</strong>——传送带从头到尾，工位固定顺序。LangGraph 像是<strong>地铁线路图</strong>——站点（节点）之间可以有任意连接，有环线、有换乘、有分支，你能设计出任意复杂的工作流。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>LangChain 的 Chain 像是<strong>工厂流水线</strong>——传送带从头到尾，工位固定顺序。LangGraph 像是<strong>地铁线路图</strong>——站点（节点）之间可以有任意连接，有环线、有换乘、有分支，你能设计出任意复杂的工作流。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 2: StateGraph 基础 ==================== -->
@@ -44,9 +44,9 @@
 
   <p>LangGraph 的一切从 <strong>State</strong> 开始。State 是一个在所有节点之间共享的数据结构——类似于多人协作的"共享白板"，每个节点都可以读取和修改。</p>
 
-  <div class="callout callout-key">
-    <strong>核心概念：</strong>State 用 Python 的 <code>TypedDict</code> 定义。每个节点函数接收整个 State，返回一个只包含要更新字段的字典，LangGraph 自动将其合并到 State 中。
-  </div>
+  <blockquote>
+<p><strong>核心概念：</strong>State 用 Python 的 <code>TypedDict</code> 定义。每个节点函数接收整个 State，返回一个只包含要更新字段的字典，LangGraph 自动将其合并到 State 中。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header">
@@ -75,9 +75,9 @@
     <tr><td><code>field: int</code></td><td>节点返回的 int <strong>覆盖</strong>原值</td><td>计数器、状态标志</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>实用技巧：</strong>消息历史字段（messages）几乎总是用 <code>Annotated[list, add]</code>，这样每个节点只需返回新消息，而不是复制整个历史列表。
-  </div>
+  <blockquote>
+<p><strong>实用技巧：</strong>消息历史字段（messages）几乎总是用 <code>Annotated[list, add]</code>，这样每个节点只需返回新消息，而不是复制整个历史列表。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 3: Node ==================== -->
@@ -86,9 +86,9 @@
 
   <p>Node 是执行实际工作的函数。每个 Node 接收当前 State，执行逻辑，返回一个字典来更新 State 的部分字段。</p>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>如果 State 是白板，Node 就是走到白板前的<strong>工人</strong>。工人读取白板上的内容，做自己的工作，然后把结果写回白板。关键是：每个工人只更新自己负责的字段，不会擦掉别人写的东西。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>如果 State 是白板，Node 就是走到白板前的<strong>工人</strong>。工人读取白板上的内容，做自己的工作，然后把结果写回白板。关键是：每个工人只更新自己负责的字段，不会擦掉别人写的东西。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header">
@@ -123,9 +123,9 @@ llm = <span class="cls">ChatAnthropic</span>(model=<span class="str">"claude-opu
     <span class="kw">return</span> {<span class="str">"mood"</span>: mood}</code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>常见错误：</strong>Node 函数的返回值必须是字典，只包含要更新的字段。不要返回完整的 State——LangGraph 会自动合并。
-  </div>
+  <blockquote>
+<p><strong>常见错误：</strong>Node 函数的返回值必须是字典，只包含要更新的字段。不要返回完整的 State——LangGraph 会自动合并。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 4: Edge 与 Conditional Edge ==================== -->
@@ -186,12 +186,12 @@ graph.<span class="fn">add_conditional_edges</span>(
 )</code></pre>
   </div>
 
-  <div class="callout callout-key">
-    <strong>条件边的三个参数：</strong>
+  <blockquote>
+<p><strong>条件边的三个参数：</strong>
     <br>1. <strong>源节点</strong>（str）：从哪个节点出发
     <br>2. <strong>路由函数</strong>（callable）：接收 State，返回一个字符串 key
-    <br>3. <strong>映射字典</strong>（dict）：key -> 目标节点名的映射
-  </div>
+    <br>3. <strong>映射字典</strong>（dict）：key -> 目标节点名的映射</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 5: START 和 END ==================== -->
@@ -206,9 +206,9 @@ graph.<span class="fn">add_conditional_edges</span>(
     <tr><td><code>END</code></td><td><code>from langgraph.graph import END</code></td><td>图的终止点</td><td><code>add_edge("last_node", END)</code></td></tr>
   </table>
 
-  <div class="callout callout-warn">
-    <strong>弃用警告：</strong>旧版 API <code>set_entry_point()</code> 和 <code>set_finish_point()</code> 已弃用。请统一使用 <code>add_edge(START, "node")</code> 和 <code>add_edge("node", END)</code>。
-  </div>
+  <blockquote>
+<p><strong>弃用警告：</strong>旧版 API <code>set_entry_point()</code> 和 <code>set_finish_point()</code> 已弃用。请统一使用 <code>add_edge(START, "node")</code> 和 <code>add_edge("node", END)</code>。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 6: compile 和 invoke ==================== -->
@@ -347,9 +347,9 @@ result = app.<span class="fn">invoke</span>({
 <span class="fn">print</span>(result[<span class="str">"messages"</span>][<span class="num">-1</span>].content)</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>运行流程：</strong>用户输入 -> detect_mood（判断情绪）-> 条件路由 -> 对应的回复节点 -> END。整个过程自动完成，无需手动干预。
-  </div>
+  <blockquote>
+<p><strong>运行流程：</strong>用户输入 -> detect_mood（判断情绪）-> 条件路由 -> 对应的回复节点 -> END。整个过程自动完成，无需手动干预。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 8: API 速查 ==================== -->

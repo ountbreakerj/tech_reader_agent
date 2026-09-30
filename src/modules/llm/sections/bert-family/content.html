@@ -29,9 +29,9 @@
       <li><strong>10%</strong>保持不变</li>
     </ul>
     <p>模型的目标是根据上下文预测被处理的原始token。</p>
-    <div class="callout callout-tip">
-    <p>80/10/10策略的精妙之处：如果总是用[MASK]替换，模型在微调时永远不会看到[MASK]标记，导致预训练与微调之间存在分布差异（mismatch）。混入随机token和保持原token可以缓解这个问题。</p>
-  </div>
+    <blockquote>
+<p>80/10/10策略的精妙之处：如果总是用[MASK]替换，模型在微调时永远不会看到[MASK]标记，导致预训练与微调之间存在分布差异（mismatch）。混入随机token和保持原token可以缓解这个问题。</p>
+</blockquote>
     <h3>1.3 预训练任务二：下一句预测（NSP）</h3>
     <p>NSP任务训练模型判断两个句子是否为连续关系：</p>
     <ul>
@@ -70,9 +70,9 @@ print(encoding["attention_mask"]) # 1 1 1 ... 0 0 0 ... (区分真实/pad)</code
       <li><strong>因式分解嵌入参数化（Factorized Embedding Parameterization）</strong>：将大的词嵌入矩阵分解为两个小矩阵（V×H → V×E + E×H），参数量从 O(V×H) 降至 O(V×E + E×H)</li>
       <li><strong>跨层参数共享（Cross-layer Parameter Sharing）</strong>：所有Transformer层共享同一组参数，12层仅需存储1层的权重</li>
     </ul>
-    <div class="callout callout-info">
-    <p>ALBERT虽然参数量远小于BERT，但由于所有层共享参数，实际推理速度并没有成比例提升。它的价值更多体现在模型体积的压缩上，便于部署到资源受限的环境。</p>
-  </div>
+    <blockquote>
+<p>ALBERT虽然参数量远小于BERT，但由于所有层共享参数，实际推理速度并没有成比例提升。它的价值更多体现在模型体积的压缩上，便于部署到资源受限的环境。</p>
+</blockquote>
     <h3>2.2 RoBERTa —— 训练策略优化</h3>
     <p>RoBERTa（Robustly Optimized BERT Approach）由Facebook提出，核心改进在于训练方式：</p>
     <ul>
@@ -190,9 +190,9 @@ outputs = model(**inputs)
 print(outputs.logits.shape)  # torch.Size([1, 2])
 prediction = torch.argmax(outputs.logits, dim=-1)
 print(f"预测类别: {prediction.item()}")  # 0 或 1</code></pre>
-  </div><div class="callout callout-key">
-    <p><strong>选择建议：</strong>快速验证用 Pipeline；自定义流程用 AutoModel；需要精确控制模型结构或微调用具体模型类。实际项目中，大多数时候用第二层和第三层。</p>
-  </div>
+  </div><blockquote>
+<p><strong>选择建议：</strong>快速验证用 Pipeline；自定义流程用 AutoModel；需要精确控制模型结构或微调用具体模型类。实际项目中，大多数时候用第二层和第三层。</p>
+</blockquote>
   </div><div class="section" id="llm-bert-family-s4">
     <h2>预训练模型使用</h2>
     
@@ -293,9 +293,9 @@ with torch.no_grad():
 # 获取每个句子的[CLS]表示
 sentence_embeddings = outputs.last_hidden_state[:, 0, :]
 print(sentence_embeddings.shape)  # torch.Size([3, 768])</code></pre>
-  </div><div class="callout callout-tip">
-    <p><strong>padding=True（动态填充）</strong>优于 padding='max_length'。前者只填充到当前批次中最长序列的长度，后者则一律填充到设定的最大长度，浪费计算资源。</p>
-  </div>
+  </div><blockquote>
+<p><strong>padding=True（动态填充）</strong>优于 padding='max_length'。前者只填充到当前批次中最长序列的长度，后者则一律填充到设定的最大长度，浪费计算资源。</p>
+</blockquote>
   </div><div class="section" id="llm-bert-family-s5">
     <h2>BERT文本分类实战</h2>
     
@@ -405,11 +405,11 @@ def predict(text):
 
 print(predict("这个产品真的很棒！"))  # 正面
 print(predict("太糟糕了，再也不买了"))  # 负面</code></pre>
-  </div><div class="callout callout-info">
-    <p><strong>学习率2e-5</strong>是BERT微调的经典起始值。太大会破坏预训练权重（灾难性遗忘），太小则收敛过慢。通常在1e-5到5e-5之间尝试。</p>
-  </div><div class="callout callout-warn">
-    <p>训练时建议使用<strong>GPU</strong>。在Google Colab中选择GPU运行时，或本地配置CUDA。CPU上训练一个epoch可能需要数十分钟，而GPU仅需几秒到几分钟。</p>
-  </div>
+  </div><blockquote>
+<p><strong>学习率2e-5</strong>是BERT微调的经典起始值。太大会破坏预训练权重（灾难性遗忘），太小则收敛过慢。通常在1e-5到5e-5之间尝试。</p>
+</blockquote><blockquote>
+<p>训练时建议使用<strong>GPU</strong>。在Google Colab中选择GPU运行时，或本地配置CUDA。CPU上训练一个epoch可能需要数十分钟，而GPU仅需几秒到几分钟。</p>
+</blockquote>
   </div><div class="section" id="llm-bert-family-s6">
     <h2>现代预训练模型</h2>
     
@@ -449,8 +449,8 @@ print(predict("太糟糕了，再也不买了"))  # 负面</code></pre>
     <div class="compare">
     <div class="compare-card left"><h4>BERT系列（编码器）</h4><ul><li>双向注意力，同时看左右上下文</li><li>适合理解类任务（分类、NER、问答）</li><li>通过微调适配下游任务</li><li>参数量较小（百M~十亿级）</li><li>代表：BERT, RoBERTa, DeBERTa</li></ul></div>
     <div class="compare-card right"><h4>GPT系列（解码器）</h4><ul><li>单向注意力，只看左侧上下文</li><li>适合生成类任务（对话、写作、代码）</li><li>通过Prompt/In-Context Learning</li><li>参数量巨大（十亿~万亿级）</li><li>代表：GPT-4, Claude, LLaMA, Qwen</li></ul></div>
-  </div><div class="callout callout-key">
-    <p>当前的趋势是<strong>解码器架构主导</strong>。GPT系列的自回归生成范式被证明在足够大的规模下可以涌现出理解能力，而且天然支持多任务和人机交互。但BERT系列在需要精确理解的场景（如搜索、分类）中仍有重要价值。</p>
-  </div>
+  </div><blockquote>
+<p>当前的趋势是<strong>解码器架构主导</strong>。GPT系列的自回归生成范式被证明在足够大的规模下可以涌现出理解能力，而且天然支持多任务和人机交互。但BERT系列在需要精确理解的场景（如搜索、分类）中仍有重要价值。</p>
+</blockquote>
   </div>
 </div></section>

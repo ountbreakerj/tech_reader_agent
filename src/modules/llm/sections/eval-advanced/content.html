@@ -33,10 +33,10 @@
     <tr><td>LMArena</td><td>人类盲测对话排名（ELO 评分）</td><td>真实用户偏好，难以刷榜</td><td>Gemini 3.1 Pro 等头部模型位居前列</td></tr>
 </table>
 
-<div class="callout">
-    <strong>基准选择建议</strong>
-    评估一个模型的能力不能只看单一基准。建议从推理（GPQA）、数学（AIME）、代码（SWE-bench）、指令遵循（IFEval）、人类偏好（Arena ELO）五个维度综合评估。
-</div>
+<blockquote>
+<p><strong>基准选择建议</strong>
+    评估一个模型的能力不能只看单一基准。建议从推理（GPQA）、数学（AIME）、代码（SWE-bench）、指令遵循（IFEval）、人类偏好（Arena ELO）五个维度综合评估。</p>
+</blockquote>
 
 <!-- ==================== Section 2 ==================== -->
 <h2><span class="section-number">15.2</span> LLM-as-Judge 方法论</h2>
@@ -91,15 +91,15 @@ Output JSON: {"score": <1-10>, "reasoning": "..."}
 """</code></pre>
 
 <h3>位置偏差与自我偏好问题</h3>
-<div class="callout callout-warn">
-    <strong>LLM-as-Judge 的已知偏差</strong>
-    <ul style="margin-top:0.5rem;">
+<blockquote>
+<p><strong>LLM-as-Judge 的已知偏差</strong></p>
+<ul style="margin-top:0.5rem;">
         <li><strong>位置偏差（Position Bias）</strong>：Judge 倾向于给第一个（或最后一个）呈现的回复更高分。解决方案：交换顺序评估两次，取平均。</li>
         <li><strong>自我偏好（Self-Preference Bias）</strong>：GPT-4 倾向于给 GPT-4 的输出更高分。解决方案：使用不同的 judge 模型交叉验证。</li>
         <li><strong>长度偏差（Verbosity Bias）</strong>：更长的回复往往得到更高分，即使质量不更好。解决方案：使用长度控制指标（如 AlpacaEval LC-WR）。</li>
         <li><strong>格式偏差</strong>：使用 markdown、列表等格式的回复得到更高分。解决方案：在 judge prompt 中明确要求忽略格式。</li>
     </ul>
-</div>
+</blockquote>
 
 <h3>Judge Prompt 设计最佳实践</h3>
 <pre><code># 高质量 Judge Prompt 的设计原则
@@ -356,15 +356,15 @@ for metric, aggregate in result.items():
     <tr><td>IFEval</td><td>90.2%</td><td>91.5%</td><td><strong>93.8%</strong></td><td>92.0%</td></tr>
 </table>
 
-<div class="callout callout-success">
-    <strong>各模型优势领域</strong>
-    <ul style="margin-top:0.5rem;">
+<blockquote>
+<p><strong>各模型优势领域</strong></p>
+<ul style="margin-top:0.5rem;">
         <li><strong>DeepSeek V4-Pro</strong>：数学推理（AIME 92%）和编程竞赛（LiveCodeBench 93.5%）表现突出，开源模型之王</li>
         <li><strong>GPT-5.5</strong>：抽象推理（ARC-AGI-2 85%）大幅领先，通用推理能力均衡</li>
         <li><strong>Claude Opus 5</strong>：在科学推理（GPQA 93.6%）、软件工程（SWE-bench 未核实）和指令遵循（IFEval 93.8%）上领先</li>
         <li><strong>Fable 5</strong>：软件工程能力最强（SWE-bench / SWE-bench Pro 分数未核实），代码代理领域标杆</li>
     </ul>
-</div>
+</blockquote>
 
 <h3>分数解读注意事项</h3>
 <ul>
@@ -380,15 +380,15 @@ for metric, aggregate in result.items():
 <h3>训练数据泄露到测试集的问题</h3>
 <p>数据污染（Data Contamination）是 LLM 评估面临的最严重问题之一：模型的训练数据中可能包含了测试集的题目和答案，导致基准分数虚高。</p>
 
-<div class="callout callout-danger">
-    <strong>数据污染的典型场景</strong>
-    <ul style="margin-top:0.5rem;">
+<blockquote>
+<p><strong>数据污染的典型场景</strong></p>
+<ul style="margin-top:0.5rem;">
         <li>Common Crawl 爬取了包含 MMLU/GSM8K 题目的网页和论坛帖子</li>
         <li>GitHub 代码库中包含了 HumanEval 的解题代码</li>
         <li>数学竞赛网站（如 AoPS）上的题目被收录到训练数据</li>
         <li>论文预印本中包含基准测试结果，被模型"记忆"</li>
     </ul>
-</div>
+</blockquote>
 
 <h3>检测方法</h3>
 <pre><code># 数据污染检测的几种方法
@@ -577,35 +577,35 @@ def benchmark_efficiency(model, tokenizer, prompts, batch_sizes=[1, 8, 32]):
 <!-- ==================== Section 7 ==================== -->
 <h2><span class="section-number">15.7</span> 动手练习</h2>
 
-<div class="callout callout-warn">
-    <strong>练习 1：搭建完整评估管线</strong>
-    使用 lm-eval-harness 对一个开源模型（如 Llama 3 8B）在 MMLU、GSM8K、HellaSwag、ARC-Challenge 四个基准上进行评估。记录结果并与官方报告对比，分析差异可能的原因。
-</div>
+<blockquote>
+<p><strong>练习 1：搭建完整评估管线</strong>
+    使用 lm-eval-harness 对一个开源模型（如 Llama 3 8B）在 MMLU、GSM8K、HellaSwag、ARC-Challenge 四个基准上进行评估。记录结果并与官方报告对比，分析差异可能的原因。</p>
+</blockquote>
 
-<div class="callout callout-warn">
-    <strong>练习 2：实现 LLM-as-Judge</strong>
-    设计一个 Judge prompt，用 GPT-4 或 Claude 评估 20 个模型回复的质量（1-10 分）。分别进行：(1) 单一评分，(2) Pairwise 对比。分析两种方式的一致性，并检验是否存在位置偏差（交换顺序后结果是否变化）。
-</div>
+<blockquote>
+<p><strong>练习 2：实现 LLM-as-Judge</strong>
+    设计一个 Judge prompt，用 GPT-4 或 Claude 评估 20 个模型回复的质量（1-10 分）。分别进行：(1) 单一评分，(2) Pairwise 对比。分析两种方式的一致性，并检验是否存在位置偏差（交换顺序后结果是否变化）。</p>
+</blockquote>
 
-<div class="callout callout-warn">
-    <strong>练习 3：RAG 系统评估</strong>
-    搭建一个简单的 RAG 系统（如基于 LangChain），使用 RAGAS 评估其在不同检索策略（BM25 vs 向量检索 vs 混合检索）下的 faithfulness、answer_relevancy、context_precision 和 context_recall。绘制对比图表。
-</div>
+<blockquote>
+<p><strong>练习 3：RAG 系统评估</strong>
+    搭建一个简单的 RAG 系统（如基于 LangChain），使用 RAGAS 评估其在不同检索策略（BM25 vs 向量检索 vs 混合检索）下的 faithfulness、answer_relevancy、context_precision 和 context_recall。绘制对比图表。</p>
+</blockquote>
 
-<div class="callout callout-warn">
-    <strong>练习 4：数据污染检测</strong>
-    从 GSM8K 测试集中随机选取 50 道题，使用不同的 prompt 模板（原始格式、改写格式、翻译为中文）分别让模型作答。比较三种情况下的准确率——如果原始格式准确率显著高于改写格式，可能存在数据污染。
-</div>
+<blockquote>
+<p><strong>练习 4：数据污染检测</strong>
+    从 GSM8K 测试集中随机选取 50 道题，使用不同的 prompt 模板（原始格式、改写格式、翻译为中文）分别让模型作答。比较三种情况下的准确率——如果原始格式准确率显著高于改写格式，可能存在数据污染。</p>
+</blockquote>
 
-<div class="callout callout-warn">
-    <strong>练习 5：构建多维评估报告</strong>
-    选择 2 个开源模型（如 Llama 3 8B 和 Mistral 7B），从推理、数学、代码、指令遵循四个维度进行评估。生成一份包含雷达图、详细分数表格和优劣势分析的评估报告。
-</div>
+<blockquote>
+<p><strong>练习 5：构建多维评估报告</strong>
+    选择 2 个开源模型（如 Llama 3 8B 和 Mistral 7B），从推理、数学、代码、指令遵循四个维度进行评估。生成一份包含雷达图、详细分数表格和优劣势分析的评估报告。</p>
+</blockquote>
 
-<div class="callout callout-warn">
-    <strong>练习 6：自定义动态评估集</strong>
-    创建一个包含 30 道题目的动态评估集（10 道数学、10 道代码、10 道常识推理），确保题目是模型训练数据中不太可能出现的（如最近的新闻事件、新发布的编程库 API）。用这个评估集测试 3 个模型，分析结果。
-</div>
+<blockquote>
+<p><strong>练习 6：自定义动态评估集</strong>
+    创建一个包含 30 道题目的动态评估集（10 道数学、10 道代码、10 道常识推理），确保题目是模型训练数据中不太可能出现的（如最近的新闻事件、新发布的编程库 API）。用这个评估集测试 3 个模型，分析结果。</p>
+</blockquote>
 
 <p style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 0.9rem;">
     返回目录 | 上一章：现代LLM架构详解 | 下一章：RLHF与对齐

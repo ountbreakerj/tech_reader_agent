@@ -122,10 +122,10 @@ print(results)
 df = results.to_pandas()
 print(df[["question", "faithfulness", "answer_relevancy"]].to_string())</code></pre>
 
-<div class="callout">
-    <strong>提示</strong>
-    RAGAS需要配置LLM（默认OpenAI）来执行评估。可通过 <code>evaluate()</code> 的 <code>llm</code> 参数自定义评估用的大模型。
-</div>
+<blockquote>
+<p><strong>提示</strong>
+    RAGAS需要配置LLM（默认OpenAI）来执行评估。可通过 <code>evaluate()</code> 的 <code>llm</code> 参数自定义评估用的大模型。</p>
+</blockquote>
 
 <!-- ========== 3. 检索评估指标 ========== -->
 <h2>3. 检索评估指标</h2>
@@ -633,10 +633,10 @@ with open("rag_eval_report.json", "w", encoding="utf-8") as f:
 
 print("评估报告已保存到 rag_eval_report.json")</code></pre>
 
-<div class="callout callout-warn">
-    <strong>注意</strong>
-    评估测试集的质量直接决定评估结果的可信度。建议：至少50个测试样本覆盖主要场景；定期更新测试集防止过拟合；包含困难样本（edge cases）。
-</div>
+<blockquote>
+<p><strong>注意</strong>
+    评估测试集的质量直接决定评估结果的可信度。建议：至少50个测试样本覆盖主要场景；定期更新测试集防止过拟合；包含困难样本（edge cases）。</p>
+</blockquote>
 
 <!-- ========== 8. 动手练习 ========== -->
 <h2>8. 动手练习</h2>

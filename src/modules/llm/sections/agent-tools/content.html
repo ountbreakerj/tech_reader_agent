@@ -8,9 +8,9 @@
 <div class="section" id="llm-agent-tools-s1">
   <h2>create_agent（LangChain v1）</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>ReAct<sup class="tp-mark" data-tp="react" role="button" tabindex="0" title="查看技术点详情" aria-label="查看技术点详情">?</sup> 模式就像一个经验丰富的侦探——先<strong>推理</strong>（Reasoning）：“根据现有线索，我需要查看监控”，再<strong>行动</strong>（Acting）：调用“查看监控”工具，然后根据结果继续推理，直到破案。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>ReAct<sup class="tp-mark" data-tp="react" role="button" tabindex="0" title="查看技术点详情" aria-label="查看技术点详情">?</sup> 模式就像一个经验丰富的侦探——先<strong>推理</strong>（Reasoning）：“根据现有线索，我需要查看监控”，再<strong>行动</strong>（Acting）：调用“查看监控”工具，然后根据结果继续推理，直到破案。</p>
+</blockquote>
 
   <p>LangChain v1 提供了 <code>create_agent</code> 入口，它内部自动构建了一个包含"推理-行动-观察"循环的图。替代了 LangChain 中已弃用的 <code>AgentExecutor</code>。</p>
 
@@ -51,9 +51,9 @@ result = agent.<span class="fn">invoke</span>({
 <span class="fn">print</span>(result[<span class="str">"messages"</span>][<span class="num">-1</span>].content)</code></pre>
   </div>
 
-  <div class="callout callout-key">
-    <strong>底层原理：</strong><code>create_agent</code> 返回一个可运行的 Agent 图，内部由 LangGraph 状态机驱动，包含两个节点："agent"（调用 LLM 决定下一步）和 "tools"（执行工具调用），通过条件边实现"调用工具 -> 观察结果 -> 再次推理"的循环，直到 LLM 认为可以给出最终答案。
-  </div>
+  <blockquote>
+<p><strong>底层原理：</strong><code>create_agent</code> 返回一个可运行的 Agent 图，内部由 LangGraph 状态机驱动，包含两个节点："agent"（调用 LLM 决定下一步）和 "tools"（执行工具调用），通过条件边实现"调用工具 -> 观察结果 -> 再次推理"的循环，直到 LLM 认为可以给出最终答案。</p>
+</blockquote>
 
   <h3>Agent 执行流程</h3>
 
@@ -112,9 +112,9 @@ result = agent.<span class="fn">invoke</span>({
 <span class="fn">print</span>(search_database.args_schema.model_json_schema())</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>Docstring 很重要：</strong>LLM 通过 docstring 理解工具的用途。写清楚"这个工具做什么"、"每个参数的含义"，能显著提高 Agent 选择和使用工具的准确率。
-  </div>
+  <blockquote>
+<p><strong>Docstring 很重要：</strong>LLM 通过 docstring 理解工具的用途。写清楚"这个工具做什么"、"每个参数的含义"，能显著提高 Agent 选择和使用工具的准确率。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 3: StructuredTool ==================== -->
@@ -206,9 +206,9 @@ graph.<span class="fn">add_edge</span>(<span class="str">"tools"</span>, <span c
     <span class="kw">return</span> <span class="str">"end"</span></code></pre>
   </div>
 
-  <div class="callout callout-warn">
-    <strong>ToolNode 要求：</strong>工具列表中的每个工具必须有唯一的名称，且工具函数的参数类型必须是 JSON 可序列化的（str、int、float、bool、list、dict）。
-  </div>
+  <blockquote>
+<p><strong>ToolNode 要求：</strong>工具列表中的每个工具必须有唯一的名称，且工具函数的参数类型必须是 JSON 可序列化的（str、int、float、bool、list、dict）。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 5: 多工具编排 ==================== -->
@@ -262,9 +262,9 @@ agent = <span class="fn">create_agent</span>(
 
   <p>MCP 是 Anthropic 提出的开放协议，用于标准化 LLM 与外部工具/数据源的连接方式。LangGraph 支持直接将 MCP Server 提供的工具作为 Agent 工具使用。</p>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>MCP 就像是 USB 接口标准。以前每个设备（工具）都有自己独特的连接方式，有了 USB（MCP），任何设备都可以即插即用。MCP 让不同的工具服务器（文件系统、数据库、API）通过统一协议接入 Agent。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>MCP 就像是 USB 接口标准。以前每个设备（工具）都有自己独特的连接方式，有了 USB（MCP），任何设备都可以即插即用。MCP 让不同的工具服务器（文件系统、数据库、API）通过统一协议接入 Agent。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header">
@@ -302,9 +302,9 @@ agent = <span class="fn">create_agent</span>(
     })</code></pre>
   </div>
 
-  <div class="callout callout-info">
-    <strong>MCP 传输方式：</strong><code>stdio</code> 适用于本地进程（如 npx 启动的工具服务器）；<code>sse</code>（Server-Sent Events）适用于远程 HTTP 服务器。大多数 MCP 服务器同时支持两种方式。
-  </div>
+  <blockquote>
+<p><strong>MCP 传输方式：</strong><code>stdio</code> 适用于本地进程（如 npx 启动的工具服务器）；<code>sse</code>（Server-Sent Events）适用于远程 HTTP 服务器。大多数 MCP 服务器同时支持两种方式。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 7: 实战 ==================== -->
@@ -372,9 +372,9 @@ result = agent.<span class="fn">invoke</span>(
 )</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>生产建议：</strong>实际项目中，工具函数应包含完善的错误处理和超时控制。对于敏感操作（如发邮件、写数据库），建议配合 HITL（人机交互）机制，在执行前要求人工确认。
-  </div>
+  <blockquote>
+<p><strong>生产建议：</strong>实际项目中，工具函数应包含完善的错误处理和超时控制。对于敏感操作（如发邮件、写数据库），建议配合 HITL（人机交互）机制，在执行前要求人工确认。</p>
+</blockquote>
 </div>
 
 <div class="footer">

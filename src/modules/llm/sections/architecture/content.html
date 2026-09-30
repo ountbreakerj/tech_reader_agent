@@ -17,9 +17,9 @@
 <div class="section" id="llm-architecture-s1">
   <h2>从RNN到Transformer的演进</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>RNN就像是一个只能一个字一个字读文章的人——读到后面就忘了前面。Transformer则像一个能同时看到整篇文章所有内容的超人——能捕捉全文的所有关联。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>RNN就像是一个只能一个字一个字读文章的人——读到后面就忘了前面。Transformer则像一个能同时看到整篇文章所有内容的超人——能捕捉全文的所有关联。</p>
+</blockquote>
 
   <h3>RNN的问题</h3>
 
@@ -64,9 +64,9 @@
 
   <h3>Self-Attention机制</h3>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>Self-Attention就像是阅读理解——当你看到"它"这个字时，你需要回头看上下文，找出"它"指的是什么。Attention机制让模型能自动学习每个词应该关注哪些其他词。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>Self-Attention就像是阅读理解——当你看到"它"这个字时，你需要回头看上下文，找出"它"指的是什么。Attention机制让模型能自动学习每个词应该关注哪些其他词。</p>
+</blockquote>
 
   <h4>Q、K、V的计算</h4>
 
@@ -166,9 +166,9 @@
     <tr><td><strong>GPT-4</strong></td><td>未公开</td><td>MoE（传闻，未官方确认）</td><td>复杂推理</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>选型建议：</strong>学习阶段使用 <strong>Llama 3.1-8B</strong> 或 <strong>Qwen3-8B</strong>，生产环境根据具体需求选择。GPT-4的MoE架构从未被OpenAI官方确认，属于社区推测。
-  </div>
+  <blockquote>
+<p><strong>选型建议：</strong>学习阶段使用 <strong>Llama 3.1-8B</strong> 或 <strong>Qwen3-8B</strong>，生产环境根据具体需求选择。GPT-4的MoE架构从未被OpenAI官方确认，属于社区推测。</p>
+</blockquote>
 </div>
 
 <!-- ==================== SECTION 4 ==================== -->
@@ -187,9 +187,9 @@
     <tr><td><strong>Sliding Window</strong></td><td>Mistral (2023)</td><td>只关注局部窗口内的token，通过层数堆叠获得全局视野</td><td>Mistral, Mixtral</td></tr>
   </table>
 
-  <div class="callout callout-key">
-    <strong>Flash Attention是最重要的效率创新：</strong>几乎所有2023年后的LLM训练和推理框架都内置了Flash Attention。它不改变注意力的数学结果，只是通过优化GPU内存访问模式（tiling + recomputation），将训练速度提升2-4倍，同时精确计算注意力（非近似）。
-  </div>
+  <blockquote>
+<p><strong>Flash Attention是最重要的效率创新：</strong>几乎所有2023年后的LLM训练和推理框架都内置了Flash Attention。它不改变注意力的数学结果，只是通过优化GPU内存访问模式（tiling + recomputation），将训练速度提升2-4倍，同时精确计算注意力（非近似）。</p>
+</blockquote>
 
   <h3>GQA vs MHA vs MLA</h3>
 
@@ -227,9 +227,9 @@
     <tr><td><strong>Hybrid</strong></td><td>Jamba (Mamba+Transformer)</td><td>结合SSM和Transformer的优势</td><td>兼顾效率和性能</td><td>初步商用</td></tr>
   </table>
 
-  <div class="callout callout-info">
-    <strong>MoE（混合专家模型）详解：</strong>MoE是当前最重要的架构趋势。例如 <strong>Llama 4 Scout</strong> 总参数109B但每次推理只激活17B参数（16个专家），<strong>DeepSeek V4</strong> 总参数1.6T但只激活49B。这意味着模型拥有超大知识容量，同时推理成本只与小模型相当。
-  </div>
+  <blockquote>
+<p><strong>MoE（混合专家模型）详解：</strong>MoE是当前最重要的架构趋势。例如 <strong>Llama 4 Scout</strong> 总参数109B但每次推理只激活17B参数（16个专家），<strong>DeepSeek V4</strong> 总参数1.6T但只激活49B。这意味着模型拥有超大知识容量，同时推理成本只与小模型相当。</p>
+</blockquote>
 </div>
 
 

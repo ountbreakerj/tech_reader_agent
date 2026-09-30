@@ -72,9 +72,9 @@ print("TF-IDF矩阵形状:", tfidf_matrix.shape)</code></pre>
         <li>负样本：随机采样K个"假"的上下文词</li>
         <li>训练目标：区分正样本和负样本</li>
     </ul>
-    <div class="callout callout-key">
-    <p>Word2Vec的经典发现：<strong>vector("King") - vector("Man") + vector("Woman") ≈ vector("Queen")</strong>，说明词向量能捕捉语义关系！</p>
-  </div>
+    <blockquote>
+<p>Word2Vec的经典发现：<strong>vector("King") - vector("Man") + vector("Woman") ≈ vector("Queen")</strong>，说明词向量能捕捉语义关系！</p>
+</blockquote>
   </div><div class="section" id="llm-word-embedding-s3">
     <h2>词嵌入层（nn.Embedding）</h2>
     
@@ -194,8 +194,8 @@ if "NLP" in model.wv:
 # 词语类比
 # model.wv.most_similar(positive=["国王", "女人"], negative=["男人"])</code></pre>
   </div>
-    <div class="callout callout-tip">
-    <p>实际训练建议：1) 语料越大越好（百万句以上）；2) 使用jieba/HanLP分词后训练；3) 向量维度一般100-300；4) 可使用 <code>LineSentence</code> 流式加载大文件。</p>
-  </div>
+    <blockquote>
+<p>实际训练建议：1) 语料越大越好（百万句以上）；2) 使用jieba/HanLP分词后训练；3) 向量维度一般100-300；4) 可使用 <code>LineSentence</code> 流式加载大文件。</p>
+</blockquote>
   </div>
 </div></section>

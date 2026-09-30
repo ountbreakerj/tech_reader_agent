@@ -14,9 +14,9 @@
     <h3>注意力的突破</h3>
     <p>注意力机制让解码器在每一步都可以<strong>直接查看编码器的所有输出</strong>，并根据相关性加权求和：</p>
     <p><code>context = Σ(α_i · h_i)</code>，其中 α_i 是注意力权重</p>
-    <div class="callout callout-key">
-    <p>类比：传统Seq2Seq像把一本书压缩成一句话摘要；注意力机制像考试时可以随时翻书查阅。</p>
-  </div>
+    <blockquote>
+<p>类比：传统Seq2Seq像把一本书压缩成一句话摘要；注意力机制像考试时可以随时翻书查阅。</p>
+</blockquote>
   </div><div class="section" id="llm-attention-mechanism-s2">
     <h2>注意力机制分类</h2>
     
@@ -50,9 +50,9 @@
         <li><code>softmax</code>：将相似度转为概率分布（注意力权重）</li>
         <li><code>· V</code>：用注意力权重对值加权求和</li>
     </ul>
-    <div class="callout callout-tip">
-    <p>为什么除以 √d_k？当d_k很大时，点积的值会很大，softmax会趋向于one-hot分布，梯度几乎为零。缩放后梯度更平滑。</p>
-  </div>
+    <blockquote>
+<p>为什么除以 √d_k？当d_k很大时，点积的值会很大，softmax会趋向于one-hot分布，梯度几乎为零。缩放后梯度更平滑。</p>
+</blockquote>
   </div><div class="section" id="llm-attention-mechanism-s4">
     <h2>Self-Attention计算过程</h2>
     
@@ -78,9 +78,9 @@
     <div class="step-num">6</div>
     <div class="step-content"><strong>加权求和</strong><br>output = weights · V，每个token的输出是所有token的加权组合</div>
   </div>
-    <div class="callout callout-key">
-    <p><strong>核心洞察：</strong>Self-Attention让每个token都能"看到"序列中的所有其他token，并根据相关性决定关注程度。这就是为什么Transformer能捕捉长距离依赖。</p>
-  </div>
+    <blockquote>
+<p><strong>核心洞察：</strong>Self-Attention让每个token都能"看到"序列中的所有其他token，并根据相关性决定关注程度。这就是为什么Transformer能捕捉长距离依赖。</p>
+</blockquote>
   </div><div class="section" id="llm-attention-mechanism-s5">
     <h2>注意力可视化与实现</h2>
     

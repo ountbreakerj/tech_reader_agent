@@ -51,10 +51,9 @@
 └────────────┘    └──────────────┘    └──────────────┘    └────────────────┘
   简单检索拼接       质量优化管线        模块灵活编排          多Agent自主推理</div>
 
-<div class="callout callout-info">
-    <div class="callout-title">信息</div>
-    这四个阶段并非严格替代关系。在实际项目中，Advanced RAG 中的查询重写、重排序等技术仍然在 Agentic RAG 中广泛使用，它们是基础能力而非被抛弃的方案。
-</div>
+<blockquote>
+<p><strong>信息：</strong>这四个阶段并非严格替代关系。在实际项目中，Advanced RAG 中的查询重写、重排序等技术仍然在 Agentic RAG 中广泛使用，它们是基础能力而非被抛弃的方案。</p>
+</blockquote>
 
 <!-- ==================== 2. GraphRAG ==================== -->
 <h2>2. GraphRAG（微软）</h2>
@@ -160,10 +159,9 @@ search_engine = GlobalSearch(
 result = await search_engine.asearch("这个数据集的整体主题是什么？有哪些关键趋势？")
 print(result.response)</code></pre>
 
-<div class="callout callout-warn">
-    <div class="callout-title">警告</div>
-    GraphRAG 的索引过程对大型文档集可能非常耗时且昂贵。一个 10 万词的文档集索引可能需要数百次 LLM 调用。建议先在小规模数据上验证效果，再扩展到全量数据。
-</div>
+<blockquote>
+<p><strong>警告：</strong>GraphRAG 的索引过程对大型文档集可能非常耗时且昂贵。一个 10 万词的文档集索引可能需要数百次 LLM 调用。建议先在小规模数据上验证效果，再扩展到全量数据。</p>
+</blockquote>
 
 <!-- ==================== 3. Self-RAG ==================== -->
 <h2>3. Self-RAG（自我反思 RAG）</h2>
@@ -271,10 +269,9 @@ print(result.response)</code></pre>
     </tbody>
 </table>
 
-<div class="callout callout-key">
-    <div class="callout-title">关键理解</div>
-    Self-RAG 的本质是将"检索决策"和"质量评估"内置到 LLM 的生成过程中，而不是依赖外部的启发式规则。这要求模型经过专门的反思标记训练，或者在 Prompt 中显式引导模型进行结构化反思。
-</div>
+<blockquote>
+<p><strong>关键理解：</strong>Self-RAG 的本质是将"检索决策"和"质量评估"内置到 LLM 的生成过程中，而不是依赖外部的启发式规则。这要求模型经过专门的反思标记训练，或者在 Prompt 中显式引导模型进行结构化反思。</p>
+</blockquote>
 
 <!-- ==================== 4. CRAG ==================== -->
 <h2>4. CRAG（Corrective RAG，纠正式 RAG）</h2>
@@ -385,10 +382,9 @@ def crag_retrieval_pipeline(query: str, retriever, web_search_fn, llm):
     answer_prompt = f"基于以下信息回答用户问题。\n\n信息：{context}\n\n问题：{query}"
     return llm.generate(answer_prompt)</code></pre>
 
-<div class="callout callout-tip">
-    <div class="callout-title">提示</div>
-    在实际部署中，CRAG 的 Web 搜索回退机制是其最大差异化优势。建议将评估阈值设计得相对保守（宁可多搜索，也不要返回低质量结果），尤其是在知识准确性要求高的场景中。
-</div>
+<blockquote>
+<p><strong>提示：</strong>在实际部署中，CRAG 的 Web 搜索回退机制是其最大差异化优势。建议将评估阈值设计得相对保守（宁可多搜索，也不要返回低质量结果），尤其是在知识准确性要求高的场景中。</p>
+</blockquote>
 
 <!-- ==================== 5. Adaptive RAG ==================== -->
 <h2>5. Adaptive RAG（自适应 RAG）</h2>
@@ -494,10 +490,9 @@ def multi_step_rag(query: str, llm, retriever, max_steps=3):
     final_prompt = f"综合以下信息回答问题。\n\n{accumulated_context}\n\n问题：{query}"
     return llm.generate(final_prompt)</code></pre>
 
-<div class="callout callout-info">
-    <div class="callout-title">信息</div>
-    Adaptive RAG 的路由分类器可以用微调的小模型实现（如 fine-tuned BERT），推理延迟可以控制在毫秒级。也可以用 LLM + few-shot 的方式快速搭建原型，后续再替换为专用分类器。
-</div>
+<blockquote>
+<p><strong>信息：</strong>Adaptive RAG 的路由分类器可以用微调的小模型实现（如 fine-tuned BERT），推理延迟可以控制在毫秒级。也可以用 LLM + few-shot 的方式快速搭建原型，后续再替换为专用分类器。</p>
+</blockquote>
 
 <!-- ==================== 6. Agentic RAG ==================== -->
 <h2>6. Agentic RAG（基于 Agent 的 RAG）</h2>
@@ -677,10 +672,9 @@ app = graph.compile()
 result = app.invoke({"query": "GraphRAG 和 Self-RAG 的区别是什么？", "retrieved_docs": []})
 print(result["answer"])</code></pre>
 
-<div class="callout callout-tip">
-    <div class="callout-title">提示</div>
-    LangGraph 的状态图机制非常适合构建 Agentic RAG。关键是将每个 Agent 视为图中的一个节点，用条件边实现动态路由，用共享状态在 Agent 之间传递信息。这样既保持了灵活性，又便于调试和监控。
-</div>
+<blockquote>
+<p><strong>提示：</strong>LangGraph 的状态图机制非常适合构建 Agentic RAG。关键是将每个 Agent 视为图中的一个节点，用条件边实现动态路由，用共享状态在 Agent 之间传递信息。这样既保持了灵活性，又便于调试和监控。</p>
+</blockquote>
 
 <!-- ==================== 7. 如何选择 ==================== -->
 <h2>7. 如何选择 RAG 范式</h2>
@@ -729,10 +723,9 @@ print(result["answer"])</code></pre>
     </tbody>
 </table>
 
-<div class="callout callout-key">
-    <div class="callout-title">重要原则</div>
-    <strong>先从简单方案开始，按需升级。</strong> 大多数项目用 Advanced RAG（查询重写 + 重排序 + 压缩）就能取得不错的效果。只在确定需要全局理解、强幻觉控制或多源协作时，再引入更复杂的范式。过度工程化是 RAG 项目最常见的失败原因。
-</div>
+<blockquote>
+<p><strong>重要原则：</strong><strong>先从简单方案开始，按需升级。</strong> 大多数项目用 Advanced RAG（查询重写 + 重排序 + 压缩）就能取得不错的效果。只在确定需要全局理解、强幻觉控制或多源协作时，再引入更复杂的范式。过度工程化是 RAG 项目最常见的失败原因。</p>
+</blockquote>
 
 <!-- ==================== 8. 动手练习 ==================== -->
 <h2>8. 动手练习</h2>

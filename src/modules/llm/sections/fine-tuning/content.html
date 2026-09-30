@@ -7,9 +7,9 @@
 <div class="section" id="llm-fine-tuning-s1">
   <h2>Full Fine-Tuning</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>Full Fine-Tuning就像是把一本百科全书从头到尾重新读一遍——所有知识（参数）都更新。优点是效果好，缺点是需要很多时间和资源。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>Full Fine-Tuning就像是把一本百科全书从头到尾重新读一遍——所有知识（参数）都更新。优点是效果好，缺点是需要很多时间和资源。</p>
+</blockquote>
 
   <h3>优缺点对比</h3>
 
@@ -36,9 +36,9 @@
 <div class="section" id="llm-fine-tuning-s2">
   <h2>LoRA原理与实践</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>LoRA就像是在百科全书上贴便利贴——不重写整本书，只在关键页面贴上更新。这样既节省资源，又能达到不错的效果。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>LoRA就像是在百科全书上贴便利贴——不重写整本书，只在关键页面贴上更新。这样既节省资源，又能达到不错的效果。</p>
+</blockquote>
 
   <h3>LoRA核心思想</h3>
 
@@ -72,23 +72,23 @@ model.<span class="fn">print_trainable_parameters()</span>
 <span class="cmt"># 输出示例（Llama-3.1-8B、r=8、q/k/v/o）：trainable params ≈ 6,815,744 || all params ≈ 8.03B || trainable% ≈ 0.085%</span></code></pre>
   </div>
 
-  <div class="callout callout-key">
-    <strong>LoRA参数详解：</strong>
-    <ul>
+  <blockquote>
+<p><strong>LoRA参数详解：</strong></p>
+<ul>
       <li><strong>r（秩）</strong>：低秩矩阵的维度。r=8最常用，越大效果越好但显存占用越多</li>
       <li><strong>lora_alpha</strong>：缩放因子，通常设为r的2-4倍</li>
       <li><strong>target_modules</strong>：要适配的层。最佳实践是所有attention投影层 ["q_proj", "k_proj", "v_proj", "o_proj"]，也可加入MLP层 ["gate_proj", "up_proj", "down_proj"]</li>
       <li><strong>可训练参数量</strong>：通常只有总参数的0.1%-1%</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <div class="section" id="llm-fine-tuning-s3">
   <h2>QLoRA实战</h2>
 
-  <div class="callout callout-info">
-    <strong>什么是QLoRA：</strong>QLoRA = 4-bit量化 + LoRA。将模型量化到4-bit（大幅减少显存），然后用LoRA微调。这是在消费级GPU上微调大模型的最佳方案。
-  </div>
+  <blockquote>
+<p><strong>什么是QLoRA：</strong>QLoRA = 4-bit量化 + LoRA。将模型量化到4-bit（大幅减少显存），然后用LoRA微调。这是在消费级GPU上微调大模型的最佳方案。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header"><span class="code-lang">Python</span>
@@ -153,16 +153,16 @@ trainer = SFTTrainer(
 trainer.<span class="fn">train</span>()</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>QLoRA显存对比（以7B模型为例）：</strong>
-    <ul>
+  <blockquote>
+<p><strong>QLoRA显存对比（以7B模型为例）：</strong></p>
+<ul>
       <li><strong>Full Fine-Tuning（FP16）</strong>：约112GB（参数 + 梯度 + 优化器状态）</li>
       <li><strong>LoRA微调（FP16）</strong>：约28GB（冻结基座 + 可训练适配器 + 优化器）</li>
       <li><strong>QLoRA（4-bit量化）</strong>：约6-10GB（4-bit基座约3.5GB + 适配器 + 优化器）</li>
       <li>可训练参数量：约总参数的0.1%</li>
       <li>效果：可达Full Fine-tuning的95%以上</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <div class="section" id="llm-fine-tuning-s4">
@@ -210,9 +210,9 @@ template = <span class="str">"""Below is an instruction that describes a task. W
 <div class="section" id="llm-fine-tuning-s4b">
   <h2>LoRA变体（2025-2026前沿）</h2>
 
-  <div class="callout callout-info">
-    <strong>LoRA的演进：</strong>原始LoRA发布后，研究者提出了多种改进变体，分别解决了不同的局限性。以下是2025-2026年最值得关注的几种。
-  </div>
+  <blockquote>
+<p><strong>LoRA的演进：</strong>原始LoRA发布后，研究者提出了多种改进变体，分别解决了不同的局限性。以下是2025-2026年最值得关注的几种。</p>
+</blockquote>
 
   <table>
     <tr><th>方法</th><th>核心思想</th><th>优势</th></tr>
@@ -264,9 +264,9 @@ optimizer = GaLoreAdamW(
 <div class="section" id="llm-fine-tuning-s4c">
   <h2>对齐训练（Alignment Training）</h2>
 
-  <div class="callout callout-key">
-    <strong>为什么需要对齐训练：</strong>SFT（监督微调）教会模型"如何回答"，但对齐训练教会模型"什么样的回答是好的"。这是让模型变得安全、有用、无害的关键步骤。没有对齐的模型可能产生有害、偏见或不真实的内容。
-  </div>
+  <blockquote>
+<p><strong>为什么需要对齐训练：</strong>SFT（监督微调）教会模型"如何回答"，但对齐训练教会模型"什么样的回答是好的"。这是让模型变得安全、有用、无害的关键步骤。没有对齐的模型可能产生有害、偏见或不真实的内容。</p>
+</blockquote>
 
   <h3>对齐训练方法概览</h3>
 
@@ -396,23 +396,23 @@ trainer = GRPOTrainer(
 trainer.<span class="fn">train</span>()</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>选择建议：</strong>
-    <ul>
+  <blockquote>
+<p><strong>选择建议：</strong></p>
+<ul>
       <li><strong>入门推荐DPO</strong>：最简单，不需要训练奖励模型，TRL库直接支持</li>
       <li><strong>资源有限选ORPO</strong>：一步到位，不需要单独的SFT阶段</li>
       <li><strong>真实用户反馈选KTO</strong>：不需要配对数据，只需要好/坏标签</li>
       <li><strong>数学/代码任务选GRPO</strong>：DeepSeek-R1验证了其在推理任务上的强大效果</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <div class="section" id="llm-fine-tuning-s4d">
   <h2>Unsloth：高效训练工具</h2>
 
-  <div class="callout callout-info">
-    <strong>Unsloth：</strong>2025-2026年最受欢迎的LLM微调加速工具之一。通过手写Triton内核和优化计算图，实现2倍训练速度提升和70%显存节省，同时保持与HuggingFace生态完全兼容。
-  </div>
+  <blockquote>
+<p><strong>Unsloth：</strong>2025-2026年最受欢迎的LLM微调加速工具之一。通过手写Triton内核和优化计算图，实现2倍训练速度提升和70%显存节省，同时保持与HuggingFace生态完全兼容。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header"><span class="code-lang">Python</span>
@@ -464,32 +464,30 @@ trainer = SFTTrainer(
 trainer.<span class="fn">train</span>()</code></pre>
   </div>
 
-  <div class="callout callout-tip">
-    <strong>Unsloth优势：</strong>
-    <ul>
+  <blockquote>
+<p><strong>Unsloth优势：</strong></p>
+<ul>
       <li>训练速度：比标准HuggingFace快约2倍</li>
       <li>显存节省：约减少70%显存占用</li>
       <li>完全兼容：支持Llama、Mistral、Qwen、Gemma等主流模型</li>
       <li>免费开源：社区版免费，Pro版提供更多模型支持</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <div class="section" id="llm-fine-tuning-s5">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：QLoRA微调 + 对齐训练</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>完成从SFT到对齐训练的完整流程。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>完成从SFT到对齐训练的完整流程。</p>
       <p><strong>要求：</strong></p>
       <p>① 使用Unsloth + QLoRA微调一个7B模型</p>
       <p>② 准备偏好数据（至少50对chosen/rejected）</p>
       <p>③ 使用DPO进行对齐训练</p>
       <p>④ 对比SFT和DPO后模型的回答质量</p>
       <p>⑤ 保存最终模型</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 

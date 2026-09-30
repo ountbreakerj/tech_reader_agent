@@ -7,9 +7,9 @@
 <div class="section" id="llm-retrieval-s1">
   <h2>稀疏检索算法</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>稀疏检索就像是关键词搜索——你输入"机器学习入门"，系统查找包含这些关键词的文档。优点是精确匹配，缺点是无法理解语义。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>稀疏检索就像是关键词搜索——你输入"机器学习入门"，系统查找包含这些关键词的文档。优点是精确匹配，缺点是无法理解语义。</p>
+</blockquote>
 
   <h3>TF-IDF</h3>
 
@@ -76,21 +76,21 @@ top_idx = np.argmax(scores)
 
   <p>BM25是TF-IDF的改进版本，引入了文档长度归一化和词频饱和度控制：</p>
 
-  <div class="callout callout-info">
-    <strong>BM25公式：</strong><br>
+  <blockquote>
+<p><strong>BM25公式：</strong><br>
     <code>score(D, Q) = Σ IDF(qi) * [f(qi, D) * (k1 + 1)] / [f(qi, D) + k1 * (1 - b + b * |D| / avgdl)]</code><br><br>
     其中：<code>f(qi, D)</code> = 词qi在文档D中的词频，<code>|D|</code> = 文档长度，<code>avgdl</code> = 平均文档长度<br>
     <code>k1 = 1.2</code>（词频饱和参数），<code>b = 0.75</code>（文档长度归一化参数）<br>
-    <code>IDF(qi) = log((N - n(qi) + 0.5) / (n(qi) + 0.5) + 1)</code>，N为文档总数，n(qi)为包含qi的文档数
-  </div>
+    <code>IDF(qi) = log((N - n(qi) + 0.5) / (n(qi) + 0.5) + 1)</code>，N为文档总数，n(qi)为包含qi的文档数</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-retrieval-s2">
   <h2>稠密检索（Dense Retrieval）</h2>
 
-  <div class="callout callout-analogy">
-    <strong>类比：</strong>稠密检索就像是语义搜索——即使查询和文档没有相同的词，只要意思相近，也能找到。比如查"猫"能找到"小花喵喵叫"。
-  </div>
+  <blockquote>
+<p><strong>类比：</strong>稠密检索就像是语义搜索——即使查询和文档没有相同的词，只要意思相近，也能找到。比如查"猫"能找到"小花喵喵叫"。</p>
+</blockquote>
 
   <div class="code-block-wrapper">
     <div class="code-header"><span class="code-lang">Python</span></div>
@@ -129,19 +129,19 @@ top_idx = np.argmax(similarities)
     <tr><td><strong>DISKANN</strong></td><td>磁盘索引</td><td>中</td><td>高</td><td>极低</td><td>数据无法全部装入内存</td></tr>
   </table>
 
-  <div class="callout callout-info">
-    <strong>注意区分算法和库：</strong>FAISS（Meta）、Milvus、Annoy 是<strong>库</strong>，它们内部实现了上述多种算法。例如 FAISS 同时支持 IVF、HNSW、PQ 等多种索引类型。选择时应根据算法特性决定，而非仅看库名称。
-  </div>
+  <blockquote>
+<p><strong>注意区分算法和库：</strong>FAISS（Meta）、Milvus、Annoy 是<strong>库</strong>，它们内部实现了上述多种算法。例如 FAISS 同时支持 IVF、HNSW、PQ 等多种索引类型。选择时应根据算法特性决定，而非仅看库名称。</p>
+</blockquote>
 
-  <div class="callout callout-tip">
-    <strong>算法选择：</strong>
-    <ul>
+  <blockquote>
+<p><strong>算法选择：</strong></p>
+<ul>
       <li>数据量<1000万：HNSW（精度最高，推荐首选）</li>
       <li>数据量1000万-1亿：IVF + HNSW</li>
       <li>数据量>1亿、内存受限：IVF-PQ（量化压缩）</li>
       <li>数据量>10亿、无法装入内存：DISKANN（磁盘索引）</li>
     </ul>
-  </div>
+</blockquote>
 </div>
 
 <div class="section" id="llm-retrieval-s3-1">
@@ -153,9 +153,9 @@ top_idx = np.argmax(similarities)
 
   <p>SPLADE（Sparse Lexical and Expansion）是代表性模型，通过掩码语言模型（MLM）的权重来学习词项重要性，并自动扩展相关词汇。例如查询"机器学习"时，SPLADE可能自动扩展出"深度学习"、"神经网络"等相关词项。</p>
 
-  <div class="callout callout-tip">
-    <strong>实践推荐：</strong>BGE-M3模型原生支持sparse retrieval，一个模型同时产出dense、sparse和ColBERT三种表征，是目前多语言场景下的最佳选择。SPLADE在英文benchmark上表现优异，但中文支持较弱。
-  </div>
+  <blockquote>
+<p><strong>实践推荐：</strong>BGE-M3模型原生支持sparse retrieval，一个模型同时产出dense、sparse和ColBERT三种表征，是目前多语言场景下的最佳选择。SPLADE在英文benchmark上表现优异，但中文支持较弱。</p>
+</blockquote>
 
   <table>
     <tr><th>特性</th><th>BM25</th><th>SPLADE</th><th>BGE-M3 Sparse</th></tr>
@@ -175,11 +175,11 @@ top_idx = np.argmax(similarities)
 
   <p>与传统单向量模型将整个文档压缩为一个向量不同，ColBERT为文档中的每个token生成独立的上下文向量。检索时使用MaxSim评分：</p>
 
-  <div class="callout callout-info">
-    <strong>MaxSim公式：</strong><br>
+  <blockquote>
+<p><strong>MaxSim公式：</strong><br>
     <code>Score(Q, D) = Σ_i max_j cosine_similarity(E_qi, E_dj)</code><br><br>
-    对查询中的每个token，找到文档中与其最相似的token（取最大余弦相似度），然后将所有查询token的最大相似度求和。这样既保留了token级别的语义细节，又能高效计算。
-  </div>
+    对查询中的每个token，找到文档中与其最相似的token（取最大余弦相似度），然后将所有查询token的最大相似度求和。这样既保留了token级别的语义细节，又能高效计算。</p>
+</blockquote>
 
   <table>
     <tr><th>版本</th><th>特点</th><th>存储方式</th></tr>
@@ -187,26 +187,24 @@ top_idx = np.argmax(similarities)
     <tr><td><strong>ColBERT v2</strong></td><td>残差压缩，精度损失极小</td><td>残差压缩，存储效率高</td></tr>
   </table>
 
-  <div class="callout callout-tip">
-    <strong>ColBERT的双重角色：</strong>ColBERT既可作为第一阶段检索器（直接在token向量上做ANN检索），也可作为重排序器（对初筛结果精细打分）。BGE-M3模型的ColBERT表征可用于这两个阶段，实现端到端的高质量检索。
-  </div>
+  <blockquote>
+<p><strong>ColBERT的双重角色：</strong>ColBERT既可作为第一阶段检索器（直接在token向量上做ANN检索），也可作为重排序器（对初筛结果精细打分）。BGE-M3模型的ColBERT表征可用于这两个阶段，实现端到端的高质量检索。</p>
+</blockquote>
 </div>
 
 <div class="section" id="llm-retrieval-s4">
   <h2>动手练习</h2>
 
-  <div class="callout callout-practice">
-    <div class="practice-header">✏️ 练习1：对比稀疏和稠密检索</div>
-    <div class="practice-body">
-      <p><strong>目标：</strong>对比TF-IDF/BM25和稠密检索的效果。</p>
+  <blockquote>
+<p><strong>✏️ 动手练习</strong></p>
+<p><strong>目标：</strong>对比TF-IDF/BM25和稠密检索的效果。</p>
       <p><strong>要求：</strong></p>
       <p>① 准备20个中文文档</p>
       <p>② 实现TF-IDF检索</p>
       <p>③ 实现BM25检索</p>
       <p>④ 实现稠密检索（BGE模型）</p>
       <p>⑤ 对比三种方法在10个查询上的表现</p>
-    </div>
-  </div>
+</blockquote>
 </div>
 
 

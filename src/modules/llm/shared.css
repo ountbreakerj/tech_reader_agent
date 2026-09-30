@@ -57,3 +57,7 @@
 /* 灯箱可点提示：fig-img 由 app.js collectMedia 收集 */
 .llm-scope .fig-img{cursor:zoom-in;}
 .llm-scope .happy-gallery-item img{cursor:zoom-in;}
+/* 书页化：callout 已重写为 blockquote（沿用深入理解 Agent 章节引用块形态；同时覆盖 happy 系原生 blockquote） */
+.llm-scope blockquote{margin:1.25rem 0;padding:14px 20px;background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--accent-2);border-radius:10px;}
+.llm-scope blockquote p{margin:.6em 0;}
+.llm-scope blockquote ul,.llm-scope blockquote ol{margin:.4em 0;padding-left:1.5rem;}

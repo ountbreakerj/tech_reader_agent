@@ -317,10 +317,10 @@ async function streamRAG(question: string): Promise&lt;void&gt; {
     }
 }</code></pre>
 
-<div class="callout">
-    <strong>SSE vs WebSocket</strong>
-    RAG场景推荐SSE而非WebSocket。SSE是单向服务端推送，实现更简单、天然支持重连、浏览器原生支持。RAG的流式输出恰好是单向的。
-</div>
+<blockquote>
+<p><strong>SSE vs WebSocket</strong>
+    RAG场景推荐SSE而非WebSocket。SSE是单向服务端推送，实现更简单、天然支持重连、浏览器原生支持。RAG的流式输出恰好是单向的。</p>
+</blockquote>
 
 <!-- ========== 4. 监控与告警 ========== -->
 <h2>4. 监控与告警</h2>
@@ -526,10 +526,10 @@ def count_tokens(text: str) -> int:
                 prompt=build_rag_prompt(question, contexts),
             )</code></pre>
 
-<div class="callout callout-success">
-    <strong>成本优化效果参考</strong>
-    通过组合以上策略，实际生产中通常可以节省40%-60%的LLM调用成本，同时保持回答质量基本不变。
-</div>
+<blockquote>
+<p><strong>成本优化效果参考</strong>
+    通过组合以上策略，实际生产中通常可以节省40%-60%的LLM调用成本，同时保持回答质量基本不变。</p>
+</blockquote>
 
 <!-- ========== 6. 安全与合规 ========== -->
 <h2>6. 安全与合规</h2>
@@ -854,15 +854,15 @@ rb.snapshot("2025-06-01", {
     "metadata": {"stable": True},
 })</code></pre>
 
-<div class="callout callout-warn">
-    <strong>回滚注意事项</strong>
-    <ul>
+<blockquote>
+<p><strong>回滚注意事项</strong></p>
+<ul>
         <li>回滚Embedding模型需要保留旧的向量索引至少7天</li>
         <li>Prompt回滚要同步更新评估基线</li>
         <li>建议每次变更都创建带时间戳的配置快照</li>
         <li>生产环境变更窗口建议选在低峰期</li>
     </ul>
-</div>
+</blockquote>
 
 <!-- ========== 8. 动手练习 ========== -->
 <h2>8. 动手练习</h2>
