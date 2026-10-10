@@ -1,0 +1,256 @@
+<section class="chapter" id="ch-hx-00" data-slug="hx-00"><div class="ch-head"><span class="ch-num">导读</span></div><h1 id="hx-00">全景图：Harness 由哪些部件组成</h1>
+<p>这一章不写新机制，只做三件事：讲清楚 harness 的边界在哪里，把后面 25 章对应的部件摆成一张图，再告诉你五个参考仓库分别该怎么用。读完你应该能回答：一段代码算不算 harness；某个线上问题该去哪一章找；想看某个机制的生产级写法该打开哪个文件。</p>
+
+<h2 id="hx-00-s1">Harness 是什么、不是什么</h2>
+<p>模型只做一件事：读一段上下文，产出一段 token。这段 token 里可能有自然语言，也可能有结构化的“我想调用某个工具、参数如下”。<strong>其余所有事都是 harness 做的</strong>：决定模型看到什么，把模型的调用请求变成真实动作（或者拒绝），把结果送回去，决定什么时候停，并在过程中记账、留痕、兜底。</p>
+<p>这个定义可以在最小实现里直接看到。learn-claude-code 第一章的整个 harness 只有一个函数 <code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:96" data-expect="def agent_loop(messages: list):">code.py:96</code>：调用模型、把回复追加进历史、检查有没有工具调用，没有就返回 <code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:110" data-expect="if not tool_calls:">code.py:110</code>，有就执行并把结果追加回去。三个可运行的仓库骨架完全一样：OpenHarness 是 <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:700" data-expect="while context.max_turns is None or turn_count">query.py:700</code> 的 <code class="inl">while</code> 加上 <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:808" data-expect="if not final_message.tool_uses:">query.py:808</code> 的“没有工具调用就结束”；DeepSeek Harness 是 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:549-550" data-expect="const toolCalls = message.content.filter">agent.ts:549</code> 的同一判断。三者的差别全在骨架周围。</p>
+
+<h3 id="hx-00-s1-1">走一遍：“修复这个失败的测试”</h3>
+<p>用户在一个 Python 仓库里输入“修复这个失败的测试”。下表按时间顺序列出一次典型运行里发生的事，“谁做”一栏只有两种取值。</p>
+<div class="table-wrap"><table><thead><tr><th>#</th><th>谁做</th><th>发生了什么</th><th>相关章节</th></tr></thead><tbody>
+<tr><td>1</td><td>harness</td><td>拼请求：系统提示、仓库里的 <code class="inl">AGENTS.md</code>、工具 schema、历史消息。顺序和内容要稳定，否则 prompt cache 失效</td><td>hx-02、hx-06、hx-10</td></tr>
+<tr><td>2</td><td>harness</td><td>估算这次请求的 token 数，离窗口上限太近就先压缩</td><td>hx-05、hx-07</td></tr>
+<tr><td>3</td><td>模型</td><td>决定先跑测试，输出一个 <code class="inl">tool_use</code>：<code class="inl">run_tests {"path": "tests/"}</code></td><td>—</td></tr>
+<tr><td>4</td><td>harness</td><td>解析 <code class="inl">tool_use</code>，按 schema 校验参数，按名字找到实现</td><td>hx-02、hx-03</td></tr>
+<tr><td>5</td><td>harness</td><td>权限判定：这条命令拆开后每一段是否只读？在不在工作区里？需不需要问人</td><td>hx-13、hx-14、hx-16</td></tr>
+<tr><td>6</td><td>harness</td><td>在沙箱里执行，挂上超时；进程卡住就杀掉并把“超时”作为错误结果交回</td><td>hx-15、hx-19</td></tr>
+<tr><td>7</td><td>harness</td><td>输出太长：全文落盘，只把预览和文件路径放进上下文</td><td>hx-08</td></tr>
+<tr><td>8</td><td>harness</td><td>把这一步写进会话日志，把 <code class="inl">tool_result</code> 追加进历史</td><td>hx-04</td></tr>
+<tr><td>9</td><td>模型</td><td>读失败信息，请求读取被测函数所在的源文件</td><td>—</td></tr>
+<tr><td>10</td><td>模型</td><td>给出补丁，请求 <code class="inl">edit_file</code></td><td>—</td></tr>
+<tr><td>11</td><td>harness</td><td>写操作走审批或按规则自动放行；文件内容里如果夹带“忽略之前的指令”之类的文字，按不可信数据处理</td><td>hx-16、hx-17</td></tr>
+<tr><td>12</td><td>harness</td><td>模型 API 返回 429：有界重试、退避；持续失败则停下并把原因写清楚</td><td>hx-18、hx-20</td></tr>
+<tr><td>13</td><td>模型</td><td>再跑一次测试，通过后输出总结，不再调用工具</td><td>—</td></tr>
+<tr><td>14</td><td>harness</td><td>判定停止（没有工具调用、或撞到轮数上限、或输出被截断），触发 Stop hook，汇总 token 和费用</td><td>hx-01、hx-21、hx-24</td></tr>
+</tbody></table></div>
+<p>表里模型只出现了 4 次，而且每次都只是“提议”。真正产生副作用、决定安全与成本的步骤全在 harness 一侧。这也是本模块的组织原则：每一章讲一个部件，部件对应上表中的一类动作。</p>
+
+<h3 id="hx-00-s1-2">它不是什么</h3>
+<ul>
+<li><strong>不是 prompt 模板。</strong>learn-harness-engineering 第二讲开篇就说 <code class="inl src-ref" data-src="lhe:docs/zh/lectures/lecture-02-what-a-harness-actually-is/index.md:8" data-expect="一个 prompt 文件不是 harness。">index.md:8</code>。提示词是 harness 的一个输出，harness 还要负责执行、状态和边界。</li>
+<li><strong>不是模型的一部分。</strong>DeepSeek Harness 的架构文档写明模型适配器、工具注册表、会话日志乃至 agent loop 本身都是可替换的插件 <code class="inl src-ref" data-src="dsh:docs/architecture.md:9" data-expect="Every part of the product is a plugin">architecture.md:9</code>。换模型不必换 harness；反过来，同一个模型套不同的 harness，表现可以差很多。</li>
+<li><strong>不是某个框架。</strong>151 行的 <code class="inl">s01_agent_loop/code.py</code> 是 harness，一万多个文件的 DSH 也是 harness。区别在覆盖了多少部件、每个部件做得多深。</li>
+<li><strong>不是工作流编排。</strong>工作流里下一步由代码决定；agent harness 里下一步由模型决定，harness 负责划边界、兜底和记账。</li>
+</ul>
+<blockquote><p><strong>判断标准</strong>：一段代码如果影响“模型看到什么”或“模型的请求如何落地”，它就属于 harness。按这个标准，指令文件的加载、工具输出的截断、重试策略、审批弹窗都属于 harness，模型权重和推理服务不属于。</p></blockquote>
+
+<h2 id="hx-00-s2">部件地图</h2>
+<p>下表把本模块 26 章对应的部件排成一张图。“不做会怎样”一列写的是真实会遇到的故障，不是理论风险。“主要对照源码”给入口目录或文件，具体行号在各章正文里。</p>
+<div class="table-wrap"><table><thead><tr><th>章</th><th>部件</th><th>解决的问题</th><th>不做会怎样</th><th>主要对照源码</th></tr></thead><tbody>
+<tr><td>hx-00</td><td>全景图</td><td>知道有哪些部件、谁依赖谁</td><td>功能按需堆砌，边界越来越模糊</td><td>lhe <code class="inl">docs/zh/lectures/lecture-02-…</code>；dsh <code class="inl">docs/architecture.md</code></td></tr>
+<tr><td>hx-01</td><td>Agent Loop 与停止条件</td><td>采样、执行、回填的循环；何时停、停时历史是否完整</td><td>死循环烧钱；中途停下时留下没有配对结果的 <code class="inl">tool_use</code>，下一次请求直接被拒</td><td>dsh <code class="inl">packages/core/agent-loop</code>；oh <code class="inl">engine/query.py</code>；lcc <code class="inl">s01_agent_loop</code></td></tr>
+<tr><td>hx-02</td><td>工具定义与注册</td><td>把能力以 schema 暴露给模型，按名字分派</td><td>模型编造参数；同名工具互相覆盖</td><td>dsh <code class="inl">packages/core/tools</code>；oh <code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:51" data-expect="def to_api_schema(self)">base.py:51</code>；lcc <code class="inl">s02_tool_use</code></td></tr>
+<tr><td>hx-03</td><td>执行管线与并发</td><td>校验、权限、执行、后处理的顺序；哪些调用可以并行</td><td>两个并行写操作改同一文件；一个工具抛异常连带整批结果丢失</td><td>dsh <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:60" data-expect="export async function executeToolCalls(">tool-calls.ts:60</code>；oh <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:853" data-expect="raw_results = await asyncio.gather(">query.py:853</code></td></tr>
+<tr><td>hx-04</td><td>会话日志与回放</td><td>每次模型请求都能从日志重建；崩溃后恢复；确定性回放测试</td><td>线上问题无法复现；恢复后丢状态</td><td>dsh <code class="inl">packages/session</code>、<code class="inl">packages/test-support/llm-replay</code>；oh <code class="inl">services/session_storage.py</code></td></tr>
+<tr><td>hx-05</td><td>Token 预算与计数</td><td>知道离窗口上限还有多远</td><td>直到请求因 prompt 过长被拒才发现</td><td>dsh <code class="inl">packages/llm/token-meter</code>；oh <code class="inl">services/token_estimation.py</code>；amt <code class="inl">utils/helpers.py</code></td></tr>
+<tr><td>hx-06</td><td>Prompt cache 稳定性</td><td>让请求前缀逐字节稳定，命中缓存</td><td>每轮都按全价重算整段历史，成本和延迟成倍上升</td><td>dsh <code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:36" data-expect="cache_read_input_tokens: 'cacheReadTokens'">translate.ts:36</code>（缓存 token 计量）</td></tr>
+<tr><td>hx-07</td><td>上下文压缩</td><td>接近上限时摘要或清理旧内容</td><td>长任务中途失败，或压缩后忘了目标</td><td>dsh <code class="inl">packages/compaction</code>；oh <code class="inl">services/compact/__init__.py</code>；lcc <code class="inl">s08_context_compact</code></td></tr>
+<tr><td>hx-08</td><td>工具输出卸载</td><td>大输出落盘，上下文里只留预览和定位符</td><td>一次 <code class="inl">cat</code> 吃掉大半个窗口</td><td>dsh <code class="inl">packages/spill</code>；oh <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:524" data-expect="def _offload_tool_output_if_needed(">query.py:524</code></td></tr>
+<tr><td>hx-09</td><td>短期与工作记忆</td><td>当前任务的目标、计划、进度</td><td>压缩之后不知道自己做到哪一步</td><td>dsh <code class="inl">packages/todo</code>、<code class="inl">packages/goal</code>；oh <code class="inl">services/session_memory</code>；lcc <code class="inl">s05_todo_write</code>；amt <code class="inl">12_working_memory_context_window</code></td></tr>
+<tr><td>hx-10</td><td>长期记忆存储与指令文件</td><td>跨会话保存事实和项目规则（<code class="inl">AGENTS.md</code> / <code class="inl">CLAUDE.md</code>）</td><td>每个新会话重新踩同样的坑</td><td>dsh <code class="inl">packages/context/agent-instructions</code>；oh <code class="inl">memory/</code>、<code class="inl">prompts/claudemd.py</code>；lcc <code class="inl">s09_memory</code></td></tr>
+<tr><td>hx-11</td><td>检索与注入</td><td>什么时候取、取哪些、放进上下文的哪个位置</td><td>注入无关记忆污染上下文，或注入位置破坏缓存前缀</td><td>oh <code class="inl">memory/relevance.py</code>、<code class="inl">memory/search.py</code>；amt <code class="inl">20_memory_retrieval_patterns</code></td></tr>
+<tr><td>hx-12</td><td>过期、衰减与替代</td><td>旧事实降权，或被更正后的事实替代</td><td>过时的接口地址和它的更正以同样权重被检索出来</td><td>amt <code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:215" data-expect="class DecayEngine:">forgetting_and_decay.ipynb:215</code>、<code class="inl">18_temporal_memory</code></td></tr>
+<tr><td>hx-13</td><td>权限规则引擎</td><td>对每次调用给出允许、拒绝或询问</td><td>要么处处弹窗，要么放任破坏性命令</td><td>dsh <code class="inl">packages/interaction/permission-presets</code>；oh <code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:75" data-expect="def evaluate(">checker.py:75</code>；lcc <code class="inl">s03_permission</code></td></tr>
+<tr><td>hx-14</td><td>Shell 命令解析</td><td>把命令串拆成可以逐段判定的单元</td><td><code class="inl">ls; rm -rf ~</code> 被当成 <code class="inl">ls</code> 放行</td><td>lcc <code class="inl src-ref" data-src="lcc:s03_permission/code.py:166" data-expect="DESTRUCTIVE_COMMAND_WORD = re.compile(">code.py:166</code>；dsh <code class="inl">packages/shell</code>（执行接缝）</td></tr>
+<tr><td>hx-15</td><td>沙箱</td><td>限制进程能碰到的文件和网络</td><td>权限判断一旦被绕过就没有第二道防线</td><td>dsh <code class="inl">packages/sandbox</code>；oh <code class="inl">sandbox/docker_backend.py</code></td></tr>
+<tr><td>hx-16</td><td>审批与升档</td><td>需要人确认时怎么问，批准的范围多大</td><td>审批疲劳导致无脑点“允许”，或一次批准覆盖范围过宽</td><td>dsh <code class="inl">packages/interaction/user-approval</code>；lcc <code class="inl src-ref" data-src="lcc:s03_permission/code.py:193" data-expect="def ask_user(tool_name: str, args: dict, reason: str)">code.py:193</code></td></tr>
+<tr><td>hx-17</td><td>Prompt 注入威胁模型</td><td>工具输出、网页、文件内容里的指令一律当数据</td><td>一段网页文字让 agent 读取并外传凭据</td><td>oh <code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:84" data-expect="# Built-in sensitive path protection">checker.py:84</code>（内置敏感路径保护）</td></tr>
+<tr><td>hx-18</td><td>重试与退避</td><td>429、5xx、网络错误的有界重试</td><td>一次抖动就整轮失败，或无限重试放大故障</td><td>dsh <code class="inl">packages/llm/llm-retry</code>；oh <code class="inl src-ref" data-src="oh:src/openharness/api/client.py:32" data-expect="MAX_RETRIES = 3">client.py:32</code></td></tr>
+<tr><td>hx-19</td><td>超时</td><td>工具和模型调用的时间上限</td><td>一个挂起的命令卡死整个会话</td><td>dsh <code class="inl">packages/guard/timeout-policy</code>、<code class="inl">packages/util/timeout</code>；oh <code class="inl src-ref" data-src="oh:src/openharness/tools/bash_tool.py:24" data-expect="timeout_seconds: int = Field(default=600, ge=1, le=600)">bash_tool.py:24</code></td></tr>
+<tr><td>hx-20</td><td>熔断与降级</td><td>持续失败时停止尝试、切换备用路径</td><td>多个 agent 同时对一个故障的服务重试，越试越糟</td><td>dsh 设计笔记把熔断明确列为不做 <code class="inl src-ref" data-src="dsh:.agents/notes/implemented/architecture/2026-06-21-bounded-llm-request-recovery.md:94" data-expect="Circuit breakers, shared provider health, or cross-agent retry budgets.">recovery.md:94</code>；本章以 labs 自实现为主</td></tr>
+<tr><td>hx-21</td><td>Hooks</td><td>在生命周期节点挂外部逻辑</td><td>每加一个定制都要改核心代码</td><td>dsh <code class="inl">packages/experimental/hook-protocol</code>；oh <code class="inl">hooks/executor.py</code>；lcc <code class="inl">s04_hooks</code></td></tr>
+<tr><td>hx-22</td><td>Skills 与 MCP</td><td>按需加载能力说明；接入外部工具服务器</td><td>系统提示越写越长；每接一个外部工具都另写一套适配</td><td>dsh <code class="inl">packages/skill</code>、<code class="inl">packages/mcp</code>；oh <code class="inl">skills/loader.py</code>、<code class="inl">mcp/client.py</code>；lcc <code class="inl">s07_skill_loading</code>、<code class="inl">s14_mcp_plugin</code></td></tr>
+<tr><td>hx-23</td><td>子代理与 PTC</td><td>把子任务交给独立上下文；让模型写程序批量调用工具（programmatic tool calling）</td><td>主上下文被探索性的读文件塞满</td><td>dsh <code class="inl">packages/subagent</code>、<code class="inl">packages/ptc-runtime</code>；oh <code class="inl">tools/agent_tool.py</code>；lcc <code class="inl">s06_subagent</code></td></tr>
+<tr><td>hx-24</td><td>可观测性与成本</td><td>每轮的 token、耗时、费用和调用链</td><td>账单出来才知道哪个循环失控</td><td>dsh <code class="inl">packages/telemetry/otel</code>、<code class="inl">packages/llm/token-meter</code>；oh <code class="inl">engine/cost_tracker.py</code></td></tr>
+<tr><td>hx-25</td><td>组装 mini-harness 与长任务连续性</td><td>把前面的部件接成一个能跑的 harness；跨会话接力</td><td>部件各自能跑，合起来互相打架；换会话后从头摸索</td><td>lcc <code class="inl">s15_integrated_harness</code>；lhe <code class="inl src-ref" data-src="lhe:docs/zh/lectures/lecture-05-why-long-running-tasks-lose-continuity/index.md:58" data-expect="**压缩 vs 重置**">lecture-05 index.md:58</code></td></tr>
+</tbody></table></div>
+<p>部件之间有明确的依赖方向。hx-01 是骨架，其余部件都挂在它的某个时刻上：hx-02 到 hx-04 让骨架可扩展、可复现；hx-05 到 hx-12 管上下文窗口里外的信息；hx-13 到 hx-17 管动作的边界；hx-18 到 hx-20 管失败；hx-21 到 hx-24 管扩展与观测；hx-25 把它们装到一起。建议按这个顺序读，跳读时至少先读 hx-01 和 hx-04。</p>
+<blockquote><p><strong>读表提示</strong>：仓库简称见下一节。某个仓库没有出现在某一行，表示写作时没有在它里面确认到对应实现，不等于它一定没有。</p></blockquote>
+
+<h2 id="hx-00-s3">五个仓库各自擅长什么</h2>
+<p>本模块所有源码引用都钉在固定 commit 上，见写作约定。规模数字是在这些 commit 上用 <code class="inl">git ls-files</code> 实际统计的，只算受版本控制的文件。</p>
+<div class="table-wrap"><table><thead><tr><th>简称</th><th>仓库</th><th>语言与规模</th><th>定位</th><th>拿它来学什么</th><th>别拿它做什么</th></tr></thead><tbody>
+<tr><td>dsh</td><td>DeepSeek Harness</td><td>TypeScript monorepo；14,988 个文件，其中 <code class="inl">.ts</code> 4,876、<code class="inl">.tsx</code> 631；<code class="inl">packages/</code> 下 52 个领域目录、331 个包目录</td><td>生产级、全插件化的运行时</td><td>部件之间的接缝怎么切；失败和中断时历史怎么保持一致</td><td>入门：抽象层次多，直接读目录树容易迷路</td></tr>
+<tr><td>oh</td><td>OpenHarness</td><td>Python；480 个文件，其中 <code class="inl">.py</code> 381；<code class="inl">src/openharness</code> 下 229 个 <code class="inl">.py</code>、约 4.6 万行；<code class="inl">tests/</code> 121 个</td><td>覆盖面很广的单体 Python 实现</td><td>同一机制的 Python 写法；可以直接对照 labs</td><td>当作“标准答案”：不少地方选了最简单的处理，各章会指出</td></tr>
+<tr><td>lcc</td><td>learn-claude-code</td><td>Python 教程；416 个文件，其中 <code class="inl">.py</code> 56；17 章目录 <code class="inl">s01_agent_loop</code> 到 <code class="inl">s17_goal_loop</code>，各章 <code class="inl">code.py</code> 合计 12,924 行</td><td>逐章叠加机制的教程</td><td>每个机制的最小形态；相邻两章的 diff 就是那个机制</td><td>直接上生产：安全检查是示意级别的</td></tr>
+<tr><td>amt</td><td>Agent_Memory_Techniques</td><td>Jupyter；173 个文件，其中 <code class="inl">.ipynb</code> 30（<code class="inl">all_techniques/01</code> 到 <code class="inl">30</code>）、<code class="inl">.py</code> 7</td><td>记忆技术图鉴</td><td>hx-09 到 hx-12 的算法：衰减、显著性打分、检索模式</td><td>学 harness 结构：它没有 agent loop、权限这些部件</td></tr>
+<tr><td>lhe</td><td>learn-harness-engineering</td><td>Markdown 课程为主；2,750 个文件，其中 <code class="inl">.md</code> 1,731；<code class="inl">docs/</code> 下 15 种语言；中文 14 讲、8 个项目文档；<code class="inl">projects/</code> 下 project-01 到 06 有 starter 与 solution</td><td>方法论课程</td><td>指令文件、进度文件、验证命令这些“仓库侧”的 harness</td><td>抄代码：讲义里的代码是示意</td></tr>
+</tbody></table></div>
+
+<h3 id="hx-00-s3-1">dsh：先读 step()，再往外跟</h3>
+<p>DSH 的核心原则写在架构文档里：<code class="inl src-ref" data-src="dsh:docs/architecture.md:124" data-expect="Model-visible means logged.">architecture.md:124</code>，即每一次模型请求都必须能从日志重建。后面讲会话日志（hx-04）和回放测试时会反复用到这条。最值得读的三个文件：</p>
+<ol>
+<li><strong><code class="inl">packages/core/agent-loop/src/agent.ts</code></strong>。<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:400" data-expect="private async step(">agent.ts:400</code> 的 <code class="inl">step()</code> 是一次模型调用加工具分派的全过程。请求失败时交给 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:511" data-expect="const action = await this.dispatch.waterfall(">agent.ts:511</code> 的扩展点决定是否重试；输出被截断时直接结束这一步 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:547" data-expect="if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }">agent.ts:547</code>，这个判断排在工具调用检查之前；没有工具调用就算完成 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:550" data-expect="if (toolCalls.length === 0) return { kind: 'completed' }">agent.ts:550</code>。</li>
+<li><strong><code class="inl">packages/core/agent-loop/src/tool-calls.ts</code></strong>。文件头注释说明了调度模型：独占调用形成屏障，可并行的调用进有界滚动池 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:2" data-expect="Exclusive calls form barriers">tool-calls.ts:2</code>；被中断时给没执行的调用补上合成的错误结果，保证回放仍然合法 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:8" data-expect="Abort records synthetic error results for skipped calls so replay stays">tool-calls.ts:8</code>。分组逻辑只有一行 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:90" data-expect="const group = mode === 'parallel' ? planned.slice(next) : [first]">tool-calls.ts:90</code>。</li>
+<li><strong><code class="inl">packages/llm/llm-deepseek/src/translate.ts</code></strong>。厂商的 <code class="inl">stop_reason</code> 在这里翻译成内部的 <code class="inl">FinishReason</code> <code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:90" data-expect="function stopReason(raw: unknown): FinishReason {">translate.ts:90</code>，不认识的值直接按畸形响应报错 <code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:95" data-expect="default: return malformed(">translate.ts:95</code>。注意 DSH 是通过 DeepSeek 的 Anthropic 兼容端点接入的 <code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/config.ts:106" data-expect="export const PUBLIC_BASE_URL = 'https://api.deepseek.com/anthropic'">config.ts:106</code>，所以它要翻译的是 Anthropic 风格的取值。</li>
+</ol>
+
+<h3 id="hx-00-s3-2">oh：一个函数看完整个运行时</h3>
+<p>OpenHarness 的不少模块直接标明是照着 Claude Code 翻译的，例如压缩模块 <code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:3" data-expect="Faithfully translated from Claude Code">compact/__init__.py:3</code>。它的价值是“同一机制的 Python 写法”。最值得读的三个文件：</p>
+<ol>
+<li><strong><code class="inl">src/openharness/engine/query.py</code></strong>。<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:633" data-expect="async def run_query(">query.py:633</code> 的 <code class="inl">run_query</code> 一个函数串起了大半部件：每轮调用模型之前先检查是否需要自动压缩 <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:712" data-expect="async for event, usage in _stream_compaction(trigger=">query.py:712</code>；请求因 prompt 过长被拒时做一次反应式压缩再重试 <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:768" data-expect="if not reactive_compact_attempted and _is_prompt_too_long_error(exc):">query.py:768</code>；只有一个工具调用时顺序执行 <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:821" data-expect="if len(tool_calls) == 1:">query.py:821</code>，多个时用 <code class="inl">gather(return_exceptions=True)</code> 并发，注释解释了原因：一个工具失败不能让其他调用变成没有结果的 <code class="inl">tool_use</code> <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:849" data-expect="# Use return_exceptions=True so a single failing tool does not abandon">query.py:849</code>；轮数用完抛 <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:883" data-expect="raise MaxTurnsExceeded(context.max_turns)">query.py:883</code>。</li>
+<li><strong><code class="inl">src/openharness/permissions/checker.py</code></strong>。<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:75" data-expect="def evaluate(">checker.py:75</code> 的 <code class="inl">evaluate</code> 值得逐行读，因为规则的<strong>顺序</strong>就是策略：内置敏感路径保护排第一，任何模式都不能覆盖；然后是工具黑白名单、路径规则、命令黑名单；全自动模式 <code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:129" data-expect="if self._settings.mode == PermissionMode.FULL_AUTO:">checker.py:129</code> 排在这些之后，所以全自动也越不过黑名单；再往后才是只读放行 <code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:133" data-expect="if is_read_only:">checker.py:133</code>。</li>
+<li><strong><code class="inl">src/openharness/api/openai_client.py</code></strong>。<code class="inl src-ref" data-src="oh:src/openharness/api/openai_client.py:81" data-expect="def _convert_messages_to_openai(">openai_client.py:81</code> 把 Anthropic 风格的历史转成 OpenAI 格式，工具结果拆成一条条 <code class="inl">role=tool</code> 消息 <code class="inl src-ref" data-src="oh:src/openharness/api/openai_client.py:108" data-expect="# Each tool result becomes a separate message with role=">openai_client.py:108</code>。和 labs 的 <code class="inl">OpenAICompatLLM</code> 做的是同一件事，对照读能看出两处不同的取舍，见 <a href="#hx-00-s5-3">坑 3</a> 和 <a href="#hx-00-s5-4">坑 4</a>。</li>
+</ol>
+
+<h3 id="hx-00-s3-3">lcc：每章一个机制</h3>
+<p>learn-claude-code 的章节目录从 <code class="inl">s01_agent_loop</code> 到 <code class="inl">s17_goal_loop</code>，每章一个 <code class="inl">code.py</code>，从 151 行（s01）长到 3,326 行（<code class="inl">s15_integrated_harness</code>）。它依赖 Anthropic 官方 SDK，模型名从环境变量读 <code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:54" data-expect="MODEL = os.environ[">code.py:54</code>。最值得读的三个文件：</p>
+<ol>
+<li><strong><code class="inl">s01_agent_loop/code.py</code></strong>：整个 harness 的最小形态，见 <a href="#hx-00-s1">本章第一节</a>。注意它写死了 <code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:100" data-expect="tools=TOOLS, max_tokens=8000,">code.py:100</code>，而且完全不看 <code class="inl">stop_reason</code>，被截断的回复也会走“没有工具调用就结束”的路径。</li>
+<li><strong><code class="inl">s03_permission/code.py</code></strong>：<code class="inl src-ref" data-src="lcc:s03_permission/code.py:201" data-expect="def check_permission(block)">code.py:201</code> 把权限拆成三道闸：子串黑名单 <code class="inl src-ref" data-src="lcc:s03_permission/code.py:156" data-expect="DENY_LIST = [">code.py:156</code>、按工具匹配的规则 <code class="inl src-ref" data-src="lcc:s03_permission/code.py:175" data-expect="PERMISSION_RULES = [">code.py:175</code>、询问用户。三道闸的分工就是 hx-13 到 hx-16 的雏形。</li>
+<li><strong><code class="inl">s08_context_compact/code.py</code></strong>：<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:254" data-expect="class ContextCompactor:">code.py:254</code> 的阈值都按字符计 <code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:255" data-expect="CONTEXT_CHAR_LIMIT = 50000">code.py:255</code>，估算方式是把消息 JSON 序列化后取长度 <code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:269" data-expect="def estimate_chars(messages: list)">code.py:269</code>。hx-05 会讨论字符估算和真实 token 数之间的偏差。</li>
+</ol>
+<p>另外推荐 <code class="inl">tests/test_agent_loop_boundaries.py</code>：它用一个假的 Messages API 驱动各章的循环 <code class="inl src-ref" data-src="lcc:tests/test_agent_loop_boundaries.py:37" data-expect="class FakeMessagesApi:">test_agent_loop_boundaries.py:37</code>，和 labs 的 <code class="inl">FakeLLM</code> 是同一思路。</p>
+
+<h3 id="hx-00-s3-4">amt：记忆算法的参考书</h3>
+<p>30 个 notebook 各自独立，从对话缓冲、滑动窗口一直讲到 Mem0、Letta、Zep 的模式。它不是 harness，没有循环和权限，本模块只在 hx-09 到 hx-12 借用它的算法。直接运行需要 OpenAI key，例如 <code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:142" data-expect="Set OPENAI_API_KEY in your .env file">forgetting_and_decay.ipynb:142</code>，所以本模块会把用到的算法改写成标准库版本放进 labs。最值得读的三个文件：</p>
+<ol>
+<li><strong><code class="inl">all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb</code></strong>：<code class="inl">DecayEngine</code> 用半衰期参数化指数衰减 <code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:220" data-expect="self.decay_rate = math.log(2) / half_life_hours">forgetting_and_decay.ipynb:220</code>，检索命中时再加强。hx-12 的起点。</li>
+<li><strong><code class="inl">all_techniques/12_working_memory_context_window/working_memory_context_window.ipynb</code></strong>：<code class="inl src-ref" data-src="amt:all_techniques/12_working_memory_context_window/working_memory_context_window.ipynb:267" data-expect="class SalienceScorer:">working_memory_context_window.ipynb:267</code> 把相关性、新近度、来源重要性加权成一个分数，决定谁留在窗口里。hx-09 会拿它和“按时间丢最旧的”做对比。</li>
+<li><strong><code class="inl">utils/helpers.py</code></strong>：<code class="inl src-ref" data-src="amt:utils/helpers.py:119" data-expect="def count_tokens(text: str">helpers.py:119</code> 用 tiktoken 计数，模型不认识时退回 <code class="inl">cl100k_base</code> <code class="inl src-ref" data-src="amt:utils/helpers.py:122" data-expect="Falls back to the ``cl100k_base`` encoding">helpers.py:122</code>，并声称对 Claude 这类其他厂商的模型也“足够用于预算” <code class="inl src-ref" data-src="amt:utils/helpers.py:123" data-expect="The fallback is close enough for budgeting">helpers.py:123</code>。这个假设在 hx-05 里会被拿出来检验。</li>
+</ol>
+
+<h3 id="hx-00-s3-5">lhe：仓库侧的 harness</h3>
+<p>learn-harness-engineering 讲的是另一半 harness：放在仓库里、给 agent 读的那些东西。它把 harness 归纳为五个子系统 <code class="inl src-ref" data-src="lhe:docs/zh/lectures/lecture-02-what-a-harness-actually-is/index.md:91" data-expect="Harness = 指令 + 工具 + 环境 + 状态 + 反馈">index.md:91</code>。这个划分站在“使用 agent 的人”的角度，本模块的 26 个部件站在“写 harness 的人”的角度，两者可以对照。最值得读的三个文件：</p>
+<ol>
+<li><strong><code class="inl">docs/zh/lectures/lecture-02-what-a-harness-actually-is/index.md</code></strong>：五子系统模型 <code class="inl src-ref" data-src="lhe:docs/zh/lectures/lecture-02-what-a-harness-actually-is/index.md:38" data-expect="## Harness 五子系统模型">index.md:38</code>，以及用控制变量法衡量每个子系统贡献的思路。</li>
+<li><strong><code class="inl">docs/zh/lectures/lecture-05-why-long-running-tasks-lose-continuity/index.md</code></strong>：压缩与重置两种续命方式的区别 <code class="inl src-ref" data-src="lhe:docs/zh/lectures/lecture-05-why-long-running-tasks-lose-continuity/index.md:58" data-expect="**压缩 vs 重置**">index.md:58</code>，以及用进度文件、决策记录做跨会话交接。hx-25 会把它落成代码。讲义自己也提醒，里面的数字阈值是教学默认值 <code class="inl src-ref" data-src="lhe:docs/zh/lectures/lecture-05-why-long-running-tasks-lose-continuity/index.md:8" data-expect="这里的数字阈值是可调整的教学默认值">index.md:8</code>。</li>
+<li><strong><code class="inl">docs/zh/lectures/lecture-02-what-a-harness-actually-is/code/minimal-harness-loop.ts</code></strong>：拿来当反例读。<code class="inl src-ref" data-src="lhe:docs/zh/lectures/lecture-02-what-a-harness-actually-is/code/minimal-harness-loop.ts:19" data-expect="export function minimalHarness(messages: Message[]) {">minimal-harness-loop.ts:19</code> 名为“最小 harness”，但下一步动作是写死的 <code class="inl src-ref" data-src="lhe:docs/zh/lectures/lecture-02-what-a-harness-actually-is/code/minimal-harness-loop.ts:20" data-expect="const nextAction = {">minimal-harness-loop.ts:20</code>，根本没有调用模型。它只演示形状，不能当实现参考。</li>
+</ol>
+
+<h3 id="hx-00-s3-6">同一机制，四种做法：停止判定</h3>
+<p>“模型这一轮说完了没有、要不要执行工具”是每个 harness 最先写的判断，也最能看出各仓库的取向：</p>
+<div class="table-wrap"><table><thead><tr><th>仓库</th><th>怎么判定</th><th>代价</th><th>适用场景</th></tr></thead><tbody>
+<tr><td>dsh</td><td>适配器把厂商取值翻译成内部 <code class="inl">FinishReason</code> <code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:156" data-expect="export interface FinishReasonMap {">types.ts:156</code>，未知值报错；截断时组装器丢掉工具调用块 <code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:137" data-expect="const kept = this.finish.kind === 'max-tokens'">assembler.ts:137</code>；循环先判截断再判工具调用</td><td>每接一个厂商都要写完整的翻译；厂商新增取值时先报错，要改代码才能继续</td><td>多厂商、要求历史始终合法的生产系统</td></tr>
+<tr><td>oh</td><td>循环只看有没有 <code class="inl">tool_uses</code>，不读 <code class="inl">stop_reason</code></td><td>分不清“正常结束”和“被截断”；截断回复按完成处理</td><td>快速接入多家兼容服务，先跑起来</td></tr>
+<tr><td>lcc</td><td>同样只看 <code class="inl">tool_use</code> 块，并用测试固定“块和 <code class="inl">stop_reason</code> 冲突时以块为准” <code class="inl src-ref" data-src="lcc:tests/test_agent_loop_boundaries.py:244" data-expect="def test_parent_loop_executes_a_real_tool_call_even_if_stop_reason_disagrees(">test_agent_loop_boundaries.py:244</code></td><td>同 oh；好处是行为被测试钉住，不会悄悄变</td><td>教学、单厂商原型</td></tr>
+<tr><td>labs</td><td>适配器把取值统一成 Anthropic 词汇，带工具调用却报 <code class="inl">stop</code> 时纠正为 <code class="inl">tool_use</code>，未知值原样透出；判定交给 hx-01 的循环</td><td>循环必须处理它不认识的取值</td><td>本模块：既要看清每个取值，又不想因厂商新增取值而崩溃</td></tr>
+</tbody></table></div>
+
+<h2 id="hx-00-s4">本模块怎么读、labs 怎么跑</h2>
+<p>每章的结构固定：先讲机制在源码里的哪一行、为什么这样写，再给出 labs 里对应的 Python 实现（正文代码块与 <code class="inl">labs/</code> 文件逐字一致，由工具核对），然后列坑，最后用一张表对比各仓库的做法。</p>
+
+<h3 id="hx-00-s4-1">为什么默认是 FakeLLM</h3>
+<p>labs 的所有测试和示例默认用 <code class="inl">FakeLLM</code>，不连任何真实模型。理由有三条：</p>
+<ul>
+<li><strong>可复现。</strong>同一个脚本每次跑出同样的轨迹。真实模型在同样输入下可能换一种工具调用顺序，测试就成了抽奖。</li>
+<li><strong>零成本。</strong>harness 的大部分 bug 和模型能力无关，没必要花 token 去复现。</li>
+<li><strong>能精确构造失败场景。</strong>“第三轮输出被截断在工具参数中间”“模型调用了不存在的工具”“拒答”这些分支，用真实模型几乎碰不到，用脚本一行就能写出来。脚本项既可以是固定的 <code class="inl">AssistantTurn</code>，也可以是函数，根据当时的历史决定回复。</li>
+</ul>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/llm.py::FakeLLM"><span class="kw">class</span> <span class="cls">FakeLLM</span><span class="op">:</span>
+    <span class="str">"""按脚本顺序回放回复的假模型：测试可复现、零成本，能精确构造失败场景。"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, script<span class="op">:</span> list[<span class="cls">ScriptItem</span>]) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self._script <span class="op">=</span> list(script)
+        self.calls<span class="op">:</span> list[<span class="cls">Messages</span>] <span class="op">=</span> []
+
+    <span class="kw">def</span> <span class="fn">complete</span>(self, system<span class="op">:</span> str, messages<span class="op">:</span> <span class="cls">Messages</span>, tools<span class="op">:</span> list[dict[str, <span class="cls">Any</span>]]) <span class="op">-&gt;</span> <span class="cls">AssistantTurn</span><span class="op">:</span>
+        <span class="cmt"># 存深拷贝：循环随后还会往 messages 里追加，断言要看的是模型“当时”看到的历史</span>
+        snapshot <span class="op">=</span> copy.deepcopy(messages)
+        self.calls.append(snapshot)
+        step <span class="op">=</span> len(self.calls)
+        <span class="kw">if</span> step <span class="op">&gt;</span> len(self._script)<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ScriptExhausted</span>(<span class="str">f"脚本只有 {len(self._script)} 步，第 {step} 次调用没有可回放的回复"</span>)
+        item <span class="op">=</span> self._script[step <span class="op">-</span> <span class="num">1</span>]
+        <span class="kw">return</span> item(snapshot) <span class="kw">if</span> callable(item) <span class="kw">else</span> item</code></pre></div>
+<p>两个细节。第一，<code class="inl">calls</code> 存的是深拷贝：循环会继续往同一个 <code class="inl">messages</code> 列表里追加，如果只存引用，事后断言看到的是最终历史，而不是模型当时看到的历史。第二，脚本用完时抛 <code class="inl">ScriptExhausted</code> 而不是返回空回复：循环多调了一次模型本身就是 bug，应该让测试失败。lcc 的假 API 也是这么做的，多要一轮就 <code class="inl src-ref" data-src="lcc:tests/test_agent_loop_boundaries.py:45" data-expect="raise AssertionError(">test_agent_loop_boundaries.py:45</code>。</p>
+<p>DSH 走得更远：它的回放插件从真实会话日志里推导出逐次调用的回放脚本 <code class="inl src-ref" data-src="dsh:packages/test-support/llm-replay/src/index.ts:462" data-expect="export function deriveReplayScript(events: SessionEvent[]): ReplayEntry[] {">index.ts:462</code>，前提正是“模型可见即入日志”。hx-04 会在 labs 里实现同样的“把真实失败轨迹存成 FakeLLM 脚本”。</p>
+
+<h3 id="hx-00-s4-2">三种模型怎么切换</h3>
+<p><code class="inl">harness.llm.from_env()</code> 读环境变量 <code class="inl">HARNESS_LLM</code>：</p>
+<div class="table-wrap"><table><thead><tr><th>取值</th><th>适配器</th><th>需要的环境变量</th><th>默认模型</th><th>说明</th></tr></thead><tbody>
+<tr><td><code class="inl">fake</code>（默认）</td><td><code class="inl">FakeLLM</code></td><td>无</td><td>无</td><td>只回一句提示：设置 <code class="inl">HARNESS_LLM</code> 以接入真实模型</td></tr>
+<tr><td><code class="inl">anthropic</code></td><td><code class="inl">AnthropicLLM</code></td><td><code class="inl">ANTHROPIC_API_KEY</code></td><td><code class="inl">claude-opus-5-5</code></td><td>用 <code class="inl">urllib</code> 直接调 <code class="inl">POST /v1/messages</code>，非流式，<code class="inl">max_tokens</code> 默认 16000</td></tr>
+<tr><td><code class="inl">deepseek</code></td><td><code class="inl">OpenAICompatLLM</code></td><td><code class="inl">DEEPSEEK_API_KEY</code></td><td><code class="inl">deepseek-chat</code></td><td>调 <code class="inl">{base_url}/chat/completions</code>，<code class="inl">base_url</code> 默认 <code class="inl">https://api.deepseek.com</code></td></tr>
+</tbody></table></div>
+<p><code class="inl">HARNESS_MODEL</code> 可以覆盖默认模型名。缺 key 时抛 <code class="inl">MissingAPIKey</code>，报错里写明该设置哪个变量；HTTP 错误抛 <code class="inl">LLMHTTPError</code>，带状态码和完整响应体，因为 429 该退避、400 该修请求，这个判断要留给上层（hx-18）。</p>
+<p><code class="inl">AnthropicLLM</code> 还有两个默认值需要知道：它显式发送 <code class="inl">output_config.effort = "high"</code>，因为这个模型不传时默认是 <code class="inl">medium</code>，不写出来的话换模型时行为会悄悄变化；它默认开启服务端拒答回退（请求体 <code class="inl">fallbacks: "default"</code>，请求头 <code class="inl">anthropic-beta: server-side-fallback-2026-07-01</code>），安全分类器拒答时由服务端换模型重跑。两者都可以在构造时传 <code class="inl">None</code> 关掉。</p>
+
+<h3 id="hx-00-s4-3">消息历史以 Anthropic 格式为准</h3>
+<p>labs 的历史统一用 Anthropic 风格的 dict 列表，块只有 <code class="inl">text</code>、<code class="inl">tool_use</code>、<code class="inl">tool_result</code> 三种。选它不是因为厂商，而是因为它把“调用”和“结果”都做成带 id 的块，配对关系一目了然；OpenAI 格式只在适配器发请求的那一刻临时转换，不进入历史。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/messages.py::assistant_from_turn"><span class="kw">def</span> <span class="fn">assistant_from_turn</span>(turn<span class="op">:</span> <span class="cls">AssistantTurn</span>) <span class="op">-&gt;</span> dict[str, <span class="cls">Any</span>]<span class="op">:</span>
+    <span class="str">"""把模型回复写回历史；有原始块就用原始块，保证下次请求与厂商当初返回的一致。"""</span>
+    <span class="kw">if</span> turn.blocks<span class="op">:</span>
+        <span class="kw">return</span> {<span class="str">"role"</span><span class="op">:</span> <span class="str">"assistant"</span>, <span class="str">"content"</span><span class="op">:</span> copy.deepcopy(turn.blocks)}
+    content<span class="op">:</span> list[dict[str, <span class="cls">Any</span>]] <span class="op">=</span> []
+    <span class="kw">if</span> turn.text<span class="op">:</span>
+        content.append({<span class="str">"type"</span><span class="op">:</span> <span class="str">"text"</span>, <span class="str">"text"</span><span class="op">:</span> turn.text})
+    <span class="kw">for</span> call <span class="kw">in</span> turn.tool_calls<span class="op">:</span>
+        content.append(
+            {<span class="str">"type"</span><span class="op">:</span> <span class="str">"tool_use"</span>, <span class="str">"id"</span><span class="op">:</span> call.id, <span class="str">"name"</span><span class="op">:</span> call.name, <span class="str">"input"</span><span class="op">:</span> copy.deepcopy(call.args)}
+        )
+    <span class="kw">return</span> {<span class="str">"role"</span><span class="op">:</span> <span class="str">"assistant"</span>, <span class="str">"content"</span><span class="op">:</span> content}</code></pre></div>
+<p><code class="inl">turn.blocks</code> 是 <code class="inl">AnthropicLLM</code> 收到的原始 content 块。之所以优先用它，是因为响应里可能有 <code class="inl">thinking</code> 这类 labs 不解析的块，它们需要原样回传；从 <code class="inl">text</code> 和 <code class="inl">tool_calls</code> 重新拼会把它们弄丢。hx-01 的循环在截断、拒答时会从这份原始块里剔除 <code class="inl">tool_use</code>，所以这里不做任何过滤。</p>
+
+<h3 id="hx-00-s4-4">跑测试</h3>
+<p>从 <code class="inl">tech-reader-modular</code> 根目录执行 <code class="inl">py -m unittest discover -s labs/tests -t labs</code>。<code class="inl">-t labs</code> 让 <code class="inl">labs/</code> 成为顶层目录，测试里因此写 <code class="inl">from harness.llm import ...</code>。<code class="inl">tests/test_llm.py</code> 覆盖 FakeLLM 的顺序、脚本耗尽和调用记录，两个真实适配器的请求体构造与响应解析，OpenAI 格式的双向转换，以及缺 key 报错。真实适配器的网络发送被抽成可替换的 <code class="inl">_post(url, headers, body)</code> 方法，测试里替换掉，全程不发网络请求。</p>
+
+<h2 id="hx-00-s5">坑</h2>
+
+<h3 id="hx-00-s5-1">坑 1：把 harness 写成 prompt 模板</h3>
+<p><strong>触发条件</strong>：在系统提示里写“不要删除文件”“失败三次就停下”“输出不要超过多少字”，然后以为这些约束生效了。</p>
+<p><strong>后果</strong>：这些是请求，不是约束。模型大多数时候会遵守，但“大多数”不够：长上下文里提示被稀释，或者工具输出里混进一句相反的指令，规则就可能失效。出事时你也查不到是哪一层没拦住，因为根本没有那一层。</p>
+<p><strong>源码怎么防</strong>：把“必须”写成代码，提示词只负责“最好”。lcc 从 s03 开始把“不许删”做成执行前的三道闸（见 <a href="#hx-00-s3-3">上文</a>）；OpenHarness 的敏感路径保护排在所有规则之前，注释写明任何模式都不能覆盖，就是为了防模型或注入内容去读凭据文件 <code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:84" data-expect="# Built-in sensitive path protection">checker.py:84</code>；“最多跑多少轮”是 <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:700" data-expect="while context.max_turns is None or turn_count">query.py:700</code> 的循环条件，而不是提示里的一句话。</p>
+<p><strong>没防住的例子</strong>：lcc 第一章的 <code class="inl">run_bash</code> 只有子串黑名单 <code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:81" data-expect="dangerous = [">code.py:81</code>。<code class="inl">rm -rf ~</code> 不包含名单里的任何子串，会被直接执行。这是教程有意留的简化，hx-14 会讲怎么把命令拆开再判定。</p>
+
+<h3 id="hx-00-s5-2">坑 2：没有确定性测试，只能靠真模型调</h3>
+<p><strong>触发条件</strong>：每改一次 harness，就用真实模型跑一遍任务，“看起来没问题”就提交。</p>
+<p><strong>后果</strong>：同样的输入每次轨迹不同，回归无法自动化；而 harness 最容易出错的分支（输出截断在工具参数中间、拒答、并行工具里一个抛异常、429）用真实模型几乎碰不到，等碰到时已经在生产上了。每次验证还要花钱。</p>
+<p><strong>源码怎么防</strong>：三个可运行仓库都给模型留了替身接口。OpenHarness 的模型客户端协议注释写明它同时服务于测试和生产 <code class="inl src-ref" data-src="oh:src/openharness/api/client.py:81" data-expect="Protocol used by the query engine in tests and production.">client.py:81</code>；lcc 的测试用假 API 驱动每一章的循环；DSH 能从真实会话日志推导回放脚本。labs 的 <code class="inl">FakeLLM</code> 是同一个思路的最小版本。实用的做法是：真实模型跑出的每一条失败轨迹都存下来，改写成 FakeLLM 脚本，变成永久的回归用例。</p>
+
+<h3 id="hx-00-s5-3">坑 3：厂商差异泄漏进循环</h3>
+<p><strong>触发条件</strong>：循环里直接写 <code class="inl">if resp.stop_reason == "tool_use"</code>。后来接了一个 OpenAI 兼容服务，它返回的是 <code class="inl">finish_reason: "tool_calls"</code>；或者某个服务带着工具调用却报 <code class="inl">"stop"</code>；或者厂商新增了 <code class="inl">pause_turn</code>、<code class="inl">refusal</code> 这样的取值。</p>
+<p><strong>后果</strong>：工具调用被当成正常结束丢掉，任务半途而废却显示“完成”；或者反过来，被截断的半截 <code class="inl">tool_use</code> 被拿去执行。随后循环里开始出现 <code class="inl">if provider == ...</code> 分支，适配层形同虚设。</p>
+<p><strong>各仓库怎么处理</strong>：OpenHarness 的 OpenAI 客户端把 <code class="inl">finish_reason</code> 原样塞进 <code class="inl">stop_reason</code> 字段 <code class="inl src-ref" data-src="oh:src/openharness/api/openai_client.py:433" data-expect="stop_reason=finish_reason,">openai_client.py:433</code>，于是同一个字段里混着两套词汇；它的循环靠完全不读这个字段来回避问题（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:808" data-expect="if not final_message.tool_uses:">query.py:808</code>），代价是分不清正常结束和截断。DSH 在适配器边界一次性翻译 <code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:90" data-expect="function stopReason(raw: unknown): FinishReason {">translate.ts:90</code>，循环只认内部取值。labs 的做法如下：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/llm.py::parse_openai_response"><span class="kw">def</span> <span class="fn">parse_openai_response</span>(data<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> <span class="cls">AssistantTurn</span><span class="op">:</span>
+    choice <span class="op">=</span> data[<span class="str">"choices"</span>][<span class="num">0</span>]
+    message <span class="op">=</span> choice.get(<span class="str">"message"</span>) <span class="kw">or</span> {}
+    calls <span class="op">=</span> [_openai_tool_call(c) <span class="kw">for</span> c <span class="kw">in</span> message.get(<span class="str">"tool_calls"</span>) <span class="kw">or</span> []]
+    finish <span class="op">=</span> choice.get(<span class="str">"finish_reason"</span>) <span class="kw">or</span> <span class="str">""</span>
+    stop_reason <span class="op">=</span> _FINISH_TO_STOP.get(finish, finish)
+    <span class="kw">if</span> calls <span class="kw">and</span> stop_reason <span class="op">==</span> <span class="str">"end_turn"</span><span class="op">:</span>
+        <span class="cmt"># 有的兼容服务带着工具调用却报 stop；在适配器里纠正，循环只看统一后的值</span>
+        stop_reason <span class="op">=</span> <span class="str">"tool_use"</span>
+    usage <span class="op">=</span> data.get(<span class="str">"usage"</span>) <span class="kw">or</span> {}
+    <span class="kw">return</span> <span class="cls">AssistantTurn</span>(
+        text<span class="op">=</span>message.get(<span class="str">"content"</span>) <span class="kw">or</span> <span class="str">""</span>,
+        tool_calls<span class="op">=</span>calls,
+        stop_reason<span class="op">=</span>stop_reason,
+        usage<span class="op">=</span>{
+            <span class="str">"input_tokens"</span><span class="op">:</span> usage.get(<span class="str">"prompt_tokens"</span>, <span class="num">0</span>),
+            <span class="str">"output_tokens"</span><span class="op">:</span> usage.get(<span class="str">"completion_tokens"</span>, <span class="num">0</span>),
+            <span class="str">"raw"</span><span class="op">:</span> usage,
+        },
+    )</code></pre></div>
+<p><code class="inl">_FINISH_TO_STOP</code> 把 <code class="inl">stop</code>、<code class="inl">tool_calls</code>、<code class="inl">length</code> 分别映射到 <code class="inl">end_turn</code>、<code class="inl">tool_use</code>、<code class="inl">max_tokens</code>；表里没有的取值（例如 <code class="inl">content_filter</code>）原样透出，让循环和日志都看得见。<code class="inl">AnthropicLLM</code> 则不做任何映射，<code class="inl">stop_reason</code> 原样保留，因为 Anthropic 的词汇就是 labs 的统一词汇。效果是：hx-01 的循环里不会出现任何厂商名。</p>
+
+<h3 id="hx-00-s5-4">坑 4：适配器静默“修好”坏数据</h3>
+<p><strong>触发条件</strong>：兼容服务返回的工具参数不是合法 JSON，可能是输出被截断了，也可能是模型写错了。</p>
+<p><strong>后果</strong>：OpenHarness 在解析失败时把参数改成空字典 <code class="inl src-ref" data-src="oh:src/openharness/api/openai_client.py:234" data-expect="args = {}">openai_client.py:234</code>。工具于是以空参数运行，报出“缺少必填参数”，而真实原因是“你给的 JSON 坏了”。模型看到的错误和真实原因对不上，往往会用同样的方式再试一次。</p>
+<p><strong>labs 怎么防</strong>：保留原文，把判定留给执行管线。hx-03 会把带 <code class="inl">__raw_arguments__</code> 的调用直接变成 <code class="inl">is_error</code> 结果，告诉模型参数不是合法 JSON 并附上原文。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/llm.py::_openai_tool_call"><span class="kw">def</span> <span class="fn">_openai_tool_call</span>(raw_call<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> <span class="cls">ToolCall</span><span class="op">:</span>
+    raw <span class="op">=</span> raw_call[<span class="str">"function"</span>].get(<span class="str">"arguments"</span>) <span class="kw">or</span> <span class="str">"{}"</span>
+    <span class="kw">try</span><span class="op">:</span>
+        args <span class="op">=</span> json.loads(raw)
+    <span class="kw">except</span> json.<span class="cls">JSONDecodeError</span><span class="op">:</span>
+        args <span class="op">=</span> <span class="kw">None</span>
+    <span class="kw">if</span> <span class="kw">not</span> isinstance(args, dict)<span class="op">:</span>
+        <span class="cmt"># 不静默改成 {}：保留原文，让执行管线把“参数不是合法 JSON”报回给模型</span>
+        args <span class="op">=</span> {<span class="str">"__raw_arguments__"</span><span class="op">:</span> raw}
+    <span class="kw">return</span> <span class="cls">ToolCall</span>(id<span class="op">=</span>raw_call[<span class="str">"id"</span>], name<span class="op">=</span>raw_call[<span class="str">"function"</span>][<span class="str">"name"</span>], args<span class="op">=</span>args)</code></pre></div>
+<p>同样的原则也适用于错误。OpenHarness 的循环用字符串匹配给异常分类，消息里含 <code class="inl">connect</code>、<code class="inl">timeout</code>、<code class="inl">network</code> 的算网络错误 <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:778" data-expect="in error_msg.lower() or">query.py:778</code>，其余一律算 API 错误。labs 让 <code class="inl">LLMHTTPError</code> 带上状态码和完整响应体往上抛，重试策略（hx-18）按状态码决定，不猜字符串。</p>
+
+<h2 id="hx-00-s6">取舍：自己写，还是用现成的</h2>
+<p>本模块一路自己写，但这不是唯一选项。下表对比四条路线；“Claude Agent SDK”指把 Claude Code 打包成库的那个 SDK，它自带文件读写、编辑、Bash、搜索等工具，以及循环、上下文管理、hooks、子代理、权限和会话，但和其他三条路线一样只提供 harness，部署要自己负责。</p>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>自己写（本模块 labs 路线）</th><th>Claude Agent SDK</th><th>OpenHarness 这类开源框架</th><th>DSH 这类插件化运行时</th></tr></thead><tbody>
+<tr><td>上手成本</td><td>最高：每个部件都要自己想清楚</td><td>最低：给一个 prompt 和选项就能跑</td><td>中：读懂一个大仓库</td><td>高：先理解插件内核和接缝</td></tr>
+<tr><td>内置能力</td><td>只有你写了的</td><td>成套的编码 agent 能力</td><td>覆盖面广，深度参差</td><td>覆盖面广且每块都做得深</td></tr>
+<tr><td>对循环和停止条件的控制</td><td>完全掌控</td><td>通过选项和 hooks 调整，循环本身不归你</td><td>改源码</td><td>换掉或包装对应插件</td></tr>
+<tr><td>换模型</td><td>写一个适配器</td><td>限 Claude</td><td>内置多家适配</td><td>适配器是插件，可替换</td></tr>
+<tr><td>安全边界谁负责</td><td>你自己，没有任何默认</td><td>SDK 带权限机制，策略由你配置</td><td>框架给默认规则，你要审读默认值</td><td>沙箱、审批是独立插件，你要组合</td></tr>
+<tr><td>可测试性</td><td>从第一天就能用 FakeLLM</td><td>依赖 SDK 提供的测试手段</td><td>有模型客户端协议可替换</td><td>有回放插件，可从日志生成用例</td></tr>
+<tr><td>维护负担</td><td>全部在你</td><td>跟随 SDK 升级</td><td>跟随上游，或 fork 后自己维护</td><td>跟随上游，插件边界清楚</td></tr>
+<tr><td>适合</td><td>理解机制；有特殊约束（离线、私有模型、强审计）</td><td>以 Claude 为模型、想尽快有一个编码 agent</td><td>需要改造现成实现的 Python 团队</td><td>需要长期演进、多模型、多部署形态的产品</td></tr>
+</tbody></table></div>
+<blockquote><p><strong>本模块的立场</strong>：先自己写一遍，再决定用不用框架。写过一遍之后，你会知道框架替你做了哪些决定，哪些默认值需要审读，出问题时去哪一层找。</p></blockquote>
+</section>

@@ -96,3 +96,4 @@
 #mod-harness .book-scope .hx-home td:first-child { white-space: nowrap; font-weight: 600; color: var(--text-strong); }
 #mod-harness .book-scope { --h-blue: #99c3ff; }
 [data-theme="light"] #mod-harness .book-scope, [data-theme="sepia"] #mod-harness .book-scope { --h-blue: #245dad; }
+#mod-harness .book-scope th:first-child, #mod-harness .book-scope td:first-child { white-space: nowrap; }
