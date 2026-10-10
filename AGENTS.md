@@ -3,7 +3,8 @@
 这是一个“源码模块化、交付单文件”的离线阅读器项目。
 
 - 先读 `README.md`，再根据需求读取 `agent/skills/tech-reader-maintainer/SKILL.md`。
-- 只修改 `src/`、`design/`、`agent/`、`tools/` 和配置文件；不要手改 `dist/tech-reader.html`。
+- 只修改 `src/`、`design/`、`agent/`、`tools/`、`labs/` 和配置文件；不要手改 `dist/tech-reader.html`。
+- `labs/` 是 Harness 模块配套的可运行 Python（只用标准库）。改了 labs 或 Harness 章节，还要运行 `py tools/harness-labs.py`：它跑 labs 测试，并核对正文代码块与 labs 文件逐字一致、每条 file:line 源码引用在钉住的 commit 里仍然成立。章节写作约定见 `agent/skills/tech-reader-maintainer/harness-authoring.md`。
 - `src/vendor/` 是第三方代码，除非用户明确要求，不读、不改、不格式化。
 - 每次修改后运行 `node build.mjs` 和 `node verify.mjs`。
 - 涉及新增/删除/交互/样式的需求，还要运行设计审计工作流；审计报告中的 `blocking` 必须清零。

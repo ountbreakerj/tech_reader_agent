@@ -1,0 +1,27 @@
+<div class="module" id="mod-harness" hidden><div class="book-scope">
+<section class="chapter hx-home" id="hx-home">
+  <div class="ch-head"><span class="ch-num">Harness 工程</span></div>
+  <h1>从零写一个可用的 Agent Harness</h1>
+  <p>模型只负责提出下一步，读文件、跑命令、管权限、记历史、失败重试，全都由模型外面的那层程序来做，这层程序就是 Harness。这里按机制拆成 26 章，每一章都对照 DSH、OpenHarness、learn-claude-code 等真实仓库的源码，给出可以直接运行的 Python 实现。</p>
+  <blockquote><p><strong>每章包含</strong>：源码级机制（带 file:line，固定在具体 commit）、可运行的 Python 代码（labs/ 目录，默认用 FakeLLM，不需要 API key）、坑与失败案例、多仓库取舍对比表。凡是不来自源码的数字都标注“教学示意”。</p></blockquote>
+  <h2 id="hx-home-parts">章节</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>部分</th><th>章节</th></tr></thead>
+    <tbody>
+      <tr><td>导读</td><td>00 全景图</td></tr>
+      <tr><td>骨架</td><td>01 Agent Loop 与停止条件 · 02 工具定义与注册 · 03 执行管线与并发 · 04 会话日志与回放</td></tr>
+      <tr><td>上下文</td><td>05 Token 预算与计数 · 06 Prompt cache 稳定性 · 07 上下文压缩 · 08 工具输出卸载</td></tr>
+      <tr><td>记忆</td><td>09 短期与工作记忆 · 10 长期记忆与指令文件 · 11 检索与注入 · 12 过期、衰减与替代</td></tr>
+      <tr><td>安全</td><td>13 权限规则引擎 · 14 Shell 命令解析 · 15 沙箱 · 16 审批与升档 · 17 Prompt 注入威胁模型</td></tr>
+      <tr><td>韧性</td><td>18 重试与退避 · 19 超时 · 20 熔断与降级</td></tr>
+      <tr><td>扩展</td><td>21 Hooks · 22 Skills 与 MCP · 23 子代理与 PTC</td></tr>
+      <tr><td>运维与组装</td><td>24 可观测性与成本 · 25 组装 mini-harness 与长任务连续性</td></tr>
+    </tbody>
+  </table></div>
+  <p>没有链接的章节还在撰写中，写完会依次补上。</p>
+  <h2 id="hx-home-deep">源码精读</h2>
+  <ul>
+    <li><a href="#/dsh">DSH Harness</a>：DeepSeek Harness（TypeScript monorepo）的逐包精读，固定在 commit <code class="inl">d743267388</code>。</li>
+    <li><a href="#/codex-harness">Codex Harness</a>：OpenAI Codex 的任务循环、并发工具与断线重试。</li>
+  </ul>
+</section>

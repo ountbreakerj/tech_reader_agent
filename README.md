@@ -63,6 +63,8 @@ CodeGraph 索引不随压缩包分发：索引包含本机路径，在另一台�
 - `src/shell/`：head、首页、公共 DOM、全局 CSS、路由和搜索。
 - `src/modules/book/chapters/`：书籍章节。
 - `src/modules/dsh/`、`src/modules/langgraph/`：独立模块。
+- `src/modules/harness/`：Harness 工程主题课。`home.html` 开启模块容器，`chapters/hx-NN/` 是各章，`end.html` 关闭容器。章节由 `py tools/harness-labs.py integrate <草稿目录>` 从草稿生成（自动高亮代码、生成 TOC），不要手改章节里的代码块。
+- `labs/`：Harness 各章配套的 Python 实现与测试，`py -m unittest discover -s labs/tests -t labs` 运行；`py tools/harness-labs.py` 同时核对正文代码与源码引用。
 - `src/modules/llm/sections/`：LLM section，每个 section 有自己的 `content.html` 和 `style.css`。
 - `src/modules/*/module.json`：模块信息、顺序和 TOC 的权威来源。
 - LangGraph 和 LLM 的分类入口由 `tools/lib/learning-menu.mjs` 从同一份 TOC 生成；`menu` 定义入口说明，有 `id` 的分组拥有独立目录页。新增章节时无需再维护一套入口链接。

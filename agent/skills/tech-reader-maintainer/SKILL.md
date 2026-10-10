@@ -47,6 +47,7 @@ Use this skill for requests to add, edit, reorganize, style, or repair content i
 
 ## Request routing
 
+- Harness chapter or lab → follow `harness-authoring.md` in this skill; generate chapters with `py tools/harness-labs.py integrate`, then run `py tools/harness-labs.py` (labs tests + code/source-reference checks) before build and verify.
 - Text or code example → target `content.html`.
 - Local appearance → the same section's `style.css`.
 - Shared appearance, navigation, theme, search, or layout → `src/shell/` and/or `shared.css`, with full visual review.

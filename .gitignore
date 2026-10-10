@@ -3,3 +3,5 @@ reports/visual/latest/
 node_modules/
 dist/tech-reader.html
 .workbuddy/
+__pycache__/
+*.pyc

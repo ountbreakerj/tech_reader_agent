@@ -90,3 +90,9 @@
 @media (prefers-reduced-motion: reduce) {
   .harness-scope *, .harness-scope { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+/* harness 章节：沿用 book 模块的 .book-scope 书页排版，这里只补源码引用与目录页 */
+#mod-harness .book-scope .src-ref { color: var(--h-blue, var(--accent)); white-space: nowrap; cursor: help; }
+#mod-harness .book-scope .chapter + .chapter { border-top: 1px solid var(--border); }
+#mod-harness .book-scope .hx-home td:first-child { white-space: nowrap; font-weight: 600; color: var(--text-strong); }
+#mod-harness .book-scope { --h-blue: #99c3ff; }
+[data-theme="light"] #mod-harness .book-scope, [data-theme="sepia"] #mod-harness .book-scope { --h-blue: #245dad; }
