@@ -146,6 +146,17 @@ for (const match of domSource.matchAll(/<a\b[^>]*\bhref="(#[^"]*)"/gi)) {
 }
 check(badLinks.length === 0, `站内链接失效 ${badLinks.length} 处:\n  ${badLinks.slice(0, 20).join('\n  ')}`);
 
+// 表格结构：单元格必须在 <tr> 内（浏览器会静默纠错，肉眼看不出），thead/tbody 内不能有空 <tr>
+const badTables = [];
+for (const match of domSource.matchAll(/<table\b[\s\S]*?<\/table>/gi)) {
+  const table = match[0];
+  if (/<(thead|tbody|tfoot)\b[^>]*>\s*<t[dh]\b/i.test(table)) badTables.push('单元格直接位于 thead/tbody 内');
+  else if (/<tr\b[^>]*>\s*<\/(thead|tbody|tfoot|table)>/i.test(table)) badTables.push('分组末尾有未闭合的空 <tr>');
+  else continue;
+  badTables[badTables.length - 1] += `（${moduleAt(match.index)?.key ?? 'shell'}，偏移 ${match.index}）`;
+}
+check(badTables.length === 0, `表格结构错误 ${badTables.length} 处:\n  ${badTables.slice(0, 10).join('\n  ')}`);
+
 for (const [key, point] of Object.entries(expectedTechPoints)) {
   check(typeof point.t === 'string' && point.t.length > 0, `术语卡 ${key} 缺少标题`);
   check(typeof point.tgt === 'string' && idOccurrences.has(point.tgt), `术语卡 ${key} 的目标不存在: ${point.tgt}`);
