@@ -290,8 +290,27 @@
     show(parent, selected !== home.id);
   }
 
+  var lastRouteHash = null;
   function route() {
     var h = location.hash || "#/";
+    // 正文里的 #id 锚点（脚注、交叉引用）不是路由：改写成所在模块的 ?section= 深链，
+    // 否则 ROUTE_TO_MOD 查不到，会掉回首页
+    if (h.indexOf("#/") !== 0) {
+      var anchorId = "";
+      try { anchorId = decodeURIComponent(h.slice(1)); } catch (e) { anchorId = h.slice(1); }
+      var anchorMod = anchorId && tpFindMod(anchorId);
+      if (!anchorMod) {
+        // 目标不存在：留在原处，而不是把读者扔回首页；首次加载时才回落到首页
+        history.replaceState(null, "", lastRouteHash || "#/");
+        if (anchorId) toastMsg("链接目标不存在");
+        if (lastRouteHash) return;
+        h = "#/";
+      } else {
+        h = MODULES[anchorMod].route + "?section=" + encodeURIComponent(anchorId);
+        history.replaceState(null, "", h);
+      }
+    }
+    lastRouteHash = h;
     var routePath = h.split("?")[0];
     var mod = ROUTE_TO_MOD[routePath];
     var sectionId = new URLSearchParams(h.indexOf("?") === -1 ? "" : h.slice(h.indexOf("?") + 1)).get("section");
@@ -356,6 +375,7 @@
     var scope = document.getElementById(MODULES[mod].scopeId);
     if (section && scope.contains(section)) {
       pendingRestore = null;
+      section.classList.add("reader-anchor");   // 脚注等非 TOC 目标也要避开顶栏
       section.setAttribute("tabindex", "-1");
       section.focus({ preventScroll: true, focusVisible: false });
       section.scrollIntoView({ behavior: "instant", block: "start" });

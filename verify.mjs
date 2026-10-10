@@ -108,6 +108,44 @@ for (const { config, configDir, configPath } of project.modules) {
   }
 }
 
+// 站内链接：#id 片段和 #/route?section=id 深链都必须落在对应模块范围内，
+// 否则运行时不跳转（深链）或提示目标不存在（片段）
+const scopeRanges = project.modules.map(({ config }) => {
+  const start = idOccurrences.get(config.scopeId)?.[0]?.offset ?? -1;
+  return { key: config.key, route: config.route, start };
+}).filter((entry) => entry.start >= 0).sort((a, b) => a.start - b.start);
+function moduleAt(offset) {
+  let found = null;
+  for (const range of scopeRanges) if (range.start <= offset) found = range;
+  return found;
+}
+const routeToKey = new Map(project.modules.map(({ config }) => [config.route, config.key]));
+const badLinks = [];
+let checkedLinks = 0;
+for (const match of domSource.matchAll(/<a\b[^>]*\bhref="(#[^"]*)"/gi)) {
+  const href = match[1].replace(/&amp;/g, '&');
+  if (href === '#' || href === '#/') continue;
+  const from = moduleAt(match.index);
+  let targetId = '';
+  let expectKey = null;
+  if (href.startsWith('#/')) {
+    const [routePath, query = ''] = href.split('?');
+    if (!routeToKey.has(routePath)) { badLinks.push(`${from?.key ?? 'shell'}: 未知路由 ${href}`); continue; }
+    targetId = new URLSearchParams(query).get('section') || '';
+    expectKey = routeToKey.get(routePath);
+    if (!targetId) { checkedLinks += 1; continue; }
+  } else {
+    try { targetId = decodeURIComponent(href.slice(1)); } catch { targetId = href.slice(1); }
+  }
+  checkedLinks += 1;
+  const target = idOccurrences.get(targetId)?.[0];
+  if (!target) { badLinks.push(`${from?.key ?? 'shell'}: 目标不存在 ${href}`); continue; }
+  const owner = moduleAt(target.offset);
+  if (expectKey && owner?.key !== expectKey) badLinks.push(`${from?.key ?? 'shell'}: ${href} 的目标不在 ${expectKey} 模块内`);
+  if (!expectKey && !owner) badLinks.push(`${from?.key ?? 'shell'}: ${href} 的目标不在任何模块内`);
+}
+check(badLinks.length === 0, `站内链接失效 ${badLinks.length} 处:\n  ${badLinks.slice(0, 20).join('\n  ')}`);
+
 for (const [key, point] of Object.entries(expectedTechPoints)) {
   check(typeof point.t === 'string' && point.t.length > 0, `术语卡 ${key} 缺少标题`);
   check(typeof point.tgt === 'string' && idOccurrences.has(point.tgt), `术语卡 ${key} 的目标不存在: ${point.tgt}`);
@@ -147,6 +185,7 @@ notes.push(`SHA-256 ${sha256(outputBuffer)}`);
 notes.push(`${project.modules.length} 个模块 / ${contentFiles.size} 个正文单元`);
 notes.push(`${idOccurrences.size} 个 DOM id / ${referencedAssets.size} 个唯一正文图片`);
 notes.push(`${Object.keys(expectedTechPoints).length} 张术语卡`);
+notes.push(`${checkedLinks} 个站内链接`);
 
 if (failures.length) {
   console.error('验证失败:');
