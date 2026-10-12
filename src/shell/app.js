@@ -28,12 +28,29 @@
   /* ========== asset 占位符回填（构建端单份存储，避免重复内联） ========== */
   (function () {
     var reg = window.__TR_ASSETS || {};
+    // srcset 里也带占位符（响应式图片的窄屏版本），只回填 img.src 会让手机端选到死链接
+    function resolveSrcset(value) {
+      return value.split(",").map(function (part) {
+        var seg = part.trim();
+        if (!seg) return seg;
+        var space = seg.indexOf(" ");
+        var url = space === -1 ? seg : seg.slice(0, space);
+        if (url.indexOf("tr-asset://") !== 0) return seg;
+        var uri = reg[url.slice(11)];
+        return uri ? uri + (space === -1 ? "" : seg.slice(space)) : seg;
+      }).join(", ");
+    }
     $$("img").forEach(function (img) {
+      var srcset = img.getAttribute("srcset");
+      if (srcset) img.setAttribute("srcset", resolveSrcset(srcset));
       var src = img.getAttribute("src") || "";
       if (src.indexOf("tr-asset://") === 0) {
         var uri = reg[src.slice(11)];
         if (uri) img.src = uri;
       }
+    });
+    $$("source[srcset]").forEach(function (s) {
+      s.setAttribute("srcset", resolveSrcset(s.getAttribute("srcset")));
     });
   })();
 

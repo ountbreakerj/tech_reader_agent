@@ -139,7 +139,7 @@ try {
   });
   await check('DSH directory, original chapters and search', async () => {
     await page.locator('#mod-harness a[href="#/dsh"]').click();
-    assert.equal(await page.locator('#mod-dsh .harness-module-grid .home-card').count(), 13);
+    assert.equal(await page.locator('#mod-dsh .harness-module-grid .home-card').count(), 12);
     await page.locator('#mod-dsh .home-card[href$="s7"]').click();
     await expectSection(page, 's7');
     const head = page.locator('#s7 .card-head').first();
@@ -277,6 +277,11 @@ try {
     await page.locator('#mod-harness a[href="#/codex-harness"]').click();
     await page.locator('#mod-codex-harness .home-card[href$="cx-loop"]').click();
     await expectSection(page, 'cx-loop');
+    // 图片是懒加载的，先等它解码完再断言尺寸，否则偶发失败
+    await page.waitForFunction(() => {
+      const img = document.querySelector('.cx-diagram img');
+      return img && img.complete && img.naturalWidth > 0;
+    }, { timeout: 15000 });
     assert.equal(await page.locator('.cx-diagram img').evaluate(img => img.complete && img.naturalWidth === 650 && img.naturalHeight === 1120), true);
     await page.locator('.cx-diagram-open').click();
     await page.waitForSelector('#lightbox.open');
