@@ -1,0 +1,34 @@
+{
+  "verdict": "pass",
+  "scope": [
+    "#/harness hx-09 短期与工作记忆、hx-10 长期记忆存储与指令文件、hx-11 检索与注入、hx-12 过期、衰减与替代",
+    "#/dsh dsh-04 会话持久化、存储与跨会话检索",
+    "desktop 1440、tablet 820、mobile 390；dark 主题截图，三主题由 harness-audit 覆盖模块样式"
+  ],
+  "findings": [],
+  "resolvedFindings": [
+    {
+      "severity": "major",
+      "role": "product",
+      "location": "#/harness hx-09 坑五（OpenHarness exit_plan_mode）",
+      "evidence": "子代理自报未排查：exit_plan_mode 是否会被中间件另行标成只读；正文写成在计划模式里一律被拦",
+      "resolution": "核对 permissions/checker.py：PLAN 模式对非只读工具直接拒绝（137-141），唯一例外是 allowed_tools（105，默认空）。正文补上两条 file:line，并注明这条坑只在检查器本身处于 PLAN 时成立（/plan on），模型自己调 enter_plan_mode 进入时走普通写工具确认"
+    },
+    {
+      "severity": "major",
+      "role": "product",
+      "location": "#/harness hx-12 autodream 一段",
+      "evidence": "正文称整理子进程以 --dangerously-skip-permissions 启动，但源码只在 runner_module == \"openharness\" 时追加，ohmo 路径不加且有测试断言",
+      "resolution": "改为条件表述，引用 service.py:176-177 与 tests/test_services/test_autodream.py:192"
+    }
+  ],
+  "checks": [
+    "py tools/harness-labs.py：372 个 labs 测试通过；109 个代码块与 labs 文件逐字一致；1549 条 file:line 在钉住的 commit 上核对通过",
+    "node build.mjs / node verify.mjs：通过，580 个站内链接",
+    "node tools/assets.mjs audit：通过",
+    "node tools/browser-audit.mjs：21 个路由/视口组合通过",
+    "node tools/harness-audit.mjs：全部通过",
+    "新章探针（三视口）：未知元素 0、删除线元素 0、页面级横向溢出 0、JS 异常 0；正文（pre/code 之外）Markdown 残留 0",
+    "截图：hx-09～12、dsh-04 的桌面与手机"
+  ]
+}

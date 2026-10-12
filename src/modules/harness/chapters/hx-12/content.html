@@ -1,0 +1,472 @@
+<section class="chapter" id="ch-hx-12" data-slug="hx-12"><div class="ch-head"><span class="ch-num">第 12 章</span></div><h1 id="hx-12">过期、衰减与替代</h1>
+<p>前几章讲的都是怎么把记忆写进去、怎么找出来。这一章讲另一半：记忆写进去之后会变坏，而 harness 要负责发现、降权、替换或删掉它。不管这一半，记忆库就只会越积越多，检索结果里旧东西越来越多，模型拿着上个月的事实去改这个月的代码。</p>
+
+<p>先说结论：<strong>四个参考仓库里，没有一个把「过期、衰减、替代、整理」四件事都在代码里做完。</strong>OpenHarness 字段最全，但 <code class="inl">supersedes</code> 只写不读；amt 的 notebook 机制最全，但都是没运行过的示意代码；learn-claude-code 的 s09 没有任何过期机制；DSH 在钉住的 commit 里没有长期记忆层，「替代」这个思想用在了会话日志上。本章的 lab 把四件事都写成纯函数，最后用一次 <code class="inl">sweep</code> 串起来。</p>
+
+<h2 id="hx-12-s1">记忆为什么会变坏</h2>
+
+<p>「变坏」不是一种问题，是四种。原因不同，手段也不同：</p>
+
+<div class="table-wrap"><table><thead><tr><th>怎么变坏的</th><th>例子</th><th>harness 的手段</th><th>lab 里的函数</th></tr></thead><tbody>
+<tr><td>事实过时</td><td>「CI 现在是红的」「当前分支是 feat-x」，过两周就不对了</td><td>TTL 硬过期：按类型给寿命</td><td><code class="inl">is_expired</code></td></tr>
+<tr><td>一直用不上</td><td>半年前一次调试的细节，每次检索都排在后面，但一直占着位置</td><td>分数衰减 + 访问强化</td><td><code class="inl">decayed_score</code> / <code class="inl">touch</code></td></tr>
+<tr><td>被更正了</td><td>用户先说「用 pytest」，后来改成「用 unittest」；或者旧结论本来就是错的</td><td>显式替代：新记忆声明它替代哪条</td><td><code class="inl">resolve_supersedes</code></td></tr>
+<tr><td>指向的东西没了</td><td>「入口在 src/app.py」，可是文件已经改名</td><td>陈旧引用检测</td><td><code class="inl">find_stale_references</code></td></tr>
+</tbody></table></div>
+
+<p>还有第五种手段：<strong>合并/整理</strong>（consolidation），后台让模型把一堆相似记忆重写成几条。它能同时处理重复和矛盾，但它自己会引入新的错误，放在 <a href="#hx-12-s5">第 5 节</a>单独讲。</p>
+
+<p>这四种原因互相不能替代。最常见的误解是「有衰减就不需要替代」：用户的偏好改了，旧偏好的分数并不会因此变低，它可能恰好被频繁访问、分数很高。衰减回答的是「这条还有没有用」，替代回答的是「这条还对不对」。同样，TTL 也不能替代陈旧引用检测：一条 90 天寿命的参考记忆，第二天文件就可能被删掉。</p>
+
+<blockquote><p><strong>判断标准</strong>：一条记忆该不该出现在检索结果里，要回答三个问题：它还对吗（替代、TTL）、它指的东西还在吗（陈旧引用）、它还有用吗（衰减）。前两个问题答「否」，分数再高也不该返回；第三个问题只影响排序和清理。</p></blockquote>
+
+<h2 id="hx-12-s2">TTL：按类型设寿命</h2>
+
+<p>TTL 是最粗的工具，也是最可靠的：到点就算过期，不需要模型参与。关键的设计决定有三个。</p>
+
+<p><strong>第一，寿命按类型给，不是全局一个数。</strong>项目状态（分支、测试结果、正在做什么）最容易过时；用户偏好和反馈（「回答用中文」「别直接推 main」）几乎不会因为时间而失效，只会被显式更正。lab 的默认表把后两类设成 <code class="inl">None</code>（不按时间过期），数字都是教学示意：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::DEFAULT_TTL_BY_TYPE"><span class="cls">DEFAULT_TTL_BY_TYPE</span><span class="op">:</span> <span class="cls">Mapping</span>[str, float <span class="op">|</span> <span class="kw">None</span>] <span class="op">=</span> <span class="cls">MappingProxyType</span>({
+    <span class="str">"project"</span><span class="op">:</span> <span class="num">14</span> <span class="op">*</span> <span class="cls">DAY</span>,
+    <span class="str">"reference"</span><span class="op">:</span> <span class="num">90</span> <span class="op">*</span> <span class="cls">DAY</span>,
+    <span class="str">"feedback"</span><span class="op">:</span> <span class="kw">None</span>,
+    <span class="str">"user"</span><span class="op">:</span> <span class="kw">None</span>,
+})</code></pre></div>
+
+<p><strong>第二，从什么时刻起算。</strong>lab 从 <code class="inl">created_at</code> 算，不从最近访问算：一条事实被频繁读到，不代表它还对。如果从「最后更新」算，就要保证「更新」真的意味着有人核对过内容，而不是重写了一遍同样的文字（这正是 OpenHarness 踩到的坑，见 <a href="#hx-12-s9-1">坑一</a>）。</p>
+
+<p><strong>第三，过期了是删除还是降权。</strong>删掉最干净，但查不到「它原来说过什么」；只隐藏不删，保留了历史，但要保证所有读取路径都尊重这个隐藏。lab 的 <code class="inl">SweepPolicy.expired_action</code> 两种都支持，默认删除。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::is_expired"><span class="kw">def</span> <span class="fn">is_expired</span>(
+    record<span class="op">:</span> <span class="cls">MemoryRecord</span>,
+    now<span class="op">:</span> float,
+    ttl_by_type<span class="op">:</span> <span class="cls">Mapping</span>[str, float <span class="op">|</span> <span class="kw">None</span>] <span class="op">=</span> <span class="cls">DEFAULT_TTL_BY_TYPE</span>,
+) <span class="op">-&gt;</span> bool<span class="op">:</span>
+    <span class="str">"""TTL 从创建时刻算，不从访问时刻算：被频繁读到不代表这条事实还对。"""</span>
+    <span class="kw">if</span> record.type <span class="kw">not</span> <span class="kw">in</span> ttl_by_type<span class="op">:</span>
+        <span class="cmt"># 拼错的类型如果默默按「永不过期」处理，就成了最难发现的那种泄漏。</span>
+        <span class="kw">raise</span> <span class="cls">ValueError</span>(<span class="str">f"记忆 {record.id} 的类型 {record.type!r} 不在 TTL 表里"</span>)
+    ttl <span class="op">=</span> record.ttl <span class="kw">if</span> record.ttl <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">else</span> ttl_by_type[record.type]
+    <span class="kw">if</span> ttl <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">False</span>
+    <span class="kw">if</span> ttl <span class="op">&lt;=</span> <span class="num">0</span><span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">ValueError</span>(<span class="str">f"记忆 {record.id} 的 ttl 必须为正数；不过期请用 None"</span>)
+    <span class="kw">return</span> now <span class="op">&gt;=</span> record.created_at <span class="op">+</span> ttl</code></pre></div>
+
+<p>两个故意的「报错而不是默认」：类型拼错（<code class="inl">projcet</code>）直接报错，因为按「永不过期」处理会让这条记忆永远留着，而且没人会发现；<code class="inl">ttl=0</code> 也报错，因为它在不同实现里分别表示「立即过期」和「不过期」，含义不清。</p>
+
+<h3 id="hx-12-s2-1">OpenHarness 的 TTL：真的被执行，但只是「隐藏」</h3>
+
+<p>OpenHarness 的记忆文件头里有 <code class="inl">ttl_days</code>（<code class="inl src-ref" data-src="oh:src/openharness/memory/types.py:28" data-expect="ttl_days: int | None = None">types.py:28</code>）。字段有了不代表被执行，所以先查消费方。在 <code class="inl">LLM\</code> 下执行 <code class="inl">codegraph callers is_memory_expired</code>，只有两个调用方：<code class="inl">scan_memory_files</code> 和 <code class="inl">/memory</code> 命令的处理函数。</p>
+
+<p>判定本身在 <code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:283-292" data-expect="def is_memory_expired(">schema.py:283-292</code>。两处细节和 lab 不同：<code class="inl">ttl_days</code> 为空或 ≤ 0 都当作不过期（<code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:287" data-expect="if ttl_days is None or ttl_days &lt;= 0:">第 287 行</code>）；起算点先取 <code class="inl">updated_at</code>，没有才用 <code class="inl">created_at</code>（<code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:289" data-expect="base_time = parse_datetime(metadata.get(">第 289 行</code>）。</p>
+
+<p>两个消费方都只是<strong>不让人看见</strong>，不删文件：</p>
+
+<ul>
+<li>扫描时跳过：<code class="inl src-ref" data-src="oh:src/openharness/memory/scan.py:41" data-expect="if is_memory_expired(_metadata_from_header(header))">scan.py:41</code>。检索（<code class="inl">find_relevant_memories</code>）走的就是这个扫描，所以过期记忆确实不会进入检索结果。</li>
+<li><code class="inl">/memory show</code> 对过期条目回答「not found」：<code class="inl src-ref" data-src="oh:src/openharness/commands/registry.py:739" data-expect="if is_disabled_metadata(metadata) or is_memory_expired(metadata):">registry.py:739</code>。</li>
+</ul>
+
+<p>写入点那边，<code class="inl">upsert_memory_file</code> 只是把旧值原样带过去（<code class="inl src-ref" data-src="oh:src/openharness/memory/manager.py:108" data-expect="ttl_days&quot;: metadata.get(">manager.py:108</code>）。在 <code class="inl">src/</code> 里搜 <code class="inl">ttl</code>，命令注册表和工具目录都没有设置它的入口，所以实际上只有手改 frontmatter 或 autodream 子进程会写这个字段。另外，同一个函数每次都把 <code class="inl">updated_at</code> 刷成现在（<code class="inl src-ref" data-src="oh:src/openharness/memory/manager.py:107" data-expect="updated_at&quot;: now_text,">第 107 行</code>），而去重扫描是带着 <code class="inl">include_expired=True</code> 的（<code class="inl src-ref" data-src="oh:src/openharness/memory/manager.py:68" data-expect="include_expired=True,">第 68 行</code>）：再写一次同样的内容，会命中那个过期文件，把它的 TTL 重新计时。这算不算 bug 取决于你怎么理解「更新」，后面坑一会展开。</p>
+
+<h3 id="hx-12-s2-2">amt 与 lcc：读时删除，或者根本没有</h3>
+
+<p>amt 的 30_production_memory_patterns 给缓存记录加了 <code class="inl">ttl_seconds</code>（<code class="inl src-ref" data-src="amt:all_techniques/30_production_memory_patterns/production_memory_patterns.ipynb:165" data-expect="ttl_seconds: int | None = None">notebook 第 165 行</code>），从 <code class="inl">created_at</code> 起算（<code class="inl src-ref" data-src="amt:all_techniques/30_production_memory_patterns/production_memory_patterns.ipynb:174" data-expect="age = (datetime.utcnow() - self.created_at).total_seconds()">第 174 行</code>），在 <code class="inl">get</code> 里命中过期就当场删掉（<code class="inl src-ref" data-src="amt:all_techniques/30_production_memory_patterns/production_memory_patterns.ipynb:266" data-expect="if record.is_expired():">第 266 行</code>）。这是缓存的经典做法：懒删除，读到了才清理。它是示意代码（notebook 没有运行过），而且针对的是缓存层，不是长期记忆。</p>
+
+<p>learn-claude-code 的 s09 没有任何过期机制。整个 <code class="inl">s09_memory/code.py</code> 里搜不到 ttl、expire、decay；四种类型（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:50" data-expect="MEMORY_TYPES = (">code.py:50</code>）都一样永久保留，旧记忆只能靠后面的整理被模型重写掉。</p>
+
+<h2 id="hx-12-s3">衰减：分数随时间变低，访问时刷新</h2>
+
+<p>TTL 是开关，衰减是旋钮。它不判断对错，只让长时间没用到的记忆慢慢沉下去，在检索里让位给新的，最后低到一定程度再被清理。</p>
+
+<p>公式是指数衰减：<code class="inl">score = strength · e^(−λΔt)</code>，其中 <code class="inl">λ = ln2 / 半衰期</code>。这样选 λ 的好处是参数有直观含义：过了一个半衰期，分数正好减半；两个半衰期，剩四分之一。Δt 从<strong>最近一次访问</strong>算起，而不是从创建算起，这是衰减和 TTL 的另一个区别：TTL 问「这条事实有多老」，衰减问「这条记忆多久没用了」。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::decayed_score"><span class="kw">def</span> <span class="fn">decayed_score</span>(record<span class="op">:</span> <span class="cls">MemoryRecord</span>, now<span class="op">:</span> float, half_life<span class="op">:</span> float) <span class="op">-&gt;</span> float<span class="op">:</span>
+    <span class="str">"""``strength · e^(−λΔt)``，λ = ln2 / 半衰期，Δt 从最近一次访问算起。
+
+    纯函数：只算不写。把衰减结果写回记录（并顺手更新时钟）会让
+    「最近访问时间」不再表示访问，见本章坑 2。
+    """</span>
+    <span class="kw">if</span> half_life <span class="op">&lt;=</span> <span class="num">0</span><span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">ValueError</span>(<span class="str">f"半衰期必须为正数，收到 {half_life}"</span>)
+    <span class="cmt"># 时钟回拨（多机、手改文件）时 Δt 为负，不允许分数因此变大。</span>
+    elapsed <span class="op">=</span> max(<span class="num">0.0</span>, now <span class="op">-</span> record.last_accessed_at)
+    <span class="kw">return</span> record.strength <span class="op">*</span> math.exp(<span class="op">-</span>math.log(<span class="num">2</span>) <span class="op">/</span> half_life <span class="op">*</span> elapsed)</code></pre></div>
+
+<p><code class="inl">strength</code> 的含义要说准：它是「在 <code class="inl">last_accessed_at</code> 那一刻」的强度，现在的强度是算出来的。记录本身是不可变的 dataclass，读路径不写任何状态：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::MemoryRecord"><span class="dec">@dataclass</span>(frozen<span class="op">=</span><span class="kw">True</span>)
+<span class="kw">class</span> <span class="cls">MemoryRecord</span><span class="op">:</span>
+    <span class="str">"""一条记忆。不可变：衰减和强化都返回新对象，读路径不写状态。"""</span>
+
+    id<span class="op">:</span> str
+    type<span class="op">:</span> str
+    text<span class="op">:</span> str
+    created_at<span class="op">:</span> float
+    <span class="cmt"># 衰减时钟的起点。strength 是「在这个时刻」的强度，现在的强度靠计算得出。</span>
+    last_accessed_at<span class="op">:</span> float
+    strength<span class="op">:</span> float <span class="op">=</span> <span class="num">1.0</span>
+    <span class="cmt"># 单条覆盖类型的寿命；None 表示按类型走。</span>
+    ttl<span class="op">:</span> float <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>
+    <span class="cmt"># 本条替代了哪些旧记忆。可以多条（合并时一条新记忆替代几条旧的）。</span>
+    supersedes<span class="op">:</span> tuple[str, ...] <span class="op">=</span> ()</code></pre></div>
+
+<h3 id="hx-12-s3-1">访问强化：先结算，再加分</h3>
+
+<p>一条记忆被检索出来、真的放进了提示，就说明它还有用，分数应该涨一点。这叫访问强化（reinforcement）。实现的顺序很重要：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::touch"><span class="kw">def</span> <span class="fn">touch</span>(
+    record<span class="op">:</span> <span class="cls">MemoryRecord</span>,
+    now<span class="op">:</span> float,
+    <span class="op">*</span>,
+    half_life<span class="op">:</span> float,
+    boost<span class="op">:</span> float <span class="op">=</span> <span class="num">0.3</span>,
+    cap<span class="op">:</span> float <span class="op">=</span> <span class="num">1.0</span>,
+) <span class="op">-&gt;</span> <span class="cls">MemoryRecord</span><span class="op">:</span>
+    <span class="str">"""一次访问：先把衰减结算到 now，再加强化量，封顶 cap，并重置衰减时钟。
+
+    顺序不能反：直接在旧 strength 上加 boost，等于把这段时间的衰减一笔勾销。
+    """</span>
+    settled <span class="op">=</span> decayed_score(record, now, half_life)
+    <span class="kw">return</span> replace(record, strength<span class="op">=</span>min(cap, settled <span class="op">+</span> boost), last_accessed_at<span class="op">=</span>now)</code></pre></div>
+
+<p>举个数（教学示意）：半衰期 7 天，一条 strength 为 1.0 的记忆闲置了 7 天后被访问，boost 为 0.3。先结算到 0.5，再加到 0.8，时钟重置。如果反过来直接在 1.0 上加 0.3 再封顶，结果是 1.0，等于这 7 天的衰减从来没发生过，只要偶尔被访问一次，任何记忆都永远满分。测试 <code class="inl">test_touch_settles_decay_before_boost</code> 钉住的就是这个顺序。</p>
+
+<p><code class="inl">cap</code> 是参数而不是写死的 1.0：有的系统想让高频记忆超过初始强度（例如上限 2.0），这样它在衰减时能多撑一阵。上限一定要有，否则每轮都被检索到的记忆会无限涨分，后面再怎么衰减都排第一。</p>
+
+<h3 id="hx-12-s3-2">amt 的写法：衰减写回会改掉访问时间</h3>
+
+<p>amt 的 19_forgetting_and_decay 是同一个公式（<code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:220" data-expect="self.decay_rate = math.log(2) / half_life_hours">λ 在第 220 行</code>，<code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:228" data-expect="decayed = memory.strength * math.exp(-self.decay_rate * hours_idle)">衰减在第 228 行</code>），默认半衰期 168 小时。不同在于它是<strong>写回式</strong>的：<code class="inl">apply_decay</code> 把衰减后的值写回 <code class="inl">strength</code>，并且把 <code class="inl">last_accessed</code> 改成现在（<code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:236" data-expect="memory.last_accessed = now">第 236 行</code>），注释说这样「下一段衰减从这里开始」。数学上分段结算是对的，代价是 <code class="inl">last_accessed</code> 从「最近一次被访问」变成了「最近一次被结算」，而每次检索前都会对全部记忆结算一遍（<code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:308" data-expect="self.decay_all(now=now)">第 308 行</code>）。之后谁想用这个字段判断「多久没人用了」，拿到的都是上一次检索的时间。</p>
+
+<p>它的 <code class="inl">reinforce</code> 直接在当前 strength 上加 boost、封顶 1.0（<code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:242" data-expect="memory.strength = min(1.0, memory.strength + boost)">第 242 行</code>），自己不结算衰减。之所以没出错，是因为检索前已经全量结算过了：正确性依赖调用顺序，而不是函数本身。lab 把结算放进 <code class="inl">touch</code>，任何时候调用都对。</p>
+
+<h3 id="hx-12-s3-3">衰减和检索打分在哪里结合</h3>
+
+<p><a href="#hx-11">hx-11</a> 讲的是检索打分：相关性怎么算、多路召回怎么合并。衰减接在相关性后面，有两种接法：</p>
+
+<ul>
+<li><strong>乘法</strong>：<code class="inl">相关性 × 衰减分</code>。amt 19 就是这样（<code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:313" data-expect="combined = similarity * mem.strength">第 313 行</code>）。好处是不相关的记忆再新也是 0；坏处是一条高度相关但很久没用的记忆会被压到很低，而「很久没用」可能只是因为最近没碰那块代码。</li>
+<li><strong>加法</strong>：<code class="inl">相关性 + w · 新近度</code>。OpenHarness 是这样，而且新近度不是指数，是阶梯：14 天内加 0.3、30 天内加 0.1、更老不加（<code class="inl src-ref" data-src="oh:src/openharness/memory/search.py:62-71" data-expect="def _recency_boost(header: MemoryHeader) -&gt; float:">search.py:62-71</code>）。</li>
+</ul>
+
+<p>OpenHarness 的总分在 <code class="inl src-ref" data-src="oh:src/openharness/memory/search.py:39-45" data-expect="score = (">search.py:39-45</code>：元数据命中 ×2、正文命中 ×1、<code class="inl">importance × 0.4</code>、使用次数 <code class="inl">min(use_count, 5) × 0.1</code>、再加新近加成。使用次数那一项就是阶梯版的访问强化，封顶 5 次（<code class="inl src-ref" data-src="oh:src/openharness/memory/search.py:43" data-expect="+ min(int(usage[&quot;use_count&quot;]), 5) * 0.1">第 43 行</code>）。只有命中了至少一个词的记忆才进候选（第 46 行），所以这些加成只影响排序，不会把无关记忆拉进来，这和乘法接法的效果是一致的。</p>
+
+<p>值得注意的是 OpenHarness 的「访问」写在哪里：记忆被放进提示时，<code class="inl">use_count</code> 加一、<code class="inl">last_used_at</code> 写成现在（<code class="inl src-ref" data-src="oh:src/openharness/memory/usage.py:100-101" data-expect="record[&quot;use_count&quot;] = int(record[&quot;use_count&quot;]) + 1">usage.py:100-101</code>）。但 <code class="inl">last_used_at</code> 在整个 <code class="inl">src/</code> 里只有这一处写和第 150 行的格式规范化，打分不读它，陈旧判定也不读它。新近加成看的是文件的 <code class="inl">updated_at</code>，不是最近一次被用到的时间。也就是说，OpenHarness 的衰减时钟是「多久没改」，而不是「多久没用」。</p>
+
+<h2 id="hx-12-s4">替代：supersedes 链与链尾</h2>
+
+<p>衰减和 TTL 都是被动的：等时间过去。替代是主动的：新记忆写进来时<strong>声明</strong>它替代了哪条旧记忆。用户说「以后改用 unittest」，写入的新记忆带上 <code class="inl">supersedes: [旧记忆 id]</code>。读取时只返回链尾（没被任何人替代的那条），旧的留着，供人追溯「为什么改」。</p>
+
+<p>为什么不直接覆盖旧记忆？因为覆盖会丢掉两样东西：改之前是什么，以及「改过」这件事本身。后者很有用：一条偏好被反复更正，说明这里有歧义，值得问用户一次。另外，合并（<a href="#hx-12-s5">第 5 节</a>）天然就是一对多替代：一条新记忆替代三条旧记忆，lab 的 <code class="inl">supersedes</code> 字段因此是元组。</p>
+
+<p>替代链一旦存在，就有三种坏数据要处理，而且都必须给出可读错误，不能死循环：</p>
+
+<ul>
+<li><strong>成环</strong>：A 替代 B，B 又替代 A。两次写入各自看都合理（模型分别在两次会话里「更正」了对方），合起来就没有链尾了。朴素的「沿着 supersedes 一直走」在这里会死循环。</li>
+<li><strong>分叉</strong>：B 和 C 都声明替代 A。哪个才是当前版本？没有正确答案。正确做法是再写一条新记忆合并 B 和 C。</li>
+<li><strong>悬空引用</strong>：C 声明替代 X，但 X 不存在。最常见的原因不是写错，而是 X 已经被清理掉了。所以 lab 默认报错（写入时应该拒绝），但清理时用 <code class="inl">allow_dangling=True</code> 只记录不报错。</li>
+</ul>
+
+<p>解析分两步。第一步把「新替代旧」反过来，建成「旧 → 继任者」的映射，同时查重复 id、分叉和悬空：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::_successor_map"><span class="kw">def</span> <span class="fn">_successor_map</span>(
+    records<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">MemoryRecord</span>],
+) <span class="op">-&gt;</span> tuple[dict[str, str], list[tuple[str, str]]]<span class="op">:</span>
+    <span class="str">"""旧 id → 替代它的新 id。每条旧记录最多一个继任者，否则就是分叉。"""</span>
+    ids <span class="op">=</span> [r.id <span class="kw">for</span> r <span class="kw">in</span> records]
+    <span class="kw">if</span> len(ids) <span class="op">!=</span> len(set(ids))<span class="op">:</span>
+        dup <span class="op">=</span> next(i <span class="kw">for</span> i <span class="kw">in</span> ids <span class="kw">if</span> ids.count(i) <span class="op">&gt;</span> <span class="num">1</span>)
+        <span class="kw">raise</span> <span class="cls">SupersedeError</span>(<span class="str">f"记忆 id {dup} 出现了不止一次"</span>)
+    known <span class="op">=</span> set(ids)
+    successor<span class="op">:</span> dict[str, str] <span class="op">=</span> {}
+    dangling<span class="op">:</span> list[tuple[str, str]] <span class="op">=</span> []
+    <span class="kw">for</span> record <span class="kw">in</span> records<span class="op">:</span>
+        <span class="kw">for</span> target <span class="kw">in</span> record.supersedes<span class="op">:</span>
+            <span class="kw">if</span> target <span class="kw">not</span> <span class="kw">in</span> known<span class="op">:</span>
+                dangling.append((record.id, target))
+            <span class="kw">elif</span> target <span class="kw">in</span> successor<span class="op">:</span>
+                <span class="kw">raise</span> <span class="cls">SupersedeError</span>(
+                    <span class="str">f"{target} 同时被 {successor[target]} 和 {record.id} 替代：分叉了，"</span>
+                    <span class="str">"该由一条新记忆合并两者"</span>
+                )
+            <span class="kw">else</span><span class="op">:</span>
+                successor[target] <span class="op">=</span> record.id
+    <span class="kw">return</span> successor, dangling</code></pre></div>
+
+<p>每条旧记录最多一个继任者，所以从任意节点出发只有一条路可走，链尾是唯一的。第二步沿着这条路走，走过的节点放进 <code class="inl">on_path</code>，再次碰到就是环：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::_walk_to_head"><span class="kw">def</span> <span class="fn">_walk_to_head</span>(start<span class="op">:</span> str, successor<span class="op">:</span> <span class="cls">Mapping</span>[str, str], heads<span class="op">:</span> dict[str, str]) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""沿继任者走到链尾，并把途经的每个节点都记进 heads（下次直接命中）。"""</span>
+    path<span class="op">:</span> list[str] <span class="op">=</span> []
+    on_path<span class="op">:</span> set[str] <span class="op">=</span> set()
+    node <span class="op">=</span> start
+    <span class="kw">while</span> node <span class="kw">not</span> <span class="kw">in</span> heads<span class="op">:</span>
+        <span class="kw">if</span> node <span class="kw">in</span> on_path<span class="op">:</span>
+            ring <span class="op">=</span> path[path.index(node)<span class="op">:</span>] <span class="op">+</span> [node]
+            <span class="kw">raise</span> <span class="cls">SupersedeError</span>(<span class="str">"替代链成环："</span> <span class="op">+</span> <span class="str">" → "</span>.join(ring) <span class="op">+</span> <span class="str">"（箭头读作「被替代为」）"</span>)
+        path.append(node)
+        on_path.add(node)
+        nxt <span class="op">=</span> successor.get(node)
+        <span class="kw">if</span> nxt <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+            heads[node] <span class="op">=</span> node
+            <span class="kw">break</span>
+        node <span class="op">=</span> nxt
+    head <span class="op">=</span> heads[node]
+    <span class="kw">for</span> visited <span class="kw">in</span> path<span class="op">:</span>
+        heads[visited] <span class="op">=</span> head
+    <span class="kw">return</span> head</code></pre></div>
+
+<p>两个细节。错误信息里只打印环本身（<code class="inl">path[path.index(node):]</code>），而不是从起点开始的整条路：如果 D → A → B → A，用户要修的是 A 和 B，D 没有问题。另外，走完之后把途经节点的链尾都写进 <code class="inl">heads</code>，下一个起点碰到已知节点就直接停，所以整体是线性的，不会因为链很长而对每个节点从头走一遍。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::resolve_supersedes"><span class="kw">def</span> <span class="fn">resolve_supersedes</span>(
+    records<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">MemoryRecord</span>], <span class="op">*</span>, allow_dangling<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>
+) <span class="op">-&gt;</span> <span class="cls">Resolution</span><span class="op">:</span>
+    <span class="str">"""构建替代链，返回每条链的链尾；成环、分叉都给出可读错误而不是死循环。"""</span>
+    successor, dangling <span class="op">=</span> _successor_map(records)
+    <span class="kw">if</span> dangling <span class="kw">and</span> <span class="kw">not</span> allow_dangling<span class="op">:</span>
+        who, target <span class="op">=</span> dangling[<span class="num">0</span>]
+        <span class="kw">raise</span> <span class="cls">SupersedeError</span>(<span class="str">f"{who} 声明替代 {target}，但 {target} 不存在"</span>)
+    heads<span class="op">:</span> dict[str, str] <span class="op">=</span> {}
+    <span class="kw">for</span> record <span class="kw">in</span> records<span class="op">:</span>
+        _walk_to_head(record.id, successor, heads)
+    current <span class="op">=</span> tuple(r.id <span class="kw">for</span> r <span class="kw">in</span> records <span class="kw">if</span> r.id <span class="kw">not</span> <span class="kw">in</span> successor)
+    <span class="kw">return</span> <span class="cls">Resolution</span>(heads<span class="op">=</span>heads, current<span class="op">=</span>current, dangling<span class="op">=</span>tuple(dangling))</code></pre></div>
+
+<p><code class="inl">current</code> 就是检索时该用的集合：没有继任者的记录。<code class="inl">heads</code> 用来回答另一个问题：「用户问起那条旧偏好时，现在生效的是哪条？」</p>
+
+<h3 id="hx-12-s4-1">OpenHarness：有 supersedes 字段，但没有消费方</h3>
+
+<p>OpenHarness 在 frontmatter 里定义了 <code class="inl">supersedes</code>。因为它是字段而不是函数，<code class="inl">codegraph callers</code> 追不到，改用 <code class="inl">git grep supersedes</code> 在钉住 commit 的 <code class="inl">src/</code> 和 <code class="inl">ohmo/</code> 下搜（<code class="inl">autopilot</code> 里的 <code class="inl">"superseded"</code> 是任务状态，与记忆无关，已排除）。命中点按写入和读取分开列：</p>
+
+<div class="table-wrap"><table><thead><tr><th>角色</th><th>位置</th><th>做了什么</th></tr></thead><tbody>
+<tr><td>声明</td><td><code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:47" data-expect="&quot;supersedes&quot;,">schema.py:47</code></td><td>frontmatter 字段顺序表里的一项</td></tr>
+<tr><td>声明</td><td><code class="inl src-ref" data-src="oh:src/openharness/memory/types.py:30" data-expect="supersedes: tuple[str, ...] = ()">types.py:30</code></td><td><code class="inl">MemoryHeader</code> 的字段</td></tr>
+<tr><td>写入</td><td><code class="inl src-ref" data-src="oh:src/openharness/memory/manager.py:110" data-expect="&quot;supersedes&quot;: metadata.get(&quot;supersedes&quot;) or [],">manager.py:110</code></td><td>upsert 时原样带过去，没有则写空列表</td></tr>
+<tr><td>写入</td><td><code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:366" data-expect="updated[&quot;supersedes&quot;] = list(coerce_str_list(">schema.py:366</code></td><td>迁移/补全元数据时规范化成字符串列表</td></tr>
+<tr><td>写入</td><td><code class="inl src-ref" data-src="oh:ohmo/memory.py:97" data-expect="&quot;supersedes&quot;: metadata.get(&quot;supersedes&quot;) or [],">ohmo/memory.py:97</code></td><td>ohmo 的同构实现</td></tr>
+<tr><td>读取（唯一一处）</td><td><code class="inl src-ref" data-src="oh:src/openharness/memory/scan.py:104" data-expect="supersedes=coerce_str_list(metadata.get(&quot;supersedes&quot;)),">scan.py:104</code></td><td>从 frontmatter 解析进 <code class="inl">header.supersedes</code></td></tr>
+</tbody></table></div>
+
+<p>解析之后就没有下文了：<code class="inl">git grep '\.supersedes'</code> 在 <code class="inl">src/</code> 和 <code class="inl">ohmo/</code> 里零命中，没有任何代码读 <code class="inl">header.supersedes</code>。检索（<code class="inl src-ref" data-src="oh:src/openharness/memory/search.py:31" data-expect="for header in scan_memory_files(cwd, max_files=100):">search.py:31</code>）只靠扫描时过滤掉禁用和过期的文件，被替代的旧记忆照样参与打分。旧记忆如果比新记忆多命中几个词，或者 <code class="inl">use_count</code> 更高，就会排在前面。</p>
+
+<p>OpenHarness 实际的替代机制在提示词里：autodream 的提示要求子进程把「过时、错误或被替代」的记忆文件设成 <code class="inl">disabled: true</code>、不要删除（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/prompt.py:102" data-expect="For stale, wrong, or superseded memory files, set">prompt.py:102</code>），并在文件头里维护 <code class="inl">supersedes</code> 字段（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/prompt.py:65" data-expect="`signature`, `created_at`, `updated_at`, `ttl_days`, `disabled`, and `supersedes`.">prompt.py:65</code>）。所以 <code class="inl">supersedes</code> 目前是给人看的出处记录，真正让旧记忆退出检索的是 <code class="inl">disabled</code>，而它要靠模型在整理时记得去设。在那之前，新旧两条会同时被检索到。</p>
+
+<blockquote><p><strong>一个字段被写、被解析、被模型维护，但从没被读</strong>：这种情况在记忆系统里很常见。核对「某机制是否生效」的标准方法是分开列出写入点和读取点；只看 schema 和写入点，很容易得出「它支持替代链」的错误结论。</p></blockquote>
+
+<h2 id="hx-12-s5">合并/整理：让模型重写记忆库</h2>
+
+<p>前三种手段都是逐条判断。合并（consolidation）是整体判断：后台把一批记忆交给模型，让它去重、解决矛盾、删掉没用的，再写回一批更少、更干净的记忆。它是唯一能处理「三条记忆各说了一半」这种情况的手段，也是唯一会<strong>改写记忆内容</strong>的手段。前三种手段出错，最多是该留的被降权；合并出错，库里会多出一条模型编出来的「事实」，而且看起来和其他记忆一模一样。</p>
+
+<h3 id="hx-12-s5-1">三个仓库的做法</h3>
+
+<p><strong>amt 14_memory_consolidation</strong>：先聚类，簇内近似重复的交给模型合成一条（<code class="inl src-ref" data-src="amt:all_techniques/14_memory_consolidation/memory_consolidation.ipynb:507" data-expect="merged_text = merge_memories_with_llm(dup_group)">notebook 第 507 行</code>），再检测矛盾、由 resolver 选出赢家，输家直接从工作集移除（<code class="inl src-ref" data-src="amt:all_techniques/14_memory_consolidation/memory_consolidation.ipynb:527" data-expect="working = [m for m in working if m.id not in loser_ids]">第 527 行</code>）。合并后的记录只保留最新那条的来源（<code class="inl src-ref" data-src="amt:all_techniques/14_memory_consolidation/memory_consolidation.ipynb:511" data-expect="source=newest.source,">第 511 行</code>），notebook 里搜不到 <code class="inl">source_ids</code>、<code class="inl">provenance</code> 这类字段：合并之后说不清这条记忆是从哪几条来的。</p>
+
+<p><strong>learn-claude-code s09</strong>：记忆数达到 <code class="inl">CONSOLIDATE_THRESHOLD = 10</code>（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:73" data-expect="CONSOLIDATE_THRESHOLD = 10">code.py:73</code>）就触发。<code class="inl">consolidate_memories</code>（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:456" data-expect="def consolidate_memories() -&gt; int:">第 456 行</code>）把全部记录拼成目录交给模型，提示里写的是「合并重复、采纳更新的更正、删掉不再有用的信息、保留具体的用户偏好」（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:470" data-expect="Merge duplicates, apply newer corrections, and remove information that">第 470 行</code>），最多 30 条。写回的方式是先删光所有记忆文件，再写新的（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:506-522" data-expect="for path in MEMORY_DIR.glob(&quot;*.md&quot;):">第 506-522 行</code>）。它有快照，但只在写盘抛异常时才恢复（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:531" data-expect="for filename, content in snapshot.items():">第 531 行</code>）；模型「成功地」丢掉了一条偏好，快照不会被用上，旧内容也不再保存在任何地方。注意这里的「替代」是隐式的：「采纳更新的更正」全靠模型判断哪条更新，记录本身没有替代关系。</p>
+
+<p><strong>OpenHarness autodream</strong>：在主会话之外起一个子进程跑整理（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/service.py:97" data-expect="async def start_dream_now(">service.py:97</code>）。它比 lcc 多做了几件事：非预览模式下先整体备份记忆目录（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/service.py:144" data-expect="backup_dir = create_memory_backup(resolved_memory_dir">第 144 行</code>），备份有对应的恢复函数（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/backup.py:91" data-expect="def restore_memory_backup(">backup.py:91</code>）；把 <code class="inl">find_stale_memory_candidates</code> 选出的候选（最多 20 条）写进提示（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/service.py:145" data-expect="stale_candidates = find_stale_memory_candidates(cwd">第 145 行</code>），候选的条件是 importance ≤ 1、从没被用过、60 天没更新（<code class="inl src-ref" data-src="oh:src/openharness/memory/usage.py:107" data-expect="def find_stale_memory_candidates(">usage.py:107</code>、<code class="inl src-ref" data-src="oh:src/openharness/memory/usage.py:18" data-expect="STALE_UNUSED_DAYS = 60">第 18 行</code>），而且提示明确说这些只是「待审候选」，不是删除指令（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/prompt.py:103" data-expect="Treat usage-based stale candidates as review candidates">prompt.py:103</code>）；旧文件改成 <code class="inl">disabled: true</code> 而不是删除（<a href="#hx-12-s4-1">上一节</a>）。</p>
+
+<p>但它的边界大多是文字约束。「只能修改记忆目录下的文件」写在提示里（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/service.py:153" data-expect="only modify files under the memory directory.">service.py:153</code>）；传给子进程的环境变量 <code class="inl">OPENHARNESS_AUTODREAM_MEMORY_DIR</code>（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/service.py:165" data-expect="&quot;OPENHARNESS_AUTODREAM_MEMORY_DIR&quot;: str(resolved_memory_dir),">第 165 行</code>）在全仓搜索只有这一处，没有代码读它来限制写入范围；整理子进程由 <code class="inl">openharness</code> 模块运行时，会加上 <code class="inl">--dangerously-skip-permissions</code> 启动（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/service.py:176-177" data-expect="if runner_module == &quot;openharness&quot;:">第 176-177 行</code>），走 <code class="inl">ohmo</code> 时不加，测试里有断言（<code class="inl src-ref" data-src="oh:tests/test_services/test_autodream.py:192" data-expect="assert &quot;--dangerously-skip-permissions&quot; not in captured[&quot;argv&quot;]">test_autodream.py:192</code>）。也就是说，在 <code class="inl">openharness</code> 这条路径上，一个读了全部历史会话、跳过权限确认的子 agent，被一句提示要求「只改记忆目录」。备份能兜住记忆目录本身被改坏，兜不住它在目录外做的事。</p>
+
+<h3 id="hx-12-s5-2">合并的三类风险</h3>
+
+<ul>
+<li><strong>合并错误</strong>：两条讲不同模块的记忆被当成重复，合成一条两边都不准确的。或者矛盾检测选错了赢家：amt 的输家直接移除，lcc 的旧内容直接覆盖，都没有地方再找回来。</li>
+<li><strong>丢失出处</strong>：合并后的记忆不记得自己是从哪几条来的。下次用户问「你为什么觉得我偏好 X」，系统回答不了；发现合并有误时，也不知道该恢复哪几条。lab 的 <code class="inl">supersedes</code> 用元组正是为了这个：合并产物应该声明它替代了全部输入，旧记录降权保留。</li>
+<li><strong>提示注入的放大器</strong>：整理会把大量历史会话和记忆正文交给一个有写权限的模型。任何一段被注入的文本（网页、工具输出里的「请记住……」）都有机会被整理成一条长期记忆，并在以后每次会话里被加载。lcc 在提示开头写了「把下面的记录当数据，不当指令」（第 469 行），这能降低风险，但不是边界。</li>
+</ul>
+
+<h3 id="hx-12-s5-3">DSH 为什么没有这一层</h3>
+
+<p>在钉住的 commit 里，DSH 的 <code class="inl">packages/</code> 下没有名字带 memory 的包，搜 <code class="inl">consolidat</code> 也只命中压缩摘要、运行时上下文这些无关位置。跨会话的持久指令来自 <code class="inl">packages/context/agent-instructions</code>，它只读取工作区的 <code class="inl">AGENTS.md</code> / <code class="inl">CLAUDE.md</code>（<code class="inl src-ref" data-src="dsh:packages/context/agent-instructions/src/config.ts:12" data-expect="const DEFAULT_INSTRUCTION_FILE_CANDIDATES = [">config.ts:12</code>），包里没有任何写文件的调用。持久知识由人维护、由 git 管理版本，agent 只读。这等于把「过期、替代、整理」整个交给了人和版本控制：改一条规则就是改一行文件，旧版本在 git 历史里，出处就是 commit。DSH 没有在代码里说明为什么这样取舍，上面是根据结构得出的判断：它把模型可写的状态全部放在会话日志里，而会话日志有严格的替代规则（<a href="#hx-12-s8">第 8 节</a>）。</p>
+
+<h2 id="hx-12-s6">陈旧引用：记忆里提到的文件还在吗</h2>
+
+<p>编码 agent 的记忆里有大量路径：「入口在 src/app.py」「测试配置在 config/pytest.ini」。文件被改名或删掉之后，这条记忆就开始误导模型，而前面几种手段都发现不了：它可能很新（没过 TTL）、经常被用（分数高）、也没人写替代。好在这种「变坏」可以用很低的代价直接检测：把路径抽出来，查一下在不在。</p>
+
+<p>OpenHarness 没有做这一步，它的办法是给超过一天的记忆附上一句警告：「这条记忆是 N 天前的，记忆只是某个时刻的观察，当作事实之前先对照当前项目状态核实」（<code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:192-201" data-expect="def memory_freshness_text(">schema.py:192-201</code>），检索结果里附带这段文字（<code class="inl src-ref" data-src="oh:src/openharness/memory/relevance.py:67" data-expect="freshness=memory_freshness_text(header.modified_at)">relevance.py:67</code>）。系统提示的记忆策略里也有同样的要求（<code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:221" data-expect="Memory can be stale. Verify remembered project/code state">第 221 行</code>）。这是把校验交给模型：模型需要自己决定要不要去 <code class="inl">ls</code> 一下，而它通常不会。路径存不存在这种事不需要模型判断，harness 一次 <code class="inl">stat</code> 就能回答。</p>
+
+<p>lab 的实现分两步。第一步抽候选：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::path_candidates"><span class="kw">def</span> <span class="fn">path_candidates</span>(text<span class="op">:</span> str) <span class="op">-&gt;</span> list[str]<span class="op">:</span>
+    <span class="str">"""从正文里抽出「看起来像仓库内路径」的片段，去重、保序、统一成正斜杠。
+
+    必须带目录分隔符：裸文件名（build.mjs）和 Node.js 这种词在字面上分不开，
+    一律不查。代价是根目录下的文件被删了查不出来。
+    """</span>
+    found<span class="op">:</span> list[str] <span class="op">=</span> []
+    <span class="kw">for</span> token <span class="kw">in</span> _TOKEN_SPLIT.split(text)<span class="op">:</span>
+        token <span class="op">=</span> _LINE_SUFFIX.sub(<span class="str">""</span>, token.replace(<span class="str">"\\"</span>, <span class="str">"/"</span>).rstrip(<span class="str">".:!?"</span>))
+        token <span class="op">=</span> token.removeprefix(<span class="str">"./"</span>)
+        <span class="kw">if</span> <span class="str">"/"</span> <span class="kw">not</span> <span class="kw">in</span> token <span class="kw">or</span> <span class="str">"://"</span> <span class="kw">in</span> token<span class="op">:</span>
+            <span class="kw">continue</span>
+        last <span class="op">=</span> token.rstrip(<span class="str">"/"</span>).rsplit(<span class="str">"/"</span>, <span class="num">1</span>)[<span class="op">-</span><span class="num">1</span>]
+        ext <span class="op">=</span> last.rsplit(<span class="str">"."</span>, <span class="num">1</span>)[<span class="op">-</span><span class="num">1</span>].lower() <span class="kw">if</span> <span class="str">"."</span> <span class="kw">in</span> last <span class="kw">else</span> <span class="str">""</span>
+        <span class="kw">if</span> (token.endswith(<span class="str">"/"</span>) <span class="kw">or</span> ext <span class="kw">in</span> <span class="cls">PATH_EXTENSIONS</span>) <span class="kw">and</span> token <span class="kw">not</span> <span class="kw">in</span> found<span class="op">:</span>
+            found.append(token)
+    <span class="kw">return</span> found</code></pre></div>
+
+<p>设计原则是<strong>宁可漏报，不要误报</strong>。一个总在喊「已失效」的检查很快会被所有人忽略，所以规则收得很紧：必须带目录分隔符、扩展名在白名单里（或者以 <code class="inl">/</code> 结尾表示目录），URL 排除，<code class="inl">:12</code> 这样的行号后缀去掉，反斜杠统一成正斜杠。代价写在 docstring 里：根目录下的裸文件名查不出来。</p>
+
+<p>第二步查存在性：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::find_stale_references"><span class="kw">def</span> <span class="fn">find_stale_references</span>(record_text<span class="op">:</span> str, repo_root<span class="op">:</span> str <span class="op">|</span> <span class="cls">Path</span>) <span class="op">-&gt;</span> list[str]<span class="op">:</span>
+    <span class="str">"""返回正文里提到、但在 repo_root 下已经不存在的路径。只查路径，不查符号。
+
+    绝对路径和跳出 repo_root 的路径（``../``）不检查：记忆正文是不可信数据，
+    不该拿它去探测仓库外的文件系统。
+    """</span>
+    root <span class="op">=</span> <span class="cls">Path</span>(repo_root).resolve()
+    missing<span class="op">:</span> list[str] <span class="op">=</span> []
+    <span class="kw">for</span> candidate <span class="kw">in</span> path_candidates(record_text)<span class="op">:</span>
+        <span class="kw">if</span> candidate.startswith((<span class="str">"/"</span>, <span class="str">"~"</span>)) <span class="kw">or</span> re.<span class="kw">match</span>(<span class="str">r"^[A-Za-z]:"</span>, candidate)<span class="op">:</span>
+            <span class="kw">continue</span>
+        target <span class="op">=</span> (root <span class="op">/</span> candidate).resolve()
+        <span class="kw">if</span> <span class="kw">not</span> target.is_relative_to(root)<span class="op">:</span>
+            <span class="kw">continue</span>
+        <span class="kw">if</span> <span class="kw">not</span> target.exists()<span class="op">:</span>
+            missing.append(candidate)
+    <span class="kw">return</span> missing</code></pre></div>
+
+<p>绝对路径和 <code class="inl">../</code> 跳出仓库的路径一律不查。原因不是性能，是安全：记忆正文可能来自工具输出或网页，属于不可信数据。如果它写着 <code class="inl">../../home/user/.ssh/id_rsa</code>，检查结果「存在 / 不存在」本身就泄露了仓库外的文件系统信息。测试 <code class="inl">test_paths_outside_root_are_not_probed</code> 钉住这一条。</p>
+
+<p>只查路径、不查符号，是故意的范围控制。函数名是否还存在要解析代码（或者至少 grep 全仓），成本高一个数量级，而且「函数还在但行为变了」它也查不出来。路径检查覆盖了最常见的失效（改名、移动、删除），代价是每条记忆几次 <code class="inl">stat</code>。</p>
+
+<h2 id="hx-12-s7">一次清理：sweep</h2>
+
+<p>前面四种判断各自都是纯函数，<code class="inl">sweep</code> 把它们按顺序串起来，给每条记录一个去向和一句理由：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::_judge"><span class="kw">def</span> <span class="fn">_judge</span>(
+    record<span class="op">:</span> <span class="cls">MemoryRecord</span>, now<span class="op">:</span> float, policy<span class="op">:</span> <span class="cls">SweepPolicy</span>, resolution<span class="op">:</span> <span class="cls">Resolution</span>
+) <span class="op">-&gt;</span> tuple[str, str]<span class="op">:</span>
+    head <span class="op">=</span> resolution.heads[record.id]
+    <span class="kw">if</span> head <span class="op">!=</span> record.id<span class="op">:</span>
+        <span class="kw">return</span> <span class="str">"demote"</span>, <span class="str">f"已被替代，当前版本是 {head}"</span>
+    <span class="kw">if</span> is_expired(record, now, policy.ttl_by_type)<span class="op">:</span>
+        <span class="kw">return</span> policy.expired_action, <span class="str">f"{record.type} 类型的 TTL 已到"</span>
+    <span class="kw">if</span> policy.repo_root <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+        missing <span class="op">=</span> find_stale_references(record.text, policy.repo_root)
+        <span class="kw">if</span> missing<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"demote"</span>, <span class="str">"引用的路径已不存在："</span> <span class="op">+</span> <span class="str">", "</span>.join(missing)
+    score <span class="op">=</span> decayed_score(record, now, policy.half_life)
+    <span class="kw">if</span> score <span class="op">&lt;</span> policy.delete_below <span class="kw">and</span> record.type <span class="kw">not</span> <span class="kw">in</span> policy.never_decay_delete<span class="op">:</span>
+        <span class="kw">return</span> <span class="str">"delete"</span>, <span class="str">f"衰减后得分 {score:.3f} 低于删除线"</span>
+    <span class="kw">if</span> score <span class="op">&lt;</span> policy.demote_below<span class="op">:</span>
+        <span class="kw">return</span> <span class="str">"demote"</span>, <span class="str">f"衰减后得分 {score:.3f} 低于降权线"</span>
+    <span class="kw">return</span> <span class="str">"keep"</span>, <span class="str">f"得分 {score:.3f}"</span></code></pre></div>
+
+<p>判定顺序就是 <a href="#hx-12-s1">第 1 节</a>那三个问题的顺序：先问「还对吗」（替代、TTL），再问「指的东西还在吗」，最后才问「还有用吗」。几个具体的决定：</p>
+
+<ul>
+<li><strong>被替代的只降权，不删。</strong>如果删掉，新记录的 <code class="inl">supersedes</code> 就变成悬空引用，「为什么改」也查不到了。</li>
+<li><strong>陈旧路径只降权，不删。</strong>文件可能只是改了名，这条记忆的其他内容（「入口模块负责解析参数」）可能还对。降权后它不再进检索，但人可以看到原因、改掉路径再恢复。</li>
+<li><strong>user / feedback 类型衰减到底也不删。</strong>「永远不要直接推 main」这种记忆一年可能只用到一次，但用到那一次很关键。衰减最多把它们降权。</li>
+</ul>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/memory_lifecycle.py::sweep"><span class="kw">def</span> <span class="fn">sweep</span>(records<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">MemoryRecord</span>], now<span class="op">:</span> float, policy<span class="op">:</span> <span class="cls">SweepPolicy</span>) <span class="op">-&gt;</span> <span class="cls">SweepResult</span><span class="op">:</span>
+    <span class="str">"""一次清理。判定顺序：被替代 → TTL 过期 → 陈旧路径 → 衰减分数，先命中先算。
+
+    被替代的旧记录只降权不删：读取时不再返回它，但「为什么改」还能追溯。
+    """</span>
+    resolution <span class="op">=</span> resolve_supersedes(records, allow_dangling<span class="op">=</span><span class="kw">True</span>)
+    groups<span class="op">:</span> dict[str, list[<span class="cls">Verdict</span>]] <span class="op">=</span> {<span class="str">"keep"</span><span class="op">:</span> [], <span class="str">"demote"</span><span class="op">:</span> [], <span class="str">"delete"</span><span class="op">:</span> []}
+    issues <span class="op">=</span> [<span class="str">f"{who} 替代的 {target} 已不存在（多半是被清理了）"</span>
+              <span class="kw">for</span> who, target <span class="kw">in</span> resolution.dangling]
+    <span class="kw">for</span> record <span class="kw">in</span> records<span class="op">:</span>
+        <span class="kw">try</span><span class="op">:</span>
+            group, reason <span class="op">=</span> _judge(record, now, policy, resolution)
+        <span class="kw">except</span> <span class="cls">ValueError</span> <span class="kw">as</span> error<span class="op">:</span>
+            <span class="cmt"># 一条坏数据不该让整次清理中止：原样保留，问题单独报出来。</span>
+            group, reason <span class="op">=</span> <span class="str">"keep"</span>, <span class="str">f"未判定：{error}"</span>
+            issues.append(str(error))
+        groups[group].append(<span class="cls">Verdict</span>(record, reason))
+    <span class="kw">return</span> <span class="cls">SweepResult</span>(
+        keep<span class="op">=</span>tuple(groups[<span class="str">"keep"</span>]),
+        demote<span class="op">=</span>tuple(groups[<span class="str">"demote"</span>]),
+        delete<span class="op">=</span>tuple(groups[<span class="str">"delete"</span>]),
+        issues<span class="op">=</span>tuple(issues),
+    )</code></pre></div>
+
+<p>两类错误的处理方式不同。单条记录的坏数据（类型拼错、ttl 为 0）只影响它自己：原样保留，问题记进 <code class="inl">issues</code>，清理继续。替代链成环或分叉则让整次 <code class="inl">sweep</code> 失败：<code class="inl">SupersedeError</code> 在 <code class="inl">resolve_supersedes</code> 里就抛出了，不在 <code class="inl">try</code> 的范围内。原因是环影响的不是一条记录，而是「哪条是当前版本」这个全局问题，带着它继续清理，可能把唯一正确的那条删掉。测试 <code class="inl">test_groups_and_reasons</code> 用十条记录覆盖了每一种去向，<code class="inl">test_cycle_aborts_sweep</code> 钉住环必须中止。</p>
+
+<h2 id="hx-12-s8">对照：DSH 把「替代」用在会话日志上</h2>
+
+<p>DSH 没有长期记忆层，但「新的声明替代旧的、读取只看链尾、历史保留」这个思想在它的会话日志里用得很彻底。两层面对的问题一样：模型应该看到当前版本，人需要能追溯。</p>
+
+<p><strong>结构化替代。</strong>会话日志只追加。要「改写」历史里的某一段（压缩成摘要、更新系统提示），就追加一条带 <code class="inl">surfaceOp: replace</code> 的新事件，写明替代的是哪个区间，并在 <code class="inl">sourceEventSeqs</code> 里列出被替代的事件（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:108" data-expect="sourceEventSeqs: [seq]">runtime-context.ts:108</code>；压缩也是同一个写法，<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:508" data-expect="sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...shadowedSeqs]">region.ts:508</code>）。模型看到的 surface 只显示替代后的版本，旧事件仍在日志里，给人看的转录用的就是这些原始事件（<code class="inl src-ref" data-src="dsh:packages/core/session/src/surface.ts:82-85" data-expect="The model-visible surface deliberately shadows replaced ranges">surface.ts:82-85</code>）。这正是「读取只取链尾，历史可追溯」。</p>
+
+<p>更值得看的是 surface 对替代声明的三条校验，正好对应 lab 处理的三种坏数据：</p>
+
+<ul>
+<li><strong>环</strong>：来源必须是<strong>更早</strong>的事件，<code class="inl">source &gt;= event.seq</code> 直接报错（<code class="inl src-ref" data-src="dsh:packages/core/session/src/surface.ts:358" data-expect="sourceEventSeqs must reference earlier events">surface.ts:358</code>）。引用只能指向过去，所以环在结构上就不可能出现，不需要检测。lab 的记忆没有这种全序（多台机器、合并、手改文件都会打乱时间），只能在读取时检测。如果你的记忆库有可靠的单调序号，照抄这条规则是更好的选择：写入时拒绝「替代一条更新的记录」。</li>
+<li><strong>重复与遗漏</strong>：来源不能重复（<code class="inl src-ref" data-src="dsh:packages/core/session/src/surface.ts:355" data-expect="sourceEventSeqs must not contain duplicates">第 355 行</code>），而且必须覆盖每一个被遮蔽的节点，少一个就报错（<code class="inl src-ref" data-src="dsh:packages/core/session/src/surface.ts:361-364" data-expect="const missing = shadowedSeqs.filter(">第 361-364 行</code>）。这等于要求替代关系必须<strong>完整声明</strong>，不允许「顺手」遮蔽掉一条没提到的记录。合并记忆时同样适用：合并产物的 <code class="inl">supersedes</code> 应该列全所有输入。</li>
+<li><strong>悬空</strong>：日志只追加、不删除，被引用的事件永远在，悬空引用不会出现。记忆层要删记录，所以 lab 的 <code class="inl">sweep</code> 必须容忍悬空（<code class="inl">allow_dangling=True</code>），并把它们报出来。</li>
+</ul>
+
+<p><strong>文字声明的替代。</strong>运行时上下文（时间、工作目录这类每轮都可能变的信息）不走 replace，每一份新快照都追加在历史末尾（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:430" data-expect="context, { surfaceOp:">agent.ts:430</code>），开头写明「本快照替代之前所有的运行时上下文快照」（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:313" data-expect="This snapshot supersedes earlier runtime-context snapshots.">system-prompt/index.ts:313</code>）。系统提示也是这样分两种情况：还没进入历史、或者新开一个系列时，用上面那种 replace 改写；已经在历史里了，变化就追加一条新的系统消息，不改写旧的（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:101-102" data-expect="if (latest.text === rendered) return []">runtime-context.ts:101-102</code>）。改写旧消息会让之后的前缀缓存全部失效（<a href="#hx-06">hx-06</a>），追加不会。代价是旧快照仍在模型能看到的历史里，「只看链尾」要靠模型读懂那句声明。</p>
+
+<p>上下文被清空时，DSH 也不是什么都不写，而是写一条墓碑：「当前没有运行时上下文，之前的快照不再适用」（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:20" data-expect="const CLEARED = ">runtime-context.ts:20</code>、<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:154" data-expect="const snapshot = current.length === 0 ? CLEARED : current">第 154 行</code>）。如果什么都不写，旧快照就是历史里最后一份，模型会继续相信它。记忆层的「删除一条错误记忆」也有同样的问题：如果模型的上下文里已经有那条记忆（比如在本会话前面被检索到过），光删文件是不够的。</p>
+
+<blockquote><p><strong>两层的差别在于谁来保证「只看链尾」</strong>：DSH 的结构化替代由 harness 保证，模型根本看不到旧版本；文字替代和 OpenHarness 的 <code class="inl">supersedes</code> 一样，旧版本仍然可见，靠模型自己判断哪条是新的。能用结构保证的，就不要交给模型。</p></blockquote>
+
+<h2 id="hx-12-s9">坑与失败案例</h2>
+
+<h3 id="hx-12-s9-1">坑一：再写一次同样的内容，过期和禁用的记忆都「复活」了</h3>
+<p><strong>触发条件</strong>：OpenHarness 里一条记忆已经过了 TTL，或者被 autodream 标成 <code class="inl">disabled: true</code>（因为它被替代了）。之后某次会话里，模型根据上下文里残留的旧信息，又写了一条内容相同的记忆。</p>
+<p><strong>后果</strong>：<code class="inl">upsert_memory_file</code> 去重时扫描是带着 <code class="inl">include_disabled=True</code>、<code class="inl">include_expired=True</code> 的（<code class="inl src-ref" data-src="oh:src/openharness/memory/manager.py:67-68" data-expect="include_disabled=True,">manager.py:67-68</code>），签名一致就复用那个旧文件。随后 <code class="inl">updated_at</code> 写成现在（<code class="inl src-ref" data-src="oh:src/openharness/memory/manager.py:107" data-expect="updated_at&quot;: now_text,">第 107 行</code>），<code class="inl">disabled</code> 写成 <code class="inl">False</code>（<code class="inl src-ref" data-src="oh:src/openharness/memory/manager.py:109" data-expect="&quot;disabled&quot;: False,">第 109 行</code>）。TTL 从 <code class="inl">updated_at</code> 起算（<code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:289" data-expect="base_time = parse_datetime(metadata.get(">schema.py:289</code>），于是过期记忆重新计时，被替代的旧记忆重新启用。替代它的那条新记忆还在，检索结果里新旧两条同时出现，而 <code class="inl">supersedes</code> 没人读（<a href="#hx-12-s4-1">第 4.1 节</a>），没有任何东西会把旧的再压下去。</p>
+<p><strong>源码怎么防的</strong>：没防。去重包含禁用和过期文件是有意的（避免同内容生成多个文件），问题在于「复用文件」和「复活记录」被绑在了一起。如果用户真的重新确认了这条事实，复活是对的；如果只是模型复读，就是错的，而写入路径分不清这两种情况。</p>
+<p><strong>lab 怎么处理</strong>：TTL 从 <code class="inl">created_at</code> 起算，<code class="inl">touch</code> 只改衰减时钟，不碰 TTL（<code class="inl">test_ttl_counts_from_creation_not_access</code>）。真要「重新确认」，就写一条新记录并声明 <code class="inl">supersedes</code> 旧的，让这个动作在数据里留下痕迹。</p>
+
+<h3 id="hx-12-s9-2">坑二：把衰减写回存储，要么衰减两次，要么篡改访问时间</h3>
+<p><strong>触发条件</strong>：为了省计算，把衰减后的分数写回记录的 <code class="inl">strength</code>。</p>
+<p><strong>后果</strong>：如果只写回分数、不动时钟，下一次结算会从同一个起点再衰减一遍。每天跑一次清理，第 n 天的衰减量就被算了 n 次，记忆会比半衰期描述的快得多地消失。如果像 amt 那样同时把 <code class="inl">last_accessed</code> 改成现在（<code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:236" data-expect="memory.last_accessed = now">第 236 行</code>），数学上对了（指数衰减可以分段相乘），但这个字段从此表示「上次结算」而不是「上次访问」（<a href="#hx-12-s3-2">第 3.2 节</a>）。之后任何「N 天没人用就清理」的规则都会失效，因为每次检索前的全量结算都把所有记忆的时钟拨到了现在。</p>
+<p><strong>源码怎么防的</strong>：amt 选了第二种，并在注释里说明了时钟语义的变化；它的 <code class="inl">prune</code> 只看 strength，不看 idle 时间，所以 notebook 里这个问题没有暴露出来。</p>
+<p><strong>lab 怎么处理</strong>：<code class="inl">decayed_score</code> 是纯函数，只算不写；只有真正的访问 <code class="inl">touch</code> 才同时结算强度并移动时钟。存储里的 <code class="inl">strength</code> 永远是「在 <code class="inl">last_accessed_at</code> 那一刻」的值。测试 <code class="inl">test_touch_resets_decay_clock</code> 和 <code class="inl">test_scores_match_formula</code> 一起钉住了这个语义。</p>
+
+<h3 id="hx-12-s9-3">坑三：合并「成功」地丢掉了一条偏好</h3>
+<p><strong>触发条件</strong>：learn-claude-code s09 的记忆数达到 10 条，触发整理。模型返回的 JSON 合法、非空、名字不重复，但漏掉了一条用户偏好（或者把两条不同的偏好合成了一条含糊的）。</p>
+<p><strong>后果</strong>：写回前的校验只有两条：结果不能为空，名字不能重复（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:494" data-expect="if not consolidated or len(slugs) != len(set(slugs)):">code.py:494</code>）。通过之后先删光全部记忆文件（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:506-509" data-expect="for path in MEMORY_DIR.glob(&quot;*.md&quot;):">第 506-509 行</code>），再写新的。快照只在写盘过程抛异常时才写回（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:524" data-expect="except Exception:">第 524 行</code>），函数正常返回后快照就没了。漏掉的那条偏好没有留在任何地方，下次会话模型也不会知道它曾经存在。</p>
+<p><strong>源码怎么防的</strong>：只防了「写到一半崩掉」，没防「模型写错了」。后者在代码里很难判断，所以能做的是让它可以撤销。OpenHarness 的 autodream 先整体备份（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/service.py:144" data-expect="backup_dir = create_memory_backup(resolved_memory_dir">service.py:144</code>），旧文件改成禁用而不是删除，这两步都是为了让错误的整理可以撤销。</p>
+<p><strong>lab 怎么处理</strong>：lab 不做合并，但给合并留了正确的接口：合并产物在 <code class="inl">supersedes</code> 里列出全部输入（<code class="inl">test_merge_supersedes_several</code>），<code class="inl">sweep</code> 把被替代的输入降权而不是删除。漏掉一条时，它仍在降权组里，原因写着「已被替代，当前版本是 …」，人可以对照着找回来。</p>
+
+<h3 id="hx-12-s9-4">坑四：记忆被「隐藏」了，索引里的指针还在</h3>
+<p><strong>触发条件</strong>：OpenHarness 的一条记忆过了 TTL，或者被手动改成 <code class="inl">disabled: true</code>。</p>
+<p><strong>后果</strong>：扫描会跳过它（<code class="inl src-ref" data-src="oh:src/openharness/memory/scan.py:39-42" data-expect="if header.disabled and not include_disabled:">scan.py:39-42</code>），所以检索不到。但每次会话的系统提示会把 <code class="inl">MEMORY.md</code> 原文注入进去（<code class="inl src-ref" data-src="oh:src/openharness/memory/memdir.py:33-42" data-expect="if entrypoint.exists():">memdir.py:33-42</code>），而索引行是 upsert 时追加的（<code class="inl src-ref" data-src="oh:src/openharness/memory/manager.py:118-119" data-expect="if path.name not in index_text:">manager.py:118-119</code>）。TTL 到期不会改这个文件，所以模型仍然看得到这条记忆的标题和文件名。文件本身也还在磁盘上，模型想看的话，用读文件工具就能读到正文。隐藏只对检索有效，对索引无效。</p>
+<p><strong>源码怎么防的</strong>：只有通过 <code class="inl">/memory</code> 命令删除才会同时清理索引行（<code class="inl src-ref" data-src="oh:src/openharness/memory/manager.py:151-156" data-expect="entrypoint = get_memory_entrypoint(cwd)">manager.py:151-156</code>）。TTL 过期和 autodream 设 <code class="inl">disabled</code> 都不走这条路径；后者要靠模型自己记得去改索引。</p>
+<p><strong>通用化</strong>：只要一条记忆有不止一个读取入口（检索、索引、命令、直接读文件），「过期」「被替代」就必须在每个入口都生效。最稳的做法是只保留一个读取入口，由它统一过滤；或者让索引从记录<strong>生成</strong>，而不是增量维护。lab 的 <code class="inl">Resolution.current</code> 就是这种唯一入口：调用方只拿当前版本，看不到被替代的记录。</p>
+
+<h3 id="hx-12-s9-5">坑五：沿着 supersedes 走到链尾，结果死循环</h3>
+<p><strong>触发条件</strong>：两次整理各自独立地写了替代关系：第一次让 A 替代 B，第二次模型看到的 B 更新（或者手改了文件头），又让 B 替代 A。或者一条记录不小心声明替代自己。</p>
+<p><strong>后果</strong>：天真的实现是「从任意记录出发，只要有继任者就往前走」。遇到环就永远走不到头，检索请求卡死。不卡死的实现（比如设最大步数）也有问题：它会在环上某个随机位置停下，返回的「当前版本」取决于从哪条出发。分叉（B 和 C 都声明替代 A）同样没有唯一的链尾。</p>
+<p><strong>源码怎么防的</strong>：OpenHarness 不会踩到这个坑，因为它根本不沿链走（<a href="#hx-12-s4-1">第 4.1 节</a>）；一旦有人补上消费方，就会第一个遇到它。DSH 在结构上排除了环：来源只能是更早的事件（<code class="inl src-ref" data-src="dsh:packages/core/session/src/surface.ts:358" data-expect="sourceEventSeqs must reference earlier events">surface.ts:358</code>）。</p>
+<p><strong>lab 怎么处理</strong>：<code class="inl">resolve_supersedes</code> 先建「旧 → 新」的继任表，遇到分叉立即报错；然后对每条记录沿表前进，用访问标记检测环，报出整个环的成员（<code class="inl">test_cycle_is_reported_not_looped</code>、<code class="inl">test_self_supersede_is_a_cycle</code>、<code class="inl">test_fork_is_rejected</code>）。已经解析过的节点直接复用结果，2000 条长链正序倒序都是线性时间（<code class="inl">test_long_chain_is_linear</code>）。<code class="inl">sweep</code> 遇到环直接中止（<code class="inl">test_cycle_aborts_sweep</code>）：替代关系本身是乱的，这时候按任何规则删数据都不安全。</p>
+
+<h2 id="hx-12-s10">逐库对照</h2>
+
+<p>每个单元格要么有源码位置，要么标了「作者归纳」。amt 的 notebook 从未运行过，那一列是示意代码里的设计，不是实测行为。</p>
+
+<div class="table-wrap"><table><thead><tr><th>机制</th><th>OpenHarness</th><th>amt（示意代码）</th><th>learn-claude-code s09</th><th>DSH</th></tr></thead><tbody>
+<tr><td>TTL</td><td>有 <code class="inl">ttl_days</code>，扫描时隐藏，不删文件；从 <code class="inl">updated_at</code> 起算（<code class="inl src-ref" data-src="oh:src/openharness/memory/scan.py:41" data-expect="if is_memory_expired(_metadata_from_header(header))">scan.py:41</code>、<code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:289" data-expect="base_time = parse_datetime(metadata.get(">schema.py:289</code>）</td><td>30：缓存层 <code class="inl">ttl_seconds</code>，从创建起算，读时删除（<code class="inl src-ref" data-src="amt:all_techniques/30_production_memory_patterns/production_memory_patterns.ipynb:266" data-expect="if record.is_expired():">30 第 266 行</code>）</td><td>没有（作者归纳：全文件搜不到 ttl / expire / decay）</td><td>没有长期记忆层（作者归纳：<code class="inl">packages/</code> 下无 memory 包）</td></tr>
+<tr><td>衰减</td><td>阶梯式新近加成，看 <code class="inl">updated_at</code>（<code class="inl src-ref" data-src="oh:src/openharness/memory/search.py:62-71" data-expect="def _recency_boost(header: MemoryHeader) -&gt; float:">search.py:62-71</code>）</td><td>19：指数衰减按闲置时间，写回 strength（<code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:228" data-expect="decayed = memory.strength * math.exp(-self.decay_rate * hours_idle)">19 第 228 行</code>）；18：指数新近度按年龄（<code class="inl src-ref" data-src="amt:all_techniques/18_temporal_memory/temporal_memory.ipynb:269" data-expect="return math.exp(-self.lambda_ * age_h)">18 第 269 行</code>）</td><td>没有（作者归纳）</td><td>不适用</td></tr>
+<tr><td>访问强化</td><td><code class="inl">use_count</code> 封顶 5 次计分（<code class="inl src-ref" data-src="oh:src/openharness/memory/search.py:43" data-expect="+ min(int(usage[&quot;use_count&quot;]), 5) * 0.1">search.py:43</code>）；<code class="inl">last_used_at</code> 写了没人读</td><td>19：加 boost 封顶 1.0，不自己结算衰减（<code class="inl src-ref" data-src="amt:all_techniques/19_forgetting_and_decay/forgetting_and_decay.ipynb:242" data-expect="memory.strength = min(1.0, memory.strength + boost)">19 第 242 行</code>）</td><td>没有（作者归纳）</td><td>不适用</td></tr>
+<tr><td>显式替代</td><td>字段写入、解析，无消费方（<code class="inl src-ref" data-src="oh:src/openharness/memory/scan.py:104" data-expect="supersedes=coerce_str_list(metadata.get(&quot;supersedes&quot;)),">scan.py:104</code> 是唯一读取）；实际靠 dream 设 <code class="inl">disabled</code></td><td>14：矛盾的输家直接移除，不留替代关系（<code class="inl src-ref" data-src="amt:all_techniques/14_memory_consolidation/memory_consolidation.ipynb:527" data-expect="working = [m for m in working if m.id not in loser_ids]">14 第 527 行</code>）</td><td>隐式：提示要求「采纳更新的更正」（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:470" data-expect="Merge duplicates, apply newer corrections, and remove information that">code.py:470</code>）</td><td>会话层结构化替代，带完整来源校验（<code class="inl src-ref" data-src="dsh:packages/core/session/src/surface.ts:361-364" data-expect="const missing = shadowedSeqs.filter(">surface.ts:361-364</code>）</td></tr>
+<tr><td>合并/整理</td><td>autodream 子进程，先备份，旧文件禁用（<code class="inl src-ref" data-src="oh:src/openharness/services/autodream/service.py:144" data-expect="backup_dir = create_memory_backup(resolved_memory_dir">service.py:144</code>）；范围约束只在提示里</td><td>14：聚类 + LLM 合并，出处只留最新一条（<code class="inl src-ref" data-src="amt:all_techniques/14_memory_consolidation/memory_consolidation.ipynb:511" data-expect="source=newest.source,">14 第 511 行</code>）</td><td>满 10 条触发，删光重写，快照只防异常（<code class="inl src-ref" data-src="lcc:s09_memory/code.py:506-509" data-expect="for path in MEMORY_DIR.glob(&quot;*.md&quot;):">code.py:506-509</code>）</td><td>不做；持久指令由人维护，agent 只读（<code class="inl src-ref" data-src="dsh:packages/context/agent-instructions/src/config.ts:12" data-expect="const DEFAULT_INSTRUCTION_FILE_CANDIDATES = [">config.ts:12</code>）</td></tr>
+<tr><td>陈旧引用</td><td>不检测，附新鲜度警告交给模型（<code class="inl src-ref" data-src="oh:src/openharness/memory/schema.py:192-201" data-expect="def memory_freshness_text(">schema.py:192-201</code>）</td><td>没有（作者归纳：19、30、14、18 里都没有路径存在性检查）</td><td>没有（作者归纳）</td><td>不适用</td></tr>
+<tr><td>代价与适用场景</td><td>作者归纳：适合「模型维护记忆、人偶尔审」的个人助手；正确性依赖 dream 的提示词</td><td>作者归纳：机制目录，适合挑组件，不能直接当实现</td><td>作者归纳：最简单，记忆少时够用；整理一次就可能静默丢东西</td><td>作者归纳：模型可写的长期状态为零，最安全；代价是 agent 学不到东西，除非人去改 AGENTS.md</td></tr>
+</tbody></table></div>
+
+<h2 id="hx-12-s11">小结</h2>
+
+<ol>
+<li><strong>先问「还对吗」，再问「还有用吗」</strong>。替代和 TTL 回答前者，衰减回答后者，顺序不能反：一条被更正的偏好用得再多，也不该排在新偏好前面。</li>
+<li><strong>衰减算在读的时候，不要写回存储</strong>。存「上次结算的强度」和「上次访问时间」两个量，<code class="inl">touch</code> 先结算再加分，结果才和读的次数无关。半衰期、上限这些数字都是教学示意，要按自己的检索日志调。</li>
+<li><strong>替代是一张图，要按图来校验</strong>。查重复 id、分叉、环、悬空引用，报出可读的错误；读取时只取链尾，被替代的降权保留，用来追溯「为什么改」。</li>
+<li><strong>判断一个机制有没有生效，要分开列写入点和读取点</strong>。OpenHarness 的 <code class="inl">supersedes</code> 和 <code class="inl">last_used_at</code> 都是写了没人读；TTL 读了，但只在扫描这一个入口生效，索引里的指针还在。</li>
+<li><strong>能用 <code class="inl">stat</code> 回答的问题，不要交给模型</strong>。陈旧路径检测成本低、误报可控，但只能查仓库内的相对路径：记忆正文是不可信数据，不能拿它去探测仓库外。</li>
+<li><strong>合并是唯一会改写内容的手段，必须可撤销</strong>。先备份，旧记录禁用而不是删除，合并产物在 <code class="inl">supersedes</code> 里列出全部输入。做不到这几条，就像 DSH 那样不做。</li>
+</ol>
+
+<p>本章是上下文与记忆部分的最后一章。本章的手段都假设记忆是一条条独立的文本，用一个时间戳就能判断新旧。amt 18_temporal_memory 往前多走了一步：把事件发生的时间（<code class="inl">event_time</code>）和写入时间（<code class="inl">created_at</code>）分开存（<code class="inl src-ref" data-src="amt:all_techniques/18_temporal_memory/README.md:78" data-expect="(`created_at`, `event_time`, `last_accessed`)">README.md:78</code>），这样「上周三部署过一次」这种记忆，今天写进去也不会被当成今天的事。本章只借用了它的指数新近度。</p>
+
+<p>第 5 节留下一个问题：OpenHarness 的整理子进程跳过了权限确认，它能做什么全靠一句提示。下一章（<span class="xref-pending" data-href="#hx-13">hx-13</span>）进入安全部分，从权限规则引擎讲起：对每次工具调用，harness 自己给出允许、拒绝或询问，而不是靠模型自觉。</p>
+</section>

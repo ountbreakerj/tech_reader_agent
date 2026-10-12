@@ -1,0 +1,305 @@
+<section class="chapter" id="ch-hx-09" data-slug="hx-09"><div class="ch-head"><span class="ch-num">第 9 章</span></div><h1 id="hx-09">短期与工作记忆</h1>
+<p>模型在一个会话里需要记住两类东西。第一类是“刚才发生了什么”：用户说了什么、调了哪些工具、结果是什么。这就是消息历史，<a href="#hx-01">hx-01</a>、<a href="#hx-04">hx-04</a>、<a href="#hx-07">hx-07</a> 已经讲过它的结构、日志和压缩。第二类是“我现在要干什么、做到哪一步了”：任务拆成了哪几步，哪一步正在做，哪几步做完了。这一章只讲第二类，也就是工作记忆。</p>
+
+<p>工作记忆出问题的典型症状是：压缩之后模型不知道自己做到哪一步，把已经改好的文件又改一遍，或者干脆宣布完成，漏掉清单上后半截。下面看真实 harness 怎样把这份状态从“模型嘴里说说”变成“模型显式写入、harness 校验和保管”的数据。</p>
+
+<h2 id="hx-09-s1">短期记忆的两层</h2>
+
+<p>记忆类教程里常见的几种“短期记忆”，放到真实 harness 里看，大多不是独立模块：</p>
+
+<ul>
+<li><strong>对话缓冲</strong>（conversation buffer）：把所有消息原样存进一个列表，每次全发。amt 的实现就是一个 <code class="inl src-ref" data-src="amt:all_techniques/01_conversation_buffer_memory/conversation_buffer_memory.ipynb:107" data-expect="self.messages: list[dict] = []">conversation_buffer_memory.ipynb:107</code>。这就是每个 harness 的消息历史本身。</li>
+<li><strong>滑动窗口</strong>：只留最近 N 条，amt 用 <code class="inl src-ref" data-src="amt:all_techniques/02_sliding_window_memory/sliding_window_memory.ipynb:133" data-expect="deque(maxlen=window_size)">sliding_window_memory.ipynb:133</code>。真实 harness 几乎不这样直接截断，因为按条数砍会拆开 <code class="inl">tool_use</code> 和它的结果（<a href="#hx-07-s3">hx-07 第 3 节</a>）。</li>
+<li><strong>token 缓冲</strong>：超出 token 预算就从最旧的开始弹出，见 <code class="inl src-ref" data-src="amt:all_techniques/05_token_buffer_memory/token_buffer_memory.ipynb:262" data-expect="removed = self.messages.pop(0)">token_buffer_memory.ipynb:262</code>。它对应的是 harness 里的“按 token 阈值触发压缩”，只是真实实现会先剪工具结果、再摘要，而不是直接丢。</li>
+<li><strong>工作记忆与上下文窗口管理</strong>：amt 12 号 notebook 把条目分成“钉住”和“可驱逐”两区，驱逐只在未钉住的条目里挑，见 <code class="inl src-ref" data-src="amt:all_techniques/12_working_memory_context_window/working_memory_context_window.ipynb:317" data-expect="candidates = [item for item in items if not item.pinned]">working_memory_context_window.ipynb:317</code>。“钉住区”的思路在真实 harness 里对应系统提示和运行时上下文（<a href="#hx-06">hx-06</a>）：压缩不碰它们，每次请求重新拼。</li>
+</ul>
+
+<p>amt 的 notebook 输出全部为空、从未运行过，这里只把它当示意代码读算法，不引用任何“运行结果”。</p>
+
+<p>结论是：前三种在真实 harness 里都等于“消息历史 + 压缩”。真正需要单独做的，是模型主动维护的那份结构化状态：待办列表（todo）、计划（plan）、当前目标（goal）。它们和消息历史的区别在于写入者是模型自己，而且内容需要在压缩后继续成立。</p>
+
+<h2 id="hx-09-s2">为什么做成工具，而不是让模型在回复里写</h2>
+
+<p>模型完全可以在回复里写一段“接下来我要：1. … 2. … 3. …”。问题在于这段文字只是消息历史的一部分：harness 读不懂它，校验不了它，压缩时也不知道它比别的文字更重要。把它做成工具调用，换来三样东西：</p>
+
+<ul>
+<li><strong>结构</strong>：参数有 schema，状态只能是枚举值，harness 能逐项校验，不合法就把错误还给模型。</li>
+<li><strong>归属</strong>：写入发生在工具执行里，harness 知道“谁在第几轮写了什么”，可以落进会话日志，回放时重建。</li>
+<li><strong>可观测</strong>：UI 能把它画成进度面板，harness 能据此判断“好久没更新了”。</li>
+</ul>
+
+<p>两家做法都配了一句引导。lcc 写在系统提示里，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:58" data-expect="Before starting any multi-step task, use todo_write to plan your steps.">code.py:58</code>。DSH 写在工具描述里，而且明确说单步小任务不要用，<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:46" data-expect="'Record and update a task list to plan multi-step work and show progress; skip it for trivial '">index.ts:46</code>。后者更值得学：一个不加限制的待办工具会被模型拿来给每个一句话的问题列清单，白白多一轮工具调用。</p>
+
+<h2 id="hx-09-s3">写入方式：整表覆盖还是增量 patch</h2>
+
+<p>三家都叫 <code class="inl">todo_write</code>，语义却不一样。</p>
+
+<p>DSH 和 lcc 是<strong>整表覆盖</strong>：每次调用都传完整列表，替换上一版。DSH 在参数描述里把这一点写死，<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:142" data-expect="description: 'The COMPLETE task list, replacing any previous list.',">index.ts:142</code>。整表覆盖的好处是状态永远自洽：模型这一刻认为的表就是 harness 存下的表，不存在“patch 打到一半”或者“两次 patch 顺序颠倒”的中间态。代价是每次都要重写全表，表长了就浪费输出 token，所以 lcc 把表长卡在 20 项。</p>
+
+<p>OpenHarness 的 <code class="inl">todo_write</code> 是<strong>增量</strong>的，而且对象是磁盘上的 Markdown 文件：参数是单个 <code class="inl">item</code>、一个 <code class="inl">checked</code> 布尔和默认 <code class="inl">TODO.md</code> 的路径，<code class="inl src-ref" data-src="oh:src/openharness/tools/todo_write_tool.py:15-17" data-expect="item: str = Field(description=&quot;TODO item text&quot;)">todo_write_tool.py:15-17</code>。新项追加，已有项勾掉，按整行文本匹配，<code class="inl src-ref" data-src="oh:src/openharness/tools/todo_write_tool.py:35-43" data-expect="if unchecked_line in existing and arguments.checked:">todo_write_tool.py:35-43</code>。它没有 <code class="inl">in_progress</code>，也不能删项。这更接近“项目里的 TODO 文件”，不是会话内的工作记忆。</p>
+
+<h3 id="hx-09-s3-1">校验：状态字段与“只能一个 in_progress”</h3>
+
+<p>DSH 的校验函数做三件事：内容去首尾空白后不能为空，内容不能重复，<code class="inl">in_progress</code> 的个数受部署配置约束。</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">function toTodoList(raw: { content: string; status: string }[], allowParallel: boolean): TodoItem[] {
+  const todos: TodoItem[] = []
+  const seen = new Set&lt;string&gt;()
+  let active = 0
+  for (const item of raw) {
+    const content = item.content.trim()
+    if (content.length === 0) {
+      throw new Error('invalid todo: `content` must be a non-empty string')
+    }
+    if (seen.has(content)) {
+      throw new Error(`invalid todos: duplicate content ${JSON.stringify(content)}`)
+    }
+    seen.add(content)
+    if (item.status === 'in_progress') active++
+    todos.push({ content, status: item.status as TodoItem['status'] })
+  }
+  if (!allowParallel &amp;&amp; active &gt; 1) {
+    throw new Error(`invalid todos: at most one task may be in_progress (got ${active})`)
+  }
+  return todos
+}</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:80-100" data-expect="function toTodoList(raw: { content: string; status: string }[], allowParallel: boolean): TodoItem[] {">index.ts:80-100</code>。状态枚举不在这里查，而是由 schema 层先拦下（<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:151" data-expect="enum: [...STATUSES],">index.ts:151</code>），未知字段也被 <code class="inl">additionalProperties: false</code> 拒绝。注释给了理由：日志里存的快照必须等于模型以为自己写的东西，形状不对就在边界上大声失败，不能悄悄压平。</p>
+
+<p>“只能一个 in_progress”在 DSH 里不是固定规则，而是一个必填配置 <code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:37" data-expect="allowParallelInProgress: boolean">index.ts:37</code>。它连工具描述一起变：并行时要求“正在做的都标 in_progress”，单线时要求“恰好一个”（<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:63-67" data-expect="function describe(allowParallel: boolean): string {">index.ts:63-67</code>）。base 装配里取的是 <code class="inl">true</code>，<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:432-435" data-expect="    - id: tool-todo">cordis.patch.yml:432-435</code>，因为 DSH 有子代理和后台命令，确实会有几件事同时在跑。lcc 则写死成一个，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:156-157" data-expect="if in_progress_count &gt; 1:">code.py:156-157</code>。</p>
+
+<p>labs 的版本把两家合在一起：整表、带 id、状态合法、最多 20 项，并行与否由参数决定。和 DSH 不同的一点是用 <code class="inl">id</code> 而不是 <code class="inl">content</code> 判重，因为后面的 diff 要按 id 对齐。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/working_memory.py::validate_todos"><span class="kw">def</span> <span class="fn">validate_todos</span>(raw<span class="op">:</span> <span class="cls">Any</span>, <span class="op">*</span>, allow_parallel<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>) <span class="op">-&gt;</span> list[<span class="cls">TodoItem</span>]<span class="op">:</span>
+    <span class="str">"""把模型给的整张表校验成规范形式；任何一处不合法就整体拒绝，不做部分写入。"""</span>
+    <span class="kw">if</span> <span class="kw">not</span> isinstance(raw, list)<span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">TodoError</span>(<span class="str">"todos 必须是数组"</span>)
+    <span class="kw">if</span> len(raw) <span class="op">&gt;</span> <span class="cls">MAX_TODOS</span><span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">TodoError</span>(<span class="str">f"最多 {MAX_TODOS} 项，收到 {len(raw)} 项"</span>)
+    items<span class="op">:</span> list[<span class="cls">TodoItem</span>] <span class="op">=</span> []
+    seen<span class="op">:</span> set[str] <span class="op">=</span> set()
+    <span class="kw">for</span> index, entry <span class="kw">in</span> enumerate(raw)<span class="op">:</span>
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(entry, dict)<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">TodoError</span>(<span class="str">f"todos[{index}] 必须是对象"</span>)
+        item_id <span class="op">=</span> str(entry.get(<span class="str">"id"</span>, <span class="str">""</span>)).strip()
+        content <span class="op">=</span> str(entry.get(<span class="str">"content"</span>, <span class="str">""</span>)).strip()
+        status <span class="op">=</span> entry.get(<span class="str">"status"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> item_id <span class="kw">or</span> <span class="kw">not</span> content<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">TodoError</span>(<span class="str">f"todos[{index}] 缺少 id 或 content"</span>)
+        <span class="kw">if</span> item_id <span class="kw">in</span> seen<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">TodoError</span>(<span class="str">f"todos[{index}] 的 id {item_id!r} 重复"</span>)
+        <span class="kw">if</span> status <span class="kw">not</span> <span class="kw">in</span> <span class="cls">STATUSES</span><span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">TodoError</span>(<span class="str">f"todos[{index}] 的状态 {status!r} 不合法，只能是 {', '.join(STATUSES)}"</span>)
+        seen.add(item_id)
+        items.append(<span class="cls">TodoItem</span>(item_id, content, status))
+    active <span class="op">=</span> sum(item.status <span class="op">==</span> <span class="str">"in_progress"</span> <span class="kw">for</span> item <span class="kw">in</span> items)
+    <span class="kw">if</span> <span class="kw">not</span> allow_parallel <span class="kw">and</span> active <span class="op">&gt;</span> <span class="num">1</span><span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">TodoError</span>(<span class="str">f"同时只能有一项 in_progress，收到 {active} 项"</span>)
+    <span class="kw">return</span> items</code></pre></div>
+
+<h3 id="hx-09-s3-2">写入后怎样回显给模型</h3>
+
+<p>两家的回显方式差别很大。lcc 在工具结果里返回整张表的渲染文本，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:159-160" data-expect="self.items = validated">code.py:159-160</code>，每项一个 <code class="inl">[ ]</code> / <code class="inl">[&gt;]</code> / <code class="inl">[x]</code> 标记，末尾带完成计数（<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:162-177" data-expect="def render(self) -&gt; str:">code.py:162-177</code>）。校验失败时返回 <code class="inl">Error: …</code> 字符串，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:183-189" data-expect="def run_todo_write(todos: list | str) -&gt; str:">code.py:183-189</code>。</p>
+
+<p>DSH 的工具值里带着整张表和计数，但真正渲染给模型的只有一行计数：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      render: (_args, value) =&gt; [{
+        type: 'text',
+        text: `Updated todo list: ${value.counts.pending} pending, ${value.counts.inProgress} in progress, ${value.counts.completed} completed.`,
+      }],</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:187-190" data-expect="render: (_args, value) =&gt; [{">index.ts:187-190</code>。<code class="inl">render</code> 的返回值就是工具结果里模型看到的内容（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1845" data-expect="rendered = tool.output.render(exec.arguments, value)">tools/src/index.ts:1845</code>）。理由并不难猜：表是模型自己刚写的，参数还在同一轮的 assistant 消息里，再原样回一遍就是重复花 token。表的完整内容走的是会话日志和 UI，不走工具结果。</p>
+
+<p>labs 取了中间路线：返回一行 diff 摘要加整张表的渲染。diff 告诉模型“你这次实际改了什么”，在模型以为自己改了某项、实际却写错 id 的时候特别有用。渲染只取决于表的内容，不带时间戳、不重排，同样的表永远是同样的字节；工具结果在之后的请求里是历史前缀的一部分，字节稳定才不会破坏前缀缓存。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/working_memory.py::render_todos"><span class="kw">def</span> <span class="fn">render_todos</span>(items<span class="op">:</span> list[<span class="cls">TodoItem</span>]) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""给模型看的紧凑文本。只取决于表的内容，不带时间戳、不重排：同一张表永远是同一串字节。"""</span>
+    <span class="kw">if</span> <span class="kw">not</span> items<span class="op">:</span>
+        <span class="kw">return</span> <span class="str">"(no todos)"</span>
+    lines <span class="op">=</span> [<span class="str">f"{MARKERS[item.status]} {item.id}. {item.content}"</span> <span class="kw">for</span> item <span class="kw">in</span> items]
+    done <span class="op">=</span> sum(item.status <span class="op">==</span> <span class="str">"completed"</span> <span class="kw">for</span> item <span class="kw">in</span> items)
+    lines.append(<span class="str">f"({done}/{len(items)} completed)"</span>)
+    <span class="kw">return</span> <span class="str">"\n"</span>.join(lines)</code></pre></div>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/working_memory.py::diff_todos"><span class="kw">def</span> <span class="fn">diff_todos</span>(old<span class="op">:</span> list[<span class="cls">TodoItem</span>], new<span class="op">:</span> list[<span class="cls">TodoItem</span>]) <span class="op">-&gt;</span> <span class="cls">TodoDiff</span><span class="op">:</span>
+    <span class="str">"""按 id 对齐两版表。用 id 而不是 content 对齐，模型改写措辞时不会被误判成「删一项加一项」。"""</span>
+    before <span class="op">=</span> {item.id<span class="op">:</span> item <span class="kw">for</span> item <span class="kw">in</span> old}
+    after <span class="op">=</span> {item.id<span class="op">:</span> item <span class="kw">for</span> item <span class="kw">in</span> new}
+    added <span class="op">=</span> tuple(i <span class="kw">for</span> i <span class="kw">in</span> after <span class="kw">if</span> i <span class="kw">not</span> <span class="kw">in</span> before)
+    removed <span class="op">=</span> tuple(i <span class="kw">for</span> i <span class="kw">in</span> before <span class="kw">if</span> i <span class="kw">not</span> <span class="kw">in</span> after)
+    changed <span class="op">=</span> tuple(
+        (i, before[i].status, after[i].status)
+        <span class="kw">for</span> i <span class="kw">in</span> after
+        <span class="kw">if</span> i <span class="kw">in</span> before <span class="kw">and</span> before[i].status <span class="op">!=</span> after[i].status
+    )
+    <span class="kw">return</span> <span class="cls">TodoDiff</span>(added, removed, changed)</code></pre></div>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/working_memory.py::TodoList.write">    <span class="kw">def</span> <span class="fn">write</span>(self, raw<span class="op">:</span> <span class="cls">Any</span>, <span class="op">*</span>, round_no<span class="op">:</span> int) <span class="op">-&gt;</span> str<span class="op">:</span>
+        <span class="str">"""todo_write 工具的实现：校验 -&gt; 整表替换 -&gt; 返回工具结果文本。
+
+        校验失败抛 TodoError，表和 last_write_round 都不动：失败的写入不算「更新过」。
+        """</span>
+        new_items <span class="op">=</span> validate_todos(raw, allow_parallel<span class="op">=</span>self.allow_parallel)
+        change <span class="op">=</span> diff_todos(self.items, new_items)
+        self.items <span class="op">=</span> new_items
+        self.last_write_round <span class="op">=</span> round_no
+        <span class="kw">return</span> <span class="str">f"Updated todos ({change.describe()})\n{render_todos(new_items)}"</span></code></pre></div>
+
+<h2 id="hx-09-s4">生命周期：持久化、压缩与陈旧提醒</h2>
+
+<h3 id="hx-09-s4-1">持久化：写进会话日志，回放时重建</h3>
+
+<p>DSH 的 <code class="inl">execute</code> 校验通过后，把整张表作为一条 <code class="inl">todo/write</code> 事件追加进会话日志，<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:199" data-expect="exec.agent.session.append('todo/write', { todos })">index.ts:199</code>。“当前表”不是一个单独存的变量，而是对日志做折叠得到的投影：遇到 <code class="inl">todo/write</code> 就换成新表，遇到下一轮的 <code class="inl">turn/start</code> 就清空，<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:128-129" data-expect="if (event.type === 'todo/write') return event.data.todos">index.ts:128-129</code>。所以恢复会话、分叉会话都能拿回同一张表，不需要额外的存档格式。注意它在新一轮开始时清空：DSH 把待办当成“这一轮的进度面板”，不是跨轮的长期清单。</p>
+
+<p>lcc 的表是模块级全局变量 <code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:180" data-expect="TODO = TodoManager()">code.py:180</code>，只在内存里，进程退出就没了。OpenHarness 的表是工作目录里的 <code class="inl">TODO.md</code>，跨会话一直在，但它属于项目文件，不属于会话状态。</p>
+
+<p>labs 的 <code class="inl">TodoList.replay</code> 照 DSH 的思路做：从事件列表里取最后一次 <code class="inl">todo/write</code>，与历史有没有被压缩无关。</p>
+
+<h3 id="hx-09-s4-2">压缩会不会把待办摘丢</h3>
+
+<p>这是工作记忆最容易出事的地方。表本身存在消息历史之外，可模型看到这张表的唯一途径，是历史里那次 <code class="inl">todo_write</code> 调用的参数和结果。压缩一旦把这段历史摘要掉，harness 手里的表还在，模型却不记得了。</p>
+
+<p>OpenHarness 的压缩会额外生成几份“附件”带过压缩边界，其中有计划模式附件 <code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:635-651" data-expect="def create_plan_attachment_if_needed(">compact/__init__.py:635-651</code>，没有待办附件。不过它的待办在磁盘上，模型随时可以重新读 <code class="inl">TODO.md</code>。DSH 我在 <code class="inl">packages/context</code>、<code class="inl">packages/compaction</code> 下搜 <code class="inl">todo</code>，没找到把表重新放进模型上下文的代码；压缩后模型还记不记得进度，取决于摘要有没有写进去。其他包我没有逐个排查。</p>
+
+<p>labs 的做法是让 harness 在压缩后把未完成的表重新放进运行时上下文（<a href="#hx-06">hx-06</a> 讲的每次请求重新拼的那一段）。表全部完成就返回空串，不再占位置。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/working_memory.py::todo_context"><span class="kw">def</span> <span class="fn">todo_context</span>(todo<span class="op">:</span> <span class="cls">TodoList</span>) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""压缩之后由 harness 重新放进运行时上下文的一段。表做完了就不再占位置。"""</span>
+    <span class="kw">if</span> <span class="kw">not</span> todo.has_open_items()<span class="op">:</span>
+        <span class="kw">return</span> <span class="str">""</span>
+    <span class="kw">return</span> <span class="str">"&lt;current_todos&gt;\n"</span> <span class="op">+</span> render_todos(todo.items) <span class="op">+</span> <span class="str">"\n&lt;/current_todos&gt;"</span></code></pre></div>
+
+<h3 id="hx-09-s4-3">陈旧提醒</h3>
+
+<p>三家里只有 lcc 有提醒。它在主循环里数“连续多少轮没调 <code class="inl">todo_write</code>”，满 3 轮就往这一批工具结果后面追加一段 <code class="inl">&lt;reminder&gt;Update your todos.&lt;/reminder&gt;</code>，然后计数归零，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:340-344" data-expect="rounds_since_todo = 0 if used_todo else rounds_since_todo + 1">code.py:340-344</code>。提醒放在工具结果所在的那条 user 消息里，不改系统提示，所以不破坏前缀缓存。</p>
+
+<p>这个计数器有两个盲区：它从会话开头就开始数，模型从来没写过待办也会被催；它不看表里还有没有未完成项，全做完了照样催。DSH 的 <code class="inl">packages/todo</code>、<code class="inl">packages/plan</code> 里搜不到 <code class="inl">remind</code>；OpenHarness 的 engine 和压缩模块里也没有与待办相关的提醒。</p>
+
+<p>labs 把提醒写成纯函数，补上这两个条件，并且从“上次写入”和“上次提醒”里较晚的那个算起，避免每轮都提醒。阈值 3 取自 lcc，属于教学示意。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/working_memory.py::should_remind"><span class="kw">def</span> <span class="fn">should_remind</span>(
+    last_write_round<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span>,
+    current_round<span class="op">:</span> int,
+    has_open_items<span class="op">:</span> bool,
+    <span class="op">*</span>,
+    last_reminded_round<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+    after<span class="op">:</span> int <span class="op">=</span> <span class="cls">REMIND_AFTER_ROUNDS</span>,
+) <span class="op">-&gt;</span> bool<span class="op">:</span>
+    <span class="str">"""本轮要不要附加「更新待办」提醒。
+
+    - 从没写过待办：不提醒。单步任务本来就不需要待办，逼它写只会制造噪声。
+    - 没有未完成项：不提醒。表已经做完，再催就是在催一份不存在的进度。
+    - 否则从「上次写入」和「上次提醒」里较晚的那个算起，满 after 轮才提醒，避免每轮都提醒。
+    """</span>
+    <span class="kw">if</span> last_write_round <span class="kw">is</span> <span class="kw">None</span> <span class="kw">or</span> <span class="kw">not</span> has_open_items<span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">False</span>
+    since <span class="op">=</span> max(last_write_round, last_reminded_round <span class="kw">if</span> last_reminded_round <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">else</span> last_write_round)
+    <span class="kw">return</span> current_round <span class="op">-</span> since <span class="op">&gt;=</span> after</code></pre></div>
+
+<h2 id="hx-09-s5">计划模式：先出计划，批准后才动手</h2>
+
+<p>计划（plan）是工作记忆的另一种形态：不是边做边勾的清单，而是动手之前先交给用户审的一份方案。计划模式把这件事做成一个会话状态：进入后模型只调查、不修改；交出计划、用户批准后才回到正常模式。它和权限天然相关，但两家的接法完全相反。</p>
+
+<h3 id="hx-09-s5-1">OpenHarness：计划模式就是一种权限模式</h3>
+
+<p>OpenHarness 把 <code class="inl">PLAN</code> 直接定义成权限模式之一，<code class="inl src-ref" data-src="oh:src/openharness/permissions/modes.py:12" data-expect="PLAN = &quot;plan&quot;">modes.py:12</code>。权限检查器先放行所有只读工具，再在计划模式下拒绝其余工具：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">        <span class="cmt"># Read-only tools always allowed</span>
+        <span class="kw">if</span> is_read_only<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">PermissionDecision</span>(allowed<span class="op">=</span><span class="kw">True</span>, reason<span class="op">=</span><span class="str">"read-only tools are allowed"</span>)
+
+        <span class="cmt"># Plan mode: block mutating tools</span>
+        <span class="kw">if</span> self._settings.mode <span class="op">==</span> <span class="cls">PermissionMode</span>.<span class="cls">PLAN</span><span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">PermissionDecision</span>(
+                allowed<span class="op">=</span><span class="kw">False</span>,
+                reason<span class="op">=</span><span class="str">"Plan mode blocks mutating tools until the user exits plan mode"</span>,
+            )</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:132-141" data-expect="# Read-only tools always allowed">checker.py:132-141</code>。注意前面还有一条 <code class="inl">FULL_AUTO</code> 直接放行（<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:129-130" data-expect="if self._settings.mode == PermissionMode.FULL_AUTO:">checker.py:129-130</code>），权限模式是单选的，计划模式和全自动不能同时成立。</p>
+
+<p>进出计划模式的两个工具都只做一件事：改设置文件里的模式再存盘，<code class="inl src-ref" data-src="oh:src/openharness/tools/enter_plan_mode_tool.py:25-27" data-expect="settings = load_settings()">enter_plan_mode_tool.py:25-27</code>、<code class="inl src-ref" data-src="oh:src/openharness/tools/exit_plan_mode_tool.py:25-27" data-expect="settings = load_settings()">exit_plan_mode_tool.py:25-27</code>。退出工具没有参数，不带计划，也不问用户。它没有覆写 <code class="inl">is_read_only</code>，按基类默认算写工具（<code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:46-49" data-expect="def is_read_only(self, arguments: BaseModel) -&gt; bool:">base.py:46-49</code>），所以计划模式下它会被上面那条规则拦下，实际能退出的只有用户的 <code class="inl">/plan off</code> 命令。</p>
+
+<p>还有一点要留意：检查器在构造时就把设置对象存下了（<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:60-61" data-expect="def __init__(self, settings: PermissionSettings) -&gt; None:">checker.py:60-61</code>）。<code class="inl">/plan</code> 命令改完设置会立刻重建检查器（<code class="inl src-ref" data-src="oh:src/openharness/commands/registry.py:1509-1512" data-expect="if mode in {&quot;on&quot;, &quot;enter&quot;}:">registry.py:1509-1512</code>），模型调用 <code class="inl">enter_plan_mode</code> 只改了磁盘。在我核对过的普通消息路径里（<code class="inl src-ref" data-src="oh:src/openharness/ui/runtime.py:732-746" data-expect="settings = bundle.current_settings()">runtime.py:732-746</code>），只有 UI 状态从磁盘刷新（<code class="inl src-ref" data-src="oh:src/openharness/ui/runtime.py:575" data-expect="permission_mode=settings.permission.mode.value,">runtime.py:575</code>），检查器没有重建，要等下一次带 <code class="inl">refresh_runtime</code> 的命令（<code class="inl src-ref" data-src="oh:src/openharness/ui/runtime.py:660-661" data-expect="if result.refresh_runtime:">runtime.py:660-661</code>）。也就是说，模型自己进入计划模式后，界面显示已在计划模式，写工具却可能还没被拦。这一点我没有实际运行验证。</p>
+
+<p>压缩时，OpenHarness 根据工具元数据里记下的模式（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:451-454" data-expect="elif tool_name == &quot;enter_plan_mode&quot;:">query.py:451-454</code>）生成一份“计划模式仍然有效”的附件带过边界（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:636-645" data-expect="permission_mode = str(metadata.get(&quot;permission_mode&quot;) or &quot;&quot;).strip().lower()">compact/__init__.py:636-645</code>）。附件里预留了 <code class="inl">plan_summary</code>，但在 <code class="inl">src/openharness</code> 里没有任何代码写这个字段，这一行实际上永远不会出现。</p>
+
+<h3 id="hx-09-s5-2">DSH：计划模式只是一段提示，限制交给权限系统</h3>
+
+<p>DSH 的模块注释开门见山：计划模式是记在日志里的协作状态，激活时往每次请求里加一段部署方提供的指导；沙箱模式和审批策略各自独立执行限制，不读也不写计划状态，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:6" data-expect="policy enforce restrictions independently and do not read or write plan">plan-mode/src/index.ts:6</code>。指导段只在计划模式激活时返回非空文本，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:216-224" data-expect="ctx.systemPrompt.section({">index.ts:216-224</code>。</p>
+
+<p>退出工具 <code class="inl">exit_plan_mode</code> 则管得很严：</p>
+
+<ul>
+<li>不在计划模式时调用直接报错，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:301-303" data-expect="if (!this.loggedActive(agent.session)) {">index.ts:301-303</code>。</li>
+<li>参数必须是以 <code class="inl">#</code> 标题开头的 Markdown 计划，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:304-306" data-expect="if (!/^#\s+\S/.test(args.plan.trim())) {">index.ts:304-306</code>。</li>
+<li>通过用户提问通道把计划交给用户，选项只有“Approve”和“Keep planning”，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:313-322" data-expect="answer = await interaction.ask({">index.ts:313-322</code>。</li>
+<li>没选 Approve 就抛错，用户的反馈原样进工具结果，模型改了再交，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:349-354" data-expect="if (item?.selected.length !== 1 || item.selected[0] !== APPROVE_LABEL || item.custom !== undefined) {">index.ts:349-354</code>。</li>
+<li>批准后不立刻切换，而是记一个待生效意图，到下一步开始前才写进日志，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:355-359" data-expect="// Keep plan guidance for the rest of this assistant tool batch. The">index.ts:355-359</code>。同一批里剩下的工具调用仍按计划模式的指导执行。</li>
+</ul>
+
+<p>退出工具在非计划模式下也一直注册着，进出计划模式只改提示段、不改工具目录，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:15-17" data-expect="The exit tool remains registered while plan mode is inactive, so entering">index.ts:15-17</code>。工具目录在请求前缀里，频繁增删工具会让前缀缓存失效（<a href="#hx-06">hx-06</a>）。</p>
+
+<p>lcc 的 s05 没有计划模式。</p>
+
+<h3 id="hx-09-s5-3">labs：一个最小的计划闸门</h3>
+
+<p>labs 取 OpenHarness 的“只读放行、其余拦截”，加上 DSH 的“退出要带计划、要用户批准”，并且像 DSH 一样让出口在计划模式里始终可调，否则模型永远交不出计划。它和 <span class="xref-pending" data-href="#hx-13">hx-13</span>、<span class="xref-pending" data-href="#hx-16">hx-16</span> 的权限检查是串联关系：闸门放行之后，还要再过一遍正常的权限规则。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/working_memory.py::PlanGate"><span class="dec">@dataclass</span>
+<span class="kw">class</span> <span class="cls">PlanGate</span><span class="op">:</span>
+    <span class="str">"""计划模式闸门：只读阶段先出计划，用户批准后才放开写工具。"""</span>
+
+    read_only_tools<span class="op">:</span> frozenset[str]
+    active<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>
+
+    <span class="kw">def</span> <span class="fn">check</span>(self, tool_name<span class="op">:</span> str) <span class="op">-&gt;</span> <span class="cls">GateDecision</span><span class="op">:</span>
+        <span class="kw">if</span> <span class="kw">not</span> self.active<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">GateDecision</span>(<span class="kw">True</span>, <span class="str">"not in plan mode"</span>)
+        <span class="kw">if</span> tool_name <span class="kw">in</span> self.read_only_tools<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">GateDecision</span>(<span class="kw">True</span>, <span class="str">f"{tool_name} is read-only"</span>)
+        <span class="kw">if</span> tool_name <span class="op">==</span> <span class="cls">EXIT_PLAN_TOOL</span><span class="op">:</span>
+            <span class="cmt"># 出口本身不是只读工具，但必须放行，否则模型永远提交不了计划</span>
+            <span class="kw">return</span> <span class="cls">GateDecision</span>(<span class="kw">True</span>, <span class="str">"the exit tool must stay callable in plan mode"</span>)
+        <span class="kw">return</span> <span class="cls">GateDecision</span>(<span class="kw">False</span>, <span class="str">f"plan mode blocks {tool_name}; present the plan with {EXIT_PLAN_TOOL} first"</span>)
+
+    <span class="kw">def</span> <span class="fn">enter</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self.active <span class="op">=</span> <span class="kw">True</span>
+
+    <span class="kw">def</span> <span class="fn">exit</span>(self, plan<span class="op">:</span> str, <span class="op">*</span>, approved_by_user<span class="op">:</span> bool) <span class="op">-&gt;</span> <span class="cls">GateDecision</span><span class="op">:</span>
+        <span class="str">"""退出需要两样东西：一份像样的计划，和用户的批准。模型自己说「我觉得可以了」不算。"""</span>
+        <span class="kw">if</span> <span class="kw">not</span> self.active<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">GateDecision</span>(<span class="kw">False</span>, <span class="str">"not in plan mode"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> plan.strip().startswith(<span class="str">"#"</span>)<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">GateDecision</span>(<span class="kw">False</span>, <span class="str">"the plan must be markdown starting with a # heading"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> approved_by_user<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">GateDecision</span>(<span class="kw">False</span>, <span class="str">"the user chose to keep planning; revise and present again"</span>)
+        self.active <span class="op">=</span> <span class="kw">False</span>
+        <span class="kw">return</span> <span class="cls">GateDecision</span>(<span class="kw">True</span>, <span class="str">"plan approved; write tools are allowed from the next step"</span>)</code></pre></div>
+
+<h2 id="hx-09-s6">坑与失败案例</h2>
+
+<ol>
+<li><strong>压缩后模型忘了进度</strong>。触发：长会话触发压缩，摘要没把最近一次 <code class="inl">todo_write</code> 的内容写进去。后果：harness 手里的表还在，模型却从头规划，或者重复做已完成的步骤。OpenHarness 只给计划模式做了压缩附件（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:635-651" data-expect="def create_plan_attachment_if_needed(">compact/__init__.py:635-651</code>），待办靠磁盘上的 <code class="inl">TODO.md</code> 兜底；DSH 里我没找到压缩后重新注入待办的代码。labs 的 <code class="inl">todo_context</code> 是一种补法。</li>
+<li><strong>提醒变成噪声</strong>。触发：单步任务里模型从没写过待办，或者表早已全部完成。后果：lcc 照样每 3 轮塞一次 <code class="inl">Update your todos.</code>（<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:340-344" data-expect="rounds_since_todo = 0 if used_todo else rounds_since_todo + 1">code.py:340-344</code>），模型为了消除提醒去写一张没用的表，白白消耗轮次和 token。lcc 没防；labs 的 <code class="inl">should_remind</code> 在这两种情况下都返回 False。</li>
+<li><strong>按文本匹配的增量更新会重复</strong>。触发：OpenHarness 的 <code class="inl">todo_write</code> 勾选时，模型把条目文字稍微改了一点（比如多了个句号）。后果：<code class="inl">unchecked_line in existing</code> 匹配失败，走到追加分支，表里同时出现一条没勾的旧项和一条已勾的新项（<code class="inl src-ref" data-src="oh:src/openharness/tools/todo_write_tool.py:35-43" data-expect="if unchecked_line in existing and arguments.checked:">todo_write_tool.py:35-43</code>）。没有 id，也没有校验，源码没防。整表覆盖的做法（DSH、lcc、labs）天然没有这个问题。</li>
+<li><strong>模型自己进入计划模式，闸门却没关上</strong>。触发：模型调用 OpenHarness 的 <code class="inl">enter_plan_mode</code>。后果：设置文件和界面都显示计划模式，但检查器是构造时存下的设置（<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:60-61" data-expect="def __init__(self, settings: PermissionSettings) -&gt; None:">checker.py:60-61</code>），要等下一次带 <code class="inl">refresh_runtime</code> 的命令才重建（<code class="inl src-ref" data-src="oh:src/openharness/ui/runtime.py:660-661" data-expect="if result.refresh_runtime:">runtime.py:660-661</code>），这期间写工具仍按旧模式判定。这是我读代码得出的结论，没有实际运行验证。labs 的 <code class="inl">PlanGate</code> 把状态和判定放在同一个对象里，不存在两份状态不同步。</li>
+<li><strong>计划模式出口被自己拦住</strong>。触发：OpenHarness 计划模式下模型调用 <code class="inl">exit_plan_mode</code>。后果：它不是只读工具（<code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:46-49" data-expect="def is_read_only(self, arguments: BaseModel) -&gt; bool:">base.py:46-49</code>），被计划模式规则直接拒绝、不弹确认（<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:137-141" data-expect="if self._settings.mode == PermissionMode.PLAN:">checker.py:137-141</code>），模型只能请用户敲 <code class="inl">/plan off</code>。唯一的例外是用户把它写进 <code class="inl">allowed_tools</code>（<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:105" data-expect="if tool_name in self._settings.allowed_tools:">checker.py:105</code>），而这个列表默认为空。注意这条坑只在检查器本身处于计划模式时出现，比如用户用 <code class="inl">/plan on</code> 进入；如果是模型自己调 <code class="inl">enter_plan_mode</code> 进去的，按上一条，检查器还停在默认模式，退出工具只会走普通的写工具确认。这样能防止模型擅自退出，代价是模型没有提交计划、请求批准的通道。DSH 把出口做成必须带计划、必须经用户批准的工具（<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:313-322" data-expect="answer = await interaction.ask({">index.ts:313-322</code>），两头都照顾到了。</li>
+</ol>
+
+<h2 id="hx-09-s7">多仓库取舍对比</h2>
+
+<p>没有 file:line 的单元格是作者根据已读源码做的归纳。</p>
+
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>lcc s05</th><th>OpenHarness</th><th>labs</th></tr></thead><tbody>
+<tr><td>写入方式</td><td>整表覆盖，<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:142" data-expect="description: 'The COMPLETE task list, replacing any previous list.',">index.ts:142</code></td><td>整表覆盖，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:159-160" data-expect="self.items = validated">code.py:159-160</code></td><td>单条追加或勾选，按文字匹配，<code class="inl src-ref" data-src="oh:src/openharness/tools/todo_write_tool.py:35-43" data-expect="if unchecked_line in existing and arguments.checked:">todo_write_tool.py:35-43</code></td><td>整表覆盖，返回 diff</td></tr>
+<tr><td>校验</td><td>状态枚举 + 结构转换，<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:80-100" data-expect="function toTodoList(raw: { content: string; status: string }[], allowParallel: boolean): TodoItem[] {">index.ts:80-100</code></td><td>状态、数量、in_progress 个数</td><td>无</td><td>id 唯一、状态合法、条数上限</td></tr>
+<tr><td>同时 in_progress</td><td>默认最多一个，可配置放开，<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:37" data-expect="allowParallelInProgress: boolean">index.ts:37</code></td><td>最多一个，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:156-157" data-expect="if in_progress_count &gt; 1:">code.py:156-157</code></td><td>没有这个状态，只有勾与不勾</td><td>默认最多一个，<code class="inl">allow_parallel</code> 放开</td></tr>
+<tr><td>回显给模型</td><td>工具结果里的渲染文本，<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:187-190" data-expect="render: (_args, value) =&gt; [{">index.ts:187-190</code></td><td>工具结果返回整表，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:162-177" data-expect="def render(self) -&gt; str:">code.py:162-177</code></td><td>只回“Updated 路径”，<code class="inl src-ref" data-src="oh:src/openharness/tools/todo_write_tool.py:46" data-expect="return ToolResult(output=f&quot;Updated {path}&quot;)">todo_write_tool.py:46</code></td><td>diff + 整表，渲染稳定</td></tr>
+<tr><td>持久化</td><td>会话日志事件，回放重建，<code class="inl src-ref" data-src="dsh:packages/todo/tool-todo/src/index.ts:199" data-expect="exec.agent.session.append('todo/write', { todos })">index.ts:199</code></td><td>进程内全局变量，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:180" data-expect="TODO = TodoManager()">code.py:180</code></td><td>工作目录里的 TODO.md，跨会话</td><td>事件列表 + <code class="inl">replay</code></td></tr>
+<tr><td>压缩后</td><td>没找到重新注入的代码（只查了 context、compaction 包）</td><td>s05 没有压缩</td><td>只带计划模式附件，<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:635-651" data-expect="def create_plan_attachment_if_needed(">compact/__init__.py:635-651</code></td><td>未完成时进运行时上下文</td></tr>
+<tr><td>陈旧提醒</td><td>无</td><td>3 轮未写就提醒，<code class="inl src-ref" data-src="lcc:s05_todo_write/code.py:340-344" data-expect="rounds_since_todo = 0 if used_todo else rounds_since_todo + 1">code.py:340-344</code></td><td>无</td><td>写过且有未完成项才提醒，阈值为教学示意</td></tr>
+<tr><td>计划模式的限制</td><td>只加提示段，限制交给沙箱和审批，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:6" data-expect="policy enforce restrictions independently and do not read or write plan">index.ts:6</code></td><td>无</td><td>权限模式，拦截写工具，<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:132-141" data-expect="# Read-only tools always allowed">checker.py:132-141</code></td><td>闸门只放行只读工具和出口</td></tr>
+<tr><td>退出计划模式</td><td>带计划、经用户批准，<code class="inl src-ref" data-src="dsh:packages/plan/plan-mode/src/index.ts:349-354" data-expect="if (item?.selected.length !== 1 || item.selected[0] !== APPROVE_LABEL || item.custom !== undefined) {">index.ts:349-354</code></td><td>无</td><td>用户敲 /plan off，<code class="inl src-ref" data-src="oh:src/openharness/commands/registry.py:1509-1512" data-expect="if mode in {&quot;on&quot;, &quot;enter&quot;}:">registry.py:1509-1512</code></td><td>要有 # 开头的计划，还要用户批准</td></tr>
+<tr><td>适用场景</td><td>需要恢复、分叉会话的产品级 harness</td><td>教学用最小实现</td><td>想让待办成为项目文件、人也能直接编辑</td><td>动手实验</td></tr>
+</tbody></table></div>
+</section>

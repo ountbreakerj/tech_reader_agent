@@ -1,0 +1,266 @@
+<div class="book-scope">
+<section class="chapter" id="ch-dsh-04" data-slug="dsh-04"><div class="ch-head"><span class="ch-num">第 4 章</span></div><h1 id="dsh-04">会话持久化、存储与跨会话检索</h1>
+<p><a href="#/harness?section=hx-04">Harness 的 hx-04</a> 已经从“日志模型”的角度讲过会话日志：日志是事实来源、请求头为什么要进日志、格式 v0–v4 只允许相邻迁移、撕裂尾巴怎么识别、崩溃后怎么修。这一章换一个站位，从<strong>存储层</strong>看同一份日志：字节是怎么落到磁盘上的，日志之外还有哪些“从日志算出来”的东西，它们存在哪、什么时候失效，以及跨会话的全文检索是怎么在日志旁边搭起来的。</p>
+
+<p>读完这一章，你应该能回答四个问题：一条事件从 <code class="inl">session.append()</code> 到磁盘上的 fsync 中间经过了哪几层；迁移包里一条迁移具体改了哪些字段；投影缓存为什么“可能过期但永远不会错”；以及为什么全文检索的包都装上了，默认却是关着的。</p>
+
+<h2 id="dsh-04-s1">一张地图：一份事实，三种派生</h2>
+
+<p>先把这一章出场的包按“谁是权威”分成两类。只有一样东西是权威：JSONL 会话日志。其余三样都是从它折叠或索引出来的派生物，丢了可以重建，和日志不一致时以日志为准。</p>
+
+<div class="table-wrap"><table><thead><tr><th>角色</th><th>包</th><th>ctx 服务</th><th>存在哪</th><th>丢了会怎样</th></tr></thead><tbody>
+<tr><td>事实来源</td><td><code class="inl">session/session-persistence</code>（契约）+ <code class="inl">session-persistence-jsonl</code>（唯一一方实现）</td><td><code class="inl">ctx.sessionPersistence</code></td><td>每个会话一个 JSONL 文件</td><td>会话没了，这是唯一不能丢的东西</td></tr>
+<tr><td>内存派生</td><td><code class="inl">session/session-projection</code></td><td><code class="inl">ctx.sessionProjections</code></td><td>进程内存</td><td>重启后从日志重新折叠</td></tr>
+<tr><td>持久化的派生</td><td><code class="inl">session/session-projection-cache</code> → <code class="inl">storage/*</code></td><td>投影缓存 + 存储 hub</td><td><code class="inl">storages/</code> 下的 JSON 文档</td><td>冷列表变慢（要读日志重折），结果不变</td></tr>
+<tr><td>检索索引</td><td><code class="inl">session-query/*</code></td><td><code class="inl">ctx.sessionQuery</code></td><td>SQLite FTS5，默认 <code class="inl">:memory:</code></td><td>下次搜索时重建</td></tr>
+</tbody></table></div>
+
+<p>这个划分不是作者的归纳，DSH 在一份已实施的设计记录里写得很直白：全文检索用的 SQLite 数据库是“可丢弃的投影”，不能拿来当持久化，因为那会“把两种无关的存储合并”（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/simplification/2026-08-30-jsonl-only-session-persistence.md:25" data-expect="Use the Session-query SQLite database as persistence">jsonl-only-session-persistence.md:25</code>）。同一份记录还交代了一段历史：仓库曾经有一个 SQLite 版的会话持久化后端，后来被删掉了，JSONL 成为 <code class="inl">ctx.sessionPersistence</code> 的唯一一方实现，抽象契约保持后端中立，留给仓库外的实现（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/simplification/2026-08-30-jsonl-only-session-persistence.md:15" data-expect="is the sole first-party implementation of">同文件:15</code>）。删掉的理由是：一个没人选的生产后端，照样要承担每一项格式、生命周期、平台和迁移义务。</p>
+
+<blockquote><p><strong>和 Python 读者的对照</strong>：如果你写过 Django，可以把 JSONL 日志想成数据库里的事实表，投影是 <code class="inl">@cached_property</code>，投影缓存是你手动维护的一张汇总表，FTS 索引是 Elasticsearch。区别在于 DSH 把“汇总表可以随时丢”这件事写成了硬约束，而不是团队默契。</p></blockquote>
+
+<h2 id="dsh-04-s2">存储层的写入路径：从契约到 fsync</h2>
+
+<h3 id="dsh-04-s2-1">契约只有五个动词</h3>
+
+<p><code class="inl">session-persistence</code> 包本身不做 IO，它只定义一个抽象服务 <code class="inl src-ref" data-src="dsh:packages/session/session-persistence/src/index.ts:137" data-expect="export abstract class SessionPersistence extends Service {">session-persistence/src/index.ts:137</code>。抽象方法只有五个：<code class="inl src-ref" data-src="dsh:packages/session/session-persistence/src/index.ts:152" data-expect="abstract create(header: SessionHeader">create</code>（新建一个会话）、<code class="inl src-ref" data-src="dsh:packages/session/session-persistence/src/index.ts:167" data-expect="abstract open(id: SessionId, access: SessionAccess">open</code>（按读或写模式打开，拿到一个句柄）、<code class="inl src-ref" data-src="dsh:packages/session/session-persistence/src/index.ts:180" data-expect="abstract flush(): Promise&lt;void&gt;">flush</code>、<code class="inl src-ref" data-src="dsh:packages/session/session-persistence/src/index.ts:196" data-expect="abstract stat(id: SessionId">stat</code>（看一个会话的快照信息，不读全文）和 <code class="inl src-ref" data-src="dsh:packages/session/session-persistence/src/index.ts:203" data-expect="abstract list(options?: SessionPersistenceListOptions)">list</code>。真正的读写都走句柄，hx-04 已经讲过句柄的读写两种模式和“永远不返回撕裂尾巴”的承诺。</p>
+
+<p>站在存储层看，这个契约最值得注意的是它<strong>没有</strong>什么：没有“按条件查询事件”，没有“全文搜索”，没有“改写某一条”。查询是 <code class="inl">session-query</code> 的事，改写根本不允许（改格式要走迁移，生成新文件）。<code class="inl">stat</code> 和 <code class="inl">list</code> 返回的快照带一个 revision，后面讲检索索引时会看到它被拿来判断“这个会话自上次索引后有没有变”。</p>
+
+<h3 id="dsh-04-s2-2">一批事件怎么落盘</h3>
+
+<p>hx-04 讲过前半段：实时事件先克隆进缓冲区，200 毫秒窗口到期后成批写。这里接着往下看。窗口到期或收到 <code class="inl">session/flush</code> 时调用的是 <code class="inl">drainLive</code>，它用一个很短的写法保证并发调用只排空一次：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  drainLive(): Promise&lt;void&gt; {
+    return this.draining ??= this.drainBuffered().finally(() =&gt; {
+      this.draining = undefined
+    })
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/storage.ts:288" data-expect="drainLive(): Promise&lt;void&gt; {">packages/session/session-persistence-jsonl/src/storage.ts:288-292</code></p>
+
+<p><code class="inl">??=</code> 的意思是“左边是 undefined 才赋值”。第一个调用者创建排空任务并存进 <code class="inl">this.draining</code>，排空期间再来的调用者直接拿到同一个 Promise，排空结束后清掉。Python 里等价的写法是把一个 <code class="inl">asyncio.Task</code> 存在实例上，有就 await 它，没有才新建。</p>
+
+<p>排空最终调用后端的 <code class="inl">persistBatch</code>。它在写之前做两件事：先把这个会话的“冷日志备忘”删掉（缓存的旧读结果马上就会过时），再看会话有没有物化过。DSH 的会话是<strong>惰性物化</strong>的：新建会话时磁盘上什么都没有，第一批事件落盘时才连同头记录一起创建文件。</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  async persistBatch(
+    header: SessionHeader,
+    events: readonly SessionEvent[],
+    isMaterialized: boolean,
+    inheritedEventCount: SessionLogOffsetType,
+  ): Promise&lt;void&gt; {
+    this.coldLogMemo.delete(header.id)
+    await this.ensureRootEncoding()
+    if (isMaterialized) {
+      await this.appendLines(header, events)
+    } else {
+      await this.materialize(header, inheritedEventCount, events)
+      this.tracker.materialized(header.id)
+    }
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/index.ts:863" data-expect="async persistBatch(">packages/session/session-persistence-jsonl/src/index.ts:863-877</code></p>
+
+<p>已物化的会话走 <code class="inl">appendLines</code>。这是整条写入路径里最关键的十几行：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  private async appendLines(meta: SessionHeader, events: readonly SessionEvent[]): Promise&lt;void&gt; {
+    const content = await this.encodeEventBatch(events)
+    const path = logPath(this.root, meta.cwd, meta.id, this.compression)
+    const handle = await open(path, 'a')
+    let closed = false
+    const closeAppendHandle = async (): Promise&lt;void&gt; =&gt; {
+      if (closed) return
+      closed = true
+      await handle.close()
+    }
+
+    try {
+      const { size: before } = await handle.stat()
+      try {
+        await handle.writeFile(content)
+        await handle.sync()
+      } catch (error) {
+        try {
+          await closeAppendHandle()
+          await this.rollbackAppend(path, before)
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], `failed to roll back append to "${path}"`)
+        }
+        throw error
+      }
+    } finally {
+      await closeAppendHandle()
+    }
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/index.ts:1334" data-expect="private async appendLines(meta: SessionHeader">packages/session/session-persistence-jsonl/src/index.ts:1334-1362</code></p>
+
+<p>顺序是：先记下写之前的文件大小 <code class="inl">before</code>，整批编码成一段字节一次写入，再 <code class="inl">sync()</code>（也就是 fsync，让操作系统把数据真正刷到磁盘）。写或 sync 任何一步失败，就把文件截回 <code class="inl">before</code>。方法上方的注释说明了原因：游标没有前进，上层会重试同一批；如果留下半批字节，重试就会写出重复的序号（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/index.ts:1332" data-expect="leaving partial bytes would create duplicate sequence numbers">index.ts:1332</code>）。回滚自己也失败时，两个错误用 <code class="inl">AggregateError</code> 一起抛出，不吞掉任何一个。</p>
+
+<p>这和 hx-04 讲的“撕裂尾巴”是两道不同的防线。撕裂尾巴处理的是<strong>进程被杀</strong>，来不及执行任何清理代码，只能在下次读取时识别并截掉；这里的回滚处理的是<strong>进程还活着但 IO 报错</strong>，比如磁盘满，当场就能恢复原状。</p>
+
+<h3 id="dsh-04-s2-3">换代发布时还要 fsync 目录</h3>
+
+<p>迁移会生成一个新版本的日志文件（hx-04 讲过文件名带版本）。新文件写完并 fsync 之后，还要 fsync 它所在的目录，否则断电后“这个目录里有这个文件名”这件事本身可能丢失。DSH 的实现在 Windows 上直接跳过，注释说明 Windows 的命名空间操作本身就是直写的：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">async function syncDirectory(path: string, internals: JsonlGenerationInternals): Promise&lt;void&gt; {
+  /* v8 ignore next -- Windows namespace operations request write-through directly. */
+  if (internals.platform === 'win32') return
+  const handle = await internals.fs.open(path, 'r')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/generation.ts:655" data-expect="async function syncDirectory(path: string">packages/session/session-persistence-jsonl/src/generation.ts:655-662</code></p>
+
+<p>调用点在发布新一代文件的流程末尾（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/generation.ts:841" data-expect="await syncDirectory(dirname(currentPath), internals)">generation.ts:841</code>）。Python 里对应的写法是 <code class="inl">fd = os.open(dirpath, os.O_RDONLY); os.fsync(fd)</code>，同样在 Windows 上不可用。</p>
+
+<h2 id="dsh-04-s3">迁移链怎么组织成包</h2>
+
+<h3 id="dsh-04-s3-1">一条迁移一个包，目录由脚本生成</h3>
+
+<p>hx-04 讲了迁移的两条规则（只许相邻、比当前新的一律拒绝）。这里看它在仓库里的形状。<code class="inl">packages/session/</code> 下有一个契约包 <code class="inl">session-format</code>，四个迁移包 <code class="inl">session-format-v0-to-v1</code> 到 <code class="inl">v3-to-v4</code>，外加一个把它们拼起来的 <code class="inl">session-format-catalog</code>。每个迁移包的 package.json 描述就说明了它改什么：v0→v1 是“恒等迁移”（<code class="inl src-ref" data-src="dsh:packages/session/session-format-v0-to-v1/package.json:3" data-expect="identity migration to v1">v0-to-v1/package.json:3</code>），v1→v2 改助手消息的流式表示，v2→v3 改系统提示的流式表示、规范信封和 PTC（程序化工具调用）。</p>
+
+<p>拼装的目录文件是脚本生成的，文件头写着“不要手改”，并且说明了为什么用直接 import：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/**
+ * GENERATED by `scripts/gen-session-format-catalog.ts` — do not edit by hand.
+ * The direct imports make historical readability independent of mounted plugins.
+ */</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-format-catalog/src/generated.ts:2" data-expect="GENERATED by `scripts/gen-session-format-catalog.ts`">packages/session/session-format-catalog/src/generated.ts:1-4</code></p>
+
+<p>“历史可读性不依赖装了哪些插件”是这里的关键。DSH 几乎所有能力都是可插拔的 Cordis 插件（<a href="#/dsh?section=dsh-01">dsh-01</a>），但迁移不是：如果某个部署没装 v1→v2 的插件，它就打不开一份 v1 的老日志。所以迁移包被当成普通库直接 import，一份构建要么能读所有历史版本，要么编译不过。</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  currentEncoder: releasedV4SessionFormatCodec,
+  migrations: [
+    sessionFormatV0ToV1,
+    sessionFormatV1ToV2,
+    sessionFormatV2ToV3,
+    sessionFormatV3ToV4,
+  ],</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-format-catalog/src/generated.ts:25" data-expect="currentEncoder: releasedV4SessionFormatCodec,">packages/session/session-format-catalog/src/generated.ts:25-31</code></p>
+
+<p>每个迁移包同时导出“冻结的”上一版编解码器（名字里带 <code class="inl">released</code>）。冻结的意思是：v2 发布之后，v2 的解码逻辑就复制一份钉死在 v1-to-v2 包里，当前代码再怎么重构也不碰它。这和 hx-04 提到的“历史恢复路径用版本钉死的目录”是同一个思路。</p>
+
+<h3 id="dsh-04-s3-2">逐字看一条迁移：v3→v4 把工具结果从 user 消息里提出来</h3>
+
+<p>v3 及以前，工具结果存成一条 <code class="inl">role: 'user'</code> 的消息，content 里放唯一一个 <code class="inl">type: 'tool-result'</code> 的包装块。这是很多 API 的历史写法（Anthropic Messages API 至今仍然把 tool_result 放在 user 消息里）。v4 改成一等公民的 <code class="inl">role: 'tool'</code>。做这件事的函数是 <code class="inl">liftToolResult</code>：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export function liftToolResult(event: SessionFormatEvent): SessionFormatEvent {
+  if (event.type !== 'tool/result' || !isSessionFormatJsonObject(event.data)) return event
+  const data = event.data
+  const message = data['message']
+  if (!isSessionFormatJsonObject(message) || message['role'] !== 'user') return event
+  const source = message['source']
+  const callId = isSessionFormatJsonObject(source) ? source['callId'] : undefined
+  const content = message['content']
+  const block = Array.isArray(content) &amp;&amp; content.length === 1
+    ? (content as readonly SessionFormatJsonValue[])[0]
+    : undefined
+  const wrapper = isSessionFormatJsonObject(block) ? block : undefined
+  const id = message['id']
+  if (typeof id !== 'string' || id.length === 0
+    || !isSessionFormatJsonObject(source) || source['kind'] !== 'tool'
+    || typeof callId !== 'string' || callId.length === 0
+    || wrapper === undefined || wrapper['type'] !== 'tool-result'
+    || wrapper['toolCallId'] !== callId) {
+    throw new SessionFormatError(`format v3 ${event.type} at seq ${event.seq} requires exactly one tool-result wrapper matching its tool source`)
+  }
+  const isError = wrapper['isError']
+  if (isError !== undefined &amp;&amp; typeof isError !== 'boolean') {
+    throw new SessionFormatError(`format v3 ${event.type} at seq ${event.seq} tool-result isError must be boolean`)
+  }
+  const targetMessage: Record&lt;string, SessionFormatJsonValue&gt; = {
+    role: 'tool',
+    source,
+    toolCallId: callId,
+    content: resultContent(wrapper['content'], `format v3 ${event.type} at seq ${event.seq}`),
+    ...(isError === undefined ? {} : { isError }),
+    id,
+    ...extensionFields(message, MESSAGE_FIELDS, 'message'),
+    ...extensionFields(wrapper, WRAPPER_FIELDS, 'result'),
+  }
+  return { ...event, data: { ...data, message: targetMessage } }
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-format-v3-to-v4/src/tool-role.ts:36" data-expect="export function liftToolResult(event: SessionFormatEvent): SessionFormatEvent {">packages/session/session-format-v3-to-v4/src/tool-role.ts:36-71</code></p>
+
+<p>字段变化可以列成一张表（包 README 里有同样的对照，<code class="inl src-ref" data-src="dsh:packages/session/session-format-v3-to-v4/README.zh.md:89" data-expect="`data.message.role: 'user'`">README.zh.md:87-94</code>）：</p>
+
+<div class="table-wrap"><table><thead><tr><th>v3 位置</th><th>v4 位置</th></tr></thead><tbody>
+<tr><td><code class="inl">data.message.role: 'user'</code></td><td><code class="inl">role: 'tool'</code></td></tr>
+<tr><td><code class="inl">content[0].toolCallId</code></td><td><code class="inl">data.message.toolCallId</code>，必须等于 <code class="inl">source.callId</code></td></tr>
+<tr><td><code class="inl">content[0].content</code></td><td>直接成为 <code class="inl">data.message.content</code></td></tr>
+<tr><td><code class="inl">content[0].isError</code></td><td>可选的 <code class="inl">data.message.isError</code>，原来没写就仍然不写</td></tr>
+<tr><td>包装块的 <code class="inl">type: 'tool-result'</code></td><td>随包装块一起删除</td></tr>
+<tr><td>消息上和包装块上的其他字段</td><td>改名为 <code class="inl">plugin:message:原名</code> / <code class="inl">plugin:result:原名</code>，一个不丢</td></tr>
+</tbody></table></div>
+
+<p>这个函数体现了三条迁移纪律。第一，<strong>不认识的事件原样放过</strong>：第 37、40 行，不是 <code class="inl">tool/result</code> 或者已经不是 user 角色，直接返回原事件。第二，<strong>看着像但不对的事件直接报错</strong>，不尽力而为：包装块多一个、call id 对不上、<code class="inl">isError</code> 不是布尔值，都抛 <code class="inl">SessionFormatError</code>。测试里专门有一条“多出一个顶层文本块就拒绝”（<code class="inl src-ref" data-src="dsh:packages/session/session-format-v3-to-v4/tests/tool-role.spec.ts:220" data-expect="rejects a released wrapper with extra top-level content blocks">tool-role.spec.ts:220</code>）。第三，<strong>未知字段改名保留</strong>，而不是丢掉：迁移的作者不知道某个插件往消息上挂了什么，所以不替它做决定。</p>
+
+<p>v3→v4 还有一个特殊之处：它需要知道父会话有哪些子会话（fork 关系），这是单条事件看不出来的。目录包为此提供了一个变体工厂，用带子会话证据的迁移替换掉默认那条边，其余边不变（<code class="inl src-ref" data-src="dsh:packages/session/session-format-catalog/src/children.ts:17" data-expect="migrations: sessionFormatCatalogOptions.migrations.map(edge =&gt; edge === sessionFormatV3ToV4 ? migration : edge),">children.ts:13-19</code>）。</p>
+
+<h2 id="dsh-04-s4">投影：从日志折叠出来的派生状态</h2>
+
+<h3 id="dsh-04-s4-1">一个投影单元就是一个 reduce</h3>
+
+<p>侧边栏要显示每个会话“一共几轮、花了多久、标题是什么”。最笨的办法是每次都把整份日志读一遍。DSH 的办法是<strong>投影</strong>：注册一个纯函数 <code class="inl">apply(state, event) → state</code>，每提交一条事件就推进一次。Python 读者可以直接想成 <code class="inl">functools.reduce(apply, events, init(header))</code>，只不过这个 reduce 是增量跑的。</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  /**
+   * Persisted-cache invalidation version: bump whenever the serialized state fields or the
+   * fold semantics change, so persisted `(sessionId, key, ver, seq, val)`
+   * rows from an older unit are discarded instead of being forward-applied
+   * into garbage. Non-negative integer.
+   */
+  stateVersion: number</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-projection/src/index.ts:92" data-expect="  stateVersion: number">packages/session/session-projection/src/index.ts:86-92</code></p>
+
+<p>投影定义里除了 <code class="inl">init</code>、<code class="inl">apply</code>、可选的 <code class="inl">wire.view</code>，就是这个 <code class="inl">stateVersion</code>。它是投影缓存失效的唯一开关。顺带澄清一个容易混的名字：core 里还有一个 <code class="inl">contentGeneration</code>（<code class="inl src-ref" data-src="dsh:packages/core/session/src/surface.ts:251" data-expect="readonly contentGeneration: number">surface.ts:251</code>），那是消息表面被替换或被插件改写的计数，用来让 <code class="inl">messages()</code> 的内存缓存重建，和这里的投影缓存没有关系。</p>
+
+<p><code class="inl">apply</code> 的注释还有一条硬规定：对不关心的事件必须返回<strong>同一个引用</strong>，这样 <code class="inl">Object.is</code> 一比就知道没变，下游零开销（<code class="inl src-ref" data-src="dsh:packages/session/session-projection/src/index.ts:65" data-expect="unit uninterested in an event MUST return the same state reference">index.ts:64-66</code>）。这是 React 不可变更新的同一套路数。</p>
+
+<h3 id="dsh-04-s4-2">投影缓存：可能过期，但永远不会错</h3>
+
+<p>投影本身在内存里，重启就没了。冷启动列出 200 个历史会话时，总不能把 200 份日志从头折一遍。于是有了 <code class="inl">session-projection-cache</code>：把每个投影的状态存成一行 <code class="inl">(ver, seq, val)</code>，下次从这一行接着折。包的开头把定位说得很清楚，缓存是“折叠的捷径，不是权威”，一行“可能过期（seq 说明多过期），但永远不会错”（<code class="inl src-ref" data-src="dsh:packages/session/session-projection-cache/src/index.ts:11" data-expect="is possibly stale (its `seq` says how stale) but never wrong">index.ts:10-14</code>）。</p>
+
+<p>“永远不会错”靠的是恢复时的三道检查：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      const usable = row !== undefined
+        &amp;&amp; row.ver === def.stateVersion
+        &amp;&amp; row.seq &gt;= beforeBase
+        &amp;&amp; row.seq &lt;= endSeq
+      if (!usable &amp;&amp; baseSeq &gt; 0) {
+        throw new Error(
+          `session projection ${JSON.stringify(def.key)} cannot restore from seq ${baseSeq}: `
+          + 'its checkpoint row is missing, version-mismatched, or beyond the supplied log end; re-read from seq 0',
+        )
+      }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-projection/src/index.ts:511" data-expect="const usable = row !== undefined">packages/session/session-projection/src/index.ts:511-520</code></p>
+
+<ul>
+<li><code class="inl">ver === stateVersion</code>：投影的折叠逻辑改过，老行直接丢，不尝试迁移。</li>
+<li><code class="inl">seq &gt;= beforeBase</code>：这一行确实覆盖到了尾部读取的起点。</li>
+<li><code class="inl">seq &lt;= endSeq</code>：这一行没有声称见过日志里根本不存在的事件。这一条防的是 hx-04 讲过的崩溃修复：日志被截短之后，缓存行的水位可能比日志还长。</li>
+</ul>
+
+<p>为了让第三条检查可靠，读尾部时故意从最低水位<strong>再往前一条</strong>开始读（<code class="inl src-ref" data-src="dsh:packages/session/session-projection/src/index.ts:435" data-expect="SessionLogOffset(Math.max(floor - 1, 0))">index.ts:426-436</code>）。这样哪怕尾部是空的，也能知道日志到底延伸到哪一条，而不是把“读到零条”误当成“没有新事件”。</p>
+
+<h3 id="dsh-04-s4-3">为什么不把派生状态写回日志</h3>
+
+<p>最直接的替代方案是：每轮结束往日志里追加一条 <code class="inl">stats/snapshot</code> 事件，冷启动时找最后一条快照。DSH 没这么做，从代码里能看出三个理由。第一，投影是插件注册的，日志格式是全局冻结的；把插件状态写进日志，就等于每改一次投影逻辑都要发一版日志格式。第二，<code class="inl">stateVersion</code> 不匹配时缓存行直接丢弃（<code class="inl src-ref" data-src="dsh:packages/session/session-projection-cache/src/spec.ts:27" data-expect="discards it at read time (never a migration).">spec.ts:24-27</code>），可日志里的东西不能丢，只能迁移。第三，缓存的写入路径全部“软失败”，丢一次写只是下次冷读多回放一段；日志写失败则是数据丢失。两种东西的失败语义完全不同，所以放在两种存储里。（最后这一句是作者的归纳。）</p>
+
+<p>缓存什么时候写？三个必写点（会话创建、<code class="inl">turn/end</code>、会话释放）加两个节流触发：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    this.ctx.on('session/event', (session: Session, event: SessionEvent) =&gt; {
+      if (event.type === 'turn/end') {
+        void this.flushSoft(session, 'turn/end')
+        return
+      }
+      const state = this.dirty.get(session) ?? { pending: 0, timer: undefined }
+      this.dirty.set(session, state)
+      state.pending += 1
+      if (state.pending &gt;= this.config.writeEveryEvents) {
+        void this.flushSoft(session, 'count threshold')
+        return
+      }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/session/session-projection-cache/src/index.ts:315" data-expect="this.ctx.on('session/event', (session: Session, event: SessionEvent) =&gt; {">packages/session/session-projection-cache/src/index.ts:315-326</code></p>
+
+<p>base 包把两个阈值写死为 200 条事件、5000 毫秒（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:194" data-expect="writeEveryEvents: 200">bundle/base/cordis.patch.yml:194-195</code>）。<code class="inl">void</code> 前缀表示不等它完成，对话循环不会被缓存写盘拖慢。</p>
+</section>
+</div>
