@@ -1,0 +1,418 @@
+<section class="chapter" id="ch-hx-06" data-slug="hx-06"><div class="ch-head"><span class="ch-num">第 6 章</span></div><h1 id="hx-06">Prompt cache 稳定性</h1>
+<p>前面几章讲了历史怎么存（<a href="#hx-04">会话日志</a>）、上下文压力怎么量（<a href="#hx-05">token 预算</a>）。这一章要处理一个平时看不见、只在账单上看得见的问题：<strong>你的 harness 每一轮都在重新拼一份一模一样的前缀，那么它到底有没有被复用？</strong></p>
+
+<p>prompt 缓存（provider 侧的 KV 前缀缓存）不是「省一点钱」的小优化，它是 agent harness 里唯一一个「改动一行代码就可能让成本翻几倍、而且没有任何功能症状」的地方。它的规则简单到只有一条：<strong>前缀匹配</strong>。前缀里任何一个字节变了，从那个字节之后的所有缓存全部失效。没有例外，没有部分补偿——provider 不是「尽量复用」，而是「第一个不同的 token 之前的部分能复用」。</p>
+
+<p>这一章的目标是把这个「没有症状的成本失血」变成可诊断、可测试、可回归的东西。做法是：把一次请求渲染成确定的字节序列，然后用一个纯函数回答「这一次和上一次比，缓存从哪个字节开始失效」。</p>
+
+<h2 id="hx-06-s1">前缀缓存到底在缓存什么</h2>
+
+<p>先说清楚机制，因为后面所有的坑都是这条机制的推论。</p>
+
+<p>你每次请求发给模型的东西，在线上是一串有序的 token。provider 把这段 token 序列送进 transformer 之后，中间的注意力键值对可以留着下次用——但只有在「下次请求的开头和这次一模一样」时才留得住。这就是「前缀缓存」。于是它的两条推论是：</p>
+
+<ul>
+<li><strong>命中长度 = 最长相同前缀的长度</strong>，不是「相似度」、不是「差几行」。差一个字符，从那个字符起全部重新算。</li>
+<li><strong>渲染顺序决定了什么东西最贵。</strong>Anthropic 官方文档给出的顺序是 tools → system → messages。这意味着工具声明排在整条请求的最前面：工具列表变了，连系统提示词一起全部失效；而历史里最后一条消息变了，只影响它自己之后的部分。</li>
+</ul>
+
+<p>「官方文档给的顺序」这一点需要标一下出处：Anthropic 的 prompt caching 文档里写明缓存是前缀匹配、请求的渲染顺序是 tools → system → messages，并列举了几种常见的静默失效来源（系统提示里放当前时间、JSON 键顺序不稳定、工具列表顺序变化）。这些是 provider 文档里的事实，不是本仓库源码里的行，所以下面讲到它们时只标出处类型、不配 <code class="inl">src-ref</code>。能用源码证明的，是各家 harness 面对这条规则时做了什么。</p>
+
+<blockquote><p><strong>为什么值得当成一等公民</strong>：一次多步的 turn，模型请求次数等于 step 数；一次长任务的会话，请求次数是几十上百次。这些请求里 90% 以上的输入是同一段历史——如果每轮都整段重算，你付的是「每次都从零读一遍全部上下文」的钱。省下来的那部分不是边际改善，而是量级差。</p></blockquote>
+
+<p>我们不需要相信任何数字就能验证这条规则：把请求渲染成字节，自己比一遍。这正是 <code class="inl">labs/harness/prompt_cache.py</code> 做的事。</p>
+
+<h2 id="hx-06-s2">把请求渲染成确定的字节</h2>
+
+<p>要诊断缓存，第一步是让「这次请求会发什么」变成可比较的对象。这里有个陷阱：Python 的 <code class="inl">dict</code> 保持插入顺序，<code class="inl">json.dumps</code> 默认继承它。而插入顺序经常取决于上游并发任务的完成顺序——于是两次逻辑上完全一样的请求，渲染出的字节不同，缓存静默失效。所以渲染的第一条纪律是：<strong>键排序 + 固定分隔符</strong>。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/prompt_cache.py::canonical_json"><span class="kw">def</span> <span class="fn">canonical_json</span>(value<span class="op">:</span> <span class="cls">Any</span>) <span class="op">-&gt;</span> bytes<span class="op">:</span>
+    <span class="str">"""确定性的 JSON 字节序列：键排序、无多余空白、非 ASCII 不转义。
+
+    sort_keys 解决「同一个 dict 两次 dumps 出不同字节」这类静默失效：
+    Python 的 dict 保持插入顺序，而插入顺序经常取决于上游并发任务的完成顺序。
+    """</span>
+    text <span class="op">=</span> json.dumps(value, sort_keys<span class="op">=</span><span class="kw">True</span>, separators<span class="op">=</span>(<span class="str">","</span>, <span class="str">":"</span>), ensure_ascii<span class="op">=</span><span class="kw">False</span>)
+    <span class="kw">return</span> text.encode(<span class="str">"utf-8"</span>)</code></pre></div>
+
+<p>第二条纪律是渲染顺序固定，而且<strong>每条消息各占一个可复用单位</strong>。这一点比「三段式」更细，但它是本章后面全部诊断的基础：只有把消息拆成单位，「追加一条消息」和「改写第 2 条消息」才区分得开。前者前缀完整命中，后者从第 2 条起全部失效——在真实账单上差了一个量级，粗粒度的段级比较看不出区别。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/prompt_cache.py::render_request"><span class="kw">def</span> <span class="fn">render_request</span>(
+    tools<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">Mapping</span>[str, <span class="cls">Any</span>]],
+    system<span class="op">:</span> str,
+    messages<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">Message</span>],
+) <span class="op">-&gt;</span> <span class="cls">RenderedRequest</span><span class="op">:</span>
+    <span class="str">"""把一次请求渲染成一条前缀，并按单位算出累积哈希。
+
+    顺序是 tools → system → messages。空系统提示词仍然占一个单位（长度 0），
+    因为「有没有这一部分」本身也是前缀的一部分。
+    """</span>
+    units<span class="op">:</span> list[<span class="cls">Unit</span>] <span class="op">=</span> [
+        <span class="cls">Unit</span>(kind<span class="op">=</span><span class="str">"tools"</span>, label<span class="op">=</span><span class="str">"tools"</span>, payload<span class="op">=</span>canonical_json(canonical_tools(tools))),
+        <span class="cls">Unit</span>(kind<span class="op">=</span><span class="str">"system"</span>, label<span class="op">=</span><span class="str">"system"</span>, payload<span class="op">=</span>system.encode(<span class="str">"utf-8"</span>)),
+    ]
+    <span class="kw">for</span> index, message <span class="kw">in</span> enumerate(messages)<span class="op">:</span>
+        units.append(
+            <span class="cls">Unit</span>(kind<span class="op">=</span><span class="str">"message"</span>, label<span class="op">=</span><span class="str">f"messages[{index}]"</span>, payload<span class="op">=</span>message.canonical)
+        )
+    frozen <span class="op">=</span> tuple(units)
+    <span class="kw">return</span> <span class="cls">RenderedRequest</span>(units<span class="op">=</span>frozen, hashes<span class="op">=</span>unit_hashes(frozen))</code></pre></div>
+
+<p>注意 <code class="inl">Unit.framed</code> 在拼字节时把 <code class="inl">label</code> 也写进去了。这不是为了好看：它保证「同样的字节出现在不同位置」不会算出同一个哈希。否则一个恰好等于系统提示词文本的用户消息会被当成同一段前缀的一部分。</p>
+
+<h3 id="hx-06-s2-1">工具列表：注册顺序是加载产物，不是语义</h3>
+
+<p>工具声明排在渲染顺序的最前面，所以它的稳定性决定整条请求的天花板。而工具的注册顺序几乎总是「插件加载顺序」这种和语义无关的东西。DSH 在提示词组装里显式规范化了顺序：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">function orderTools(tools: ToolSchema[], toolOrder: string[] | undefined, knownNames: ReadonlySet&lt;string&gt;): ToolSchema[] {
+  const reserved = tools.find(tool =&gt; tool.name === TOOL_ORDER_REST)
+  if (reserved !== undefined) {
+    throw new Error(`tool provider returned reserved tool name "${TOOL_ORDER_REST}" (reserved for toolOrder's rest entry)`)
+  }
+  if (toolOrder === undefined) return tools.sort(compareToolNames)
+  const unknown = toolOrder.filter(name =&gt; name !== TOOL_ORDER_REST &amp;&amp; !knownNames.has(name))
+  if (unknown.length &gt; 0) {
+    throw new Error(`toolOrder lists unregistered tool${unknown.length &gt; 1 ? 's' : ''} ${unknown.map(name =&gt; `"${name}"`).join(', ')}; known tools: ${[...knownNames].sort().join(', ') || '(none)'}`)
+  }
+  const listed = new Set(toolOrder)
+  const rest = tools.filter(tool =&gt; !listed.has(tool.name)).sort(compareToolNames)
+  return toolOrder.flatMap(name =&gt;
+    name === TOOL_ORDER_REST ? rest : tools.filter(tool =&gt; tool.name === name))
+}</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:222" data-expect="function orderTools(tools: ToolSchema[], toolOrder: string[] | undefined, knownNames: ReadonlySet&lt;string&gt;): ToolSchema[] {">system-prompt/index.ts:222</code>；默认分支就是排序这一行 <code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:227" data-expect="if (toolOrder === undefined) return tools.sort(compareToolNames)">index.ts:227</code>。三个细节值得抄：</p>
+
+<ul>
+<li><strong>默认排序</strong>：没有配置 <code class="inl">toolOrder</code> 时按名字排序，而不是按注册顺序。所以「顺序不稳定」这件事在默认路径上就被消掉了。</li>
+<li><strong>比较函数是 code-unit 逐字符比</strong>（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:238" data-expect="Code-unit name comparison">index.ts:238</code>，注释写明 locale-independent, so the order is identical on every machine）。不用 <code class="inl">localeCompare</code>：那种比较在不同机器、不同 locale 下结果可能不同，同一份配置在两台机器上会渲染出不同的前缀。</li>
+<li><strong>配置了顺序就必须配对了</strong>：<code class="inl">toolOrder</code> 里写了一个没注册的工具名，<code class="inl">assemble()</code> 直接抛错而不是静默忽略。这是个有意为之的取舍——配置错的时候大声失败，比悄悄渲染出一个和预期不同的前缀好。</li>
+</ul>
+
+<p>我们这边对应的是 <code class="inl">canonical_tools</code>：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/prompt_cache.py::canonical_tools"><span class="kw">def</span> <span class="fn">canonical_tools</span>(tools<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">Mapping</span>[str, <span class="cls">Any</span>]]) <span class="op">-&gt;</span> list[dict[str, <span class="cls">Any</span>]]<span class="op">:</span>
+    <span class="str">"""工具集规范化：按名字排序。
+
+    注册顺序是插件加载顺序的产物（DSH README 的原话是 registration order is a
+    plugin-load artifact），它跟模型的判断无关，却会改变提示前缀。排序把它消掉。
+    """</span>
+    <span class="kw">return</span> [dict(tool) <span class="kw">for</span> tool <span class="kw">in</span> sorted(tools, key<span class="op">=</span><span class="kw">lambda</span> tool<span class="op">:</span> str(tool[<span class="str">"name"</span>]))]</code></pre></div>
+
+<h2 id="hx-06-s3">诊断：第一个差异落在哪个字节</h2>
+
+<p>有了规范渲染，缓存问题就变成了一个纯函数问题：给定上一次和这一次，回答「最长相同前缀有多长」。这个函数是本章最该抄走的一段代码——它把「缓存命中率掉了」这种模糊抱怨，变成「第 2 条消息被改写了」这种可操作结论。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/prompt_cache.py::diff_prefix"><span class="kw">def</span> <span class="fn">diff_prefix</span>(prev<span class="op">:</span> <span class="cls">RenderedRequest</span>, curr<span class="op">:</span> <span class="cls">RenderedRequest</span>) <span class="op">-&gt;</span> <span class="cls">RequestDiff</span><span class="op">:</span>
+    <span class="str">"""找出两次请求的第一个差异，并据此判断这次最多能复用多少缓存。
+
+    这是整个模块的核心纯函数：给定两次渲染结果，回答「缓存从哪个单位、哪个字节开始失效」。
+    三种形态的后果差别很大，是本章反复要讲的：
+      1. 工具或系统提示词变了 —— 命中在它之前，之后全废；
+      2. 历史里第 k 条消息被改写 —— 命中到 k-1，之后全废；
+      3. 尾部追加 —— 前缀完整命中，只有新增部分要重新计算。
+    """</span>
+    <span class="kw">return</span> _diff(prev, curr)</code></pre></div>
+
+<p>它区分三种形态，因为三者的成本完全不同。关键在于：<strong>它不是按「段」比，而是按字节比</strong>。段级比较会给出一堆假警报（「messages 变了」——但变的其实只是尾部多了一条），字节级比较才能算出真实的可复用长度。两者都要，因为它们回答的是不同问题：段级回答「谁干的」，字节级回答「亏了多少」。</p>
+
+<p>最后把「缓存」本身也变成可离线的对象：一个只记前缀哈希的模拟器。真实缓存还有 TTL、最小可缓存长度、按模型区分等维度，但本质规则只有一条——前缀必须逐字节相同。把它写成一个二十行的类，缓存行为就进了单元测试。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/prompt_cache.py::PrefixCache.lookup">    <span class="kw">def</span> <span class="fn">lookup</span>(self, request<span class="op">:</span> <span class="cls">RenderedRequest</span>) <span class="op">-&gt;</span> int<span class="op">:</span>
+        <span class="str">"""返回这次请求命中的**单位数**（0 表示连工具声明都没命中）。"""</span>
+        hit <span class="op">=</span> <span class="num">0</span>
+        <span class="kw">for</span> digest <span class="kw">in</span> request.hashes<span class="op">:</span>
+            <span class="kw">if</span> digest <span class="kw">not</span> <span class="kw">in</span> self._seen<span class="op">:</span>
+                <span class="kw">break</span>
+            hit <span class="op">+=</span> <span class="num">1</span>
+        <span class="kw">return</span> hit</code></pre></div>
+
+<p>它的 <code class="inl">store</code> 只记「前缀」而不是整串，这个选择让它自动具备了真实缓存的关键性质：下一次请求多一条消息时，它前面的单位哈希没变，所以照样命中。追加式历史天然对缓存友好，这不是巧合，而是「只记前缀」的必然结果。</p>
+
+<h2 id="hx-06-s4">分层设计：稳定的系统提示词 + 运行时上下文快照</h2>
+
+<p>现在讲本章最重要的工程结论。harness 的系统提示词里总有一天要塞进「当前时间」「工作目录」「git 分支」「待办列表」这类东西——它们对模型有用，而且真的该被看到。问题在于塞进哪里。</p>
+
+<p>直觉答案（拼进系统提示词）是错的，而且错得很贵：系统提示词排在渲染顺序的第二个位置（tools 之后、messages 之前），它一变，整条历史全部失效。改成「作为一条消息追加在历史之后」，同样的信息、同样的模型可见内容，但前缀完整保住。两种做法的差别不是「更好一些」，而是「命中率 100%」和「从系统提示词之后全部重算」。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/prompt_cache.py::build_request"><span class="kw">def</span> <span class="fn">build_request</span>(
+    <span class="op">*</span>,
+    system<span class="op">:</span> str,
+    tools<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">Mapping</span>[str, <span class="cls">Any</span>]],
+    messages<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">Message</span>] <span class="op">=</span> (),
+    runtime_context<span class="op">:</span> str <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+    context_in_system<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>,
+) <span class="op">-&gt;</span> <span class="cls">RenderedRequest</span><span class="op">:</span>
+    <span class="str">"""构造一次请求。
+
+    ``context_in_system=False``（推荐）：易变的运行时事实（时间、cwd、git 状态、todo）
+    作为一条独立消息追加在历史**之后**——它只是前缀的一条尾巴，前缀本身不受影响。
+    这对应 DSH 的 runtime-context 快照：渲染成一条 user 消息，而不是拼进系统提示词。
+
+    ``context_in_system=True``（反例）：把同样的内容拼进系统提示词。系统提示词排在第二个
+    单位，它一变，整条请求从那里就开始偏离，后面全部失效——而模型在这种配置下看到的内容
+    和「好」版本完全一样，所以失效没有任何可见症状。
+    """</span>
+    history<span class="op">:</span> list[<span class="cls">Message</span>] <span class="op">=</span> list(messages)
+    rendered_system <span class="op">=</span> system
+    <span class="kw">if</span> runtime_context <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">if</span> context_in_system<span class="op">:</span>
+            rendered_system <span class="op">=</span> <span class="str">f"{system}\n\n{runtime_context}"</span>
+        <span class="kw">else</span><span class="op">:</span>
+            history.append(<span class="cls">Message</span>(role<span class="op">=</span><span class="str">"user"</span>, text<span class="op">=</span>runtime_context, source<span class="op">=</span><span class="str">"runtime-context"</span>))
+    <span class="kw">return</span> render_request(tools, rendered_system, history)</code></pre></div>
+
+<p>DSH 把这条路走到了极致：<strong>运行时上下文有自己的消息来源、自己的投影状态、自己的「已清除」标记，完全不进系统提示词</strong>。</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  project(current: string, sections: readonly ContextSnapshotSection[]): UserMessage | undefined {
+    if (this.retained === undefined &amp;&amp; current.length === 0) return
+    const snapshot = current.length === 0 ? CLEARED : current
+    if (this.retained?.text === snapshot) return
+    return createUserMessage({
+      content: [{ type: 'text', text: snapshot }],
+      // The cleared marker has no contributions left to attribute.
+      source: sections.length === 0
+        ? { kind: SOURCE }
+        : { kind: SOURCE, form: 'snapshot', sections },
+    })
+  }</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:152" data-expect="project(current: string, sections: readonly ContextSnapshotSection[]): UserMessage | undefined {">runtime-context.ts:152</code>，类定义在 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:114" data-expect="export class RuntimeContextProjection {">runtime-context.ts:114</code>。三行就够看出设计意图：</p>
+
+<ul>
+<li><code class="inl">if (this.retained?.text === snapshot) return</code>——渲染结果和上次一样就<strong>什么都不产生</strong>，不写日志、不发新消息。这是「无害的运行时上下文」的关键：内容没变就不该让请求字节变。</li>
+<li>清空时发的是 <code class="inl">CLEARED</code> 这句固定文本（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:20" data-expect="const CLEARED = 'Current runtime context: none.">runtime-context.ts:20</code>），不是什么都不发。为什么？因为模型需要知道「刚才那份快照作废了」。用一句固定文本表达作废，比删掉那条消息（造成历史改写=缓存断裂）便宜得多。</li>
+<li>快照以 <code class="inl">user/message</code> 的形式追加（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:430" data-expect="this.session.append('user/message', context, { surfaceOp: 'append' })">agent.ts:430</code>），而不是 <code class="inl">system/message</code>。选哪一个角色决定了它落在渲染顺序的哪个位置。</li>
+</ul>
+
+<p>同样的信息在文本层面是这么拼的：<code class="inl">joinContextSections</code> 给整段加了一个自述标题（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:313" data-expect="Current runtime context. This snapshot supersedes earlier runtime-context snapshots.">system-prompt/index.ts:313</code>），逐条说明「这一份快照取代更早的运行时上下文快照」。有了这句话，即使快照被覆盖、被清空，模型也知道该以最新的为准，不会把两份快照拼起来读。</p>
+
+<h3 id="hx-06-s4-1">调用点：每轮怎么决定「要不要重写」</h3>
+
+<p>真正决定成本的是调用点。DSH 的 step 里，每次尝试都会做两件事，而且顺序不能换：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      const currentContext = this.loopCtx.systemPrompt.refreshContext(assembly, assembleContextFor(this, signal))
+      const sections = renderContextSections(currentContext)
+      const context = this.runtimeContext.project(joinContextSections(sections), sections)
+      signal.throwIfAborted()
+      const startsRequestSeries = firstAttempt &amp;&amp; decision.startsRequestSeries === true
+      const commits = this.systemPrompt.project(renderedPrompt, {
+        inHistory: preparedCall?.systemPromptUpdate === 'in-history',
+        startsSeries: startsRequestSeries
+          || this.requestSurfaceGeneration !== this.session.surface.contentGeneration
+          || (preparedCall?.toolUpdate === undefined &amp;&amp; this.toolsChanged(assembly.tools)),
+      })</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:411-421" data-expect="const currentContext = this.loopCtx.systemPrompt.refreshContext(assembly, assembleContextFor(this, signal))">agent.ts:411-421</code>。这里有三条可以直接搬走的规则。</p>
+
+<p><strong>规则一：系统提示词是「渲染一次」，运行时上下文是「每次刷新」。</strong><code class="inl">renderedPrompt</code> 在整个 step 的重试循环外算好（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:407" data-expect="const renderedPrompt = renderPrompt(assembly)">agent.ts:407</code>），循环内的 <code class="inl">while (true)</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:409" data-expect="while (true) {">agent.ts:409</code>）只刷新上下文（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:411" data-expect="this.loopCtx.systemPrompt.refreshContext(assembly, assembleContextFor(this, signal))">agent.ts:411</code>）。重试（<code class="inl">llm-retry</code> 那次）不会重新组装提示词，所以重试的请求和上一次的首字节一致——这正是「等一个 429 再试一次」不该白付一遍全量输入的原因。</p>
+
+<p><strong>规则二：系统提示词的准入策略由「是否要归并」决定。</strong><code class="inl">SystemPromptProjection.project</code> 的三条分支很直白：没有系统节点就追加头节点；<strong>不支持的路线、新序列、或渲染为空时，把新文本写回第一个系统节点</strong>（这会从那个节点起打断前缀）；否则「在延续的序列里、路由支持历史内更新」时，把变更<strong>追加</strong>到已缓存历史之后。DSH 自己把这条规则写在 README 里：</p>
+
+<blockquote><p>前缀复用要求同一 provider 与模型路由下，此前的消息与声明保持逐字节一致。原地替换某个系统节点的提示词变更，会使请求从该节点的第一个 token 起就不同——该节点是第 0 号节点时则整个请求都不同。当已准备调用声明 <code class="inl">systemPromptUpdate: 'in-history'</code> 时，同一序列延续期间的非空提示词变更会追加到已缓存历史之后，因此直到该历史末尾的前缀仍可复用。</p></blockquote>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/README.md:164" data-expect="Prefix reuse requires earlier messages and declarations to stay byte-identical under the same provider and model route.">agent-loop/README.md:164</code>。同一份 README 在 <code class="inl">system-prompt</code> 那边还有一句更狠的自述：<em>provider cache sharing and measured hit rates are not guaranteed</em>（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/README.md:154" data-expect="provider cache sharing and measured hit rates are not guaranteed">system-prompt/README.md:154</code>）。也就是说：harness 只能保证「该稳定的地方稳定」，命中与否最终由 provider 决定。这个诚实的边界值得学。</p>
+
+<p><strong>规则三：「新请求序列」是一个显式概念，不是一个副作用。</strong><code class="inl">SystemPromptDecisionInput.startsSeries</code> 的注释把三种触发条件列全了：pre-step 监听者声明了新序列、上次请求以来 surface 变了、或者「路由不支持工具更新时工具集变了」（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:44-46" data-expect="Whether prompt admission must consolidate: a pre-step listener declared a">runtime-context.ts:44-46</code>）。把「哪些情况允许打断缓存」集中成一个可以读、可以测的判定，比让十几个地方各自决定「要不要重写系统提示词」可靠得多。</p>
+
+<h3 id="hx-06-s4-2">顺序表：为什么路径和端点排在最后</h3>
+
+<p>DSH 把提示词段和运行时上下文的位置都集中登记在一张表里。运行时上下文只占四个位置，而且每个位置的产品代码都用 <code class="inl">getContextOrder()</code> 去取，不写字面量：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">const CONTEXT_ORDERS = {
+  WORKING_DIRECTORY: 100,
+  SANDBOX_POLICY: 110,
+  APPROVAL_POLICY: 115,
+  SUBAGENT_DELEGATION: 120,
+} as const</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:170" data-expect="const CONTEXT_ORDERS = {">system-prompt/index.ts:170</code>。系统提示词段那张表更长，但有一条注释把设计意图说透了：<code class="inl">// Local paths and endpoints follow reusable instructions.</code>（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:161" data-expect="Local paths and endpoints follow reusable instructions.">index.ts:161</code>）。本地路径、本地 URL 这种「每台机器、每个 checkout 都不一样」的内容，被排到 <code class="inl">HARNESS_SOURCE: 10000</code>、<code class="inl">WEB_SURFACE: 10100</code>，也就是几乎最末尾——让它们尽可能地远离前缀的开头。<code class="inl">includeRuntimeContext</code> 默认开（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:428" data-expect="includeRuntimeContext: z.boolean().default(true),">index.ts:428</code>），但东西放在哪张表里、第几位，是被显式设计过的。</p>
+
+<p>具体到「工作目录」这个最典型的易变量，DSH 的注册代码短得可以直接照抄：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    ctx.systemPrompt.context({
+      name: 'working-directory:current',
+      order: ctx.systemPrompt.getContextOrder('WORKING_DIRECTORY'),
+      required: true,
+      interpolate: false,
+      text: context =&gt; context.agent === undefined ? '' : this.contextText(context.agent.session),
+    })</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/session/working-directory/src/index.ts:90-96" data-expect="ctx.systemPrompt.context({">working-directory/src/index.ts:90-96</code>。它的文本是 <code class="inl">Current working directory: "…"</code>（<code class="inl src-ref" data-src="dsh:packages/session/working-directory/src/index.ts:173" data-expect="return `Current working directory: ${JSON.stringify(this.get(session))}.`">index.ts:173</code>），而且取的是<strong>已提交</strong>的目录、不做文件系统 IO（<code class="inl">get()</code> 读的是投影状态）。三个取舍连着看：</p>
+
+<ul>
+<li><code class="inl">required: true</code> 意味着它不会被上下文抑制开关屏蔽掉——工作目录是必须让模型看到的。</li>
+<li><code class="inl">interpolate: false</code> 意味着不做变量插值。路径里出现 <code class="inl">{{</code> 这种字符时不会被当成模板——省掉一整类「路径内容改变了渲染结果」的事故。</li>
+<li>它只在真的变了的时候产生新文本。目录没变 → 快照文本没变 → <code class="inl">RuntimeContextProjection.project</code> 返回 <code class="inl">undefined</code> → 一个字都不发。</li>
+</ul>
+
+<p>审批策略是同一个思路的另一个例子，而且注释直接写明了理由：<em>switching policy does not rewrite the stable system-prompt cache prefix</em>（<code class="inl src-ref" data-src="dsh:packages/interaction/user-approval/src/index.ts:161" data-expect="policy does not rewrite the stable system-prompt cache prefix.">user-approval/src/index.ts:161</code>）。用户切成「全自动」不该让整条历史重算一遍——把策略放进运行时上下文，切一次只花一条消息的钱。</p>
+
+<h3 id="hx-06-s4-3">两种做法的实测差异</h3>
+
+<p>用 labs 里的模拟缓存跑一遍，两种做法的差距在数字上是这个样子（教学示意，按 4 字节 1 token 折算）：</p>
+
+<div class="codeblock" data-lang="text"><pre><code class="lang-text">bad  第 1 次调用：命中   0 字节 / 337 字节（0%）
+bad  第 2 次调用：命中 153 字节 / 337 字节
+     首个差异：system 的文本（单位内偏移 70）：': 10:00' → ': 10:01'
+     可复用 153/337 字节（共用 1 个单位）
+
+good 第 1 次调用：命中   0 字节 / 428 字节（0%）
+good 第 2 次调用：命中 428 字节 / 428 字节
+     首个差异：messages[3] 的 新增单位
+     可复用 428/428 字节（共用 5 个单位）
+
+整段命中率：bad 0.1554，good 0.5969（教学示意）</code></pre></div>
+
+<p>读法：坏版本的第二次请求<strong>只复用了工具声明那一个单位</strong>（153 字节），系统提示词之后的一切全部重算；好版本的第二次请求复用了<strong>上一次的全部内容</strong>（428/428），只有新追加的那条快照要算。整段命中率被第一次请求（必然 0 命中）拉低，所以别用累计命中率判断改动效果——要看<strong>增量请求</strong>的复用比例，那才是稳态。</p>
+
+<p>还有一个反直觉的结论要点出来：<strong>「好」版本的绝对命中率不一定是 100%</strong>。追加式历史里，每一次新增内容本身都要重算（哪怕它是纯追加）。所以一个健康的 harness 的稳态是「每次都复用绝大多数 token」，而不是「每次都全命中」。把期望值定错，会导致你去优化根本不值得优化的地方。</p>
+
+<h2 id="hx-06-s5">工具集变了怎么办：写一条消息，别改系统提示词</h2>
+
+<p>工具列表变化是前缀缓存最难处理的一种变化，因为它同时有两种需求：模型必须知道工具变了（否则它会继续调用已经不存在的工具），而工具声明又排在渲染顺序的最前面（一改就全断）。</p>
+
+<p>DSH 分两件事处理。第一件：<strong>渲染字节变了就是变了</strong>——<code class="inl">toolsChanged</code> 直接拿当前 schema 和上一条 header 里的 schema 比（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:291" data-expect="private toolsChanged(tools: PromptAssembly['tools']): boolean {">agent.ts:291</code>），不试图掩饰。第二件：<strong>另外写一条 developer/message 把增删告诉模型</strong>，而不去重写系统提示词里的工具说明段。</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      const previousNames = new Set(baseline.tools?.map(tool =&gt; tool.name))
+      const currentNames = new Set(tools.map(tool =&gt; tool.name))
+      const additions = tools.filter(tool =&gt; !previousNames.has(tool.name))
+        .map(tool =&gt; ({ type: 'tool-addition' as const, toolName: tool.name }))
+      const removals = (baseline.tools ?? []).filter(tool =&gt; !currentNames.has(tool.name))
+        .map(tool =&gt; ({ type: 'tool-removal' as const, toolName: tool.name }))
+      if (additions.length &gt; 0 || removals.length &gt; 0) {
+        session.append('developer/message', {
+          ...position,
+          message: createDeveloperMessage({ source: { kind: 'tool-registry' }, content: [...additions, ...removals] }),
+          ...additions.length &gt; 0 ? { headerSeq } : {},
+        }, { surfaceOp: 'append' })
+      }</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:653-665" data-expect="const previousNames = new Set(baseline.tools?.map(tool =&gt; tool.name))">agent.ts:653-665</code>。这段代码值得逐点拆：</p>
+
+<ul>
+<li><strong>增删分开记</strong>，各自带工具名，因为模型对这两件事的处理不对称：新增的可以马上用，被移除的必须停止调用。</li>
+<li><strong><code class="inl">source: { kind: 'tool-registry' }</code></strong> 标明来源是工具注册表，不是用户说的话。这条消息在日志里有明确的来源标记，回放和界面都能归因。</li>
+<li><strong>只有新增才引用 <code class="inl">headerSeq</code></strong>（<code class="inl">...additions.length &gt; 0 ? { headerSeq } : {}</code>）。因为新增工具需要模型知道「去哪份声明里找它」，而移除不需要指向任何新声明。</li>
+<li><strong><code class="inl">surfaceOp: 'append'</code></strong> 表明这是追加，不是替换。追加是不打断前缀的操作——这是整段代码能兼顾「模型知情」和「前缀复用」的根据。</li>
+</ul>
+
+<p>我们的模拟器对这段策略给出的判定是：工具集合变化命中 0 个单位（工具在最前面，改了就全断），新增工具后写的那条 developer/message 则是一次纯追加（命中率 100%）。两件事分开记，正是为了让后者不背上前者的成本。</p>
+
+<p>DSH 还为子代理的 <code class="inl">fork</code> 方式留了一条注：继承历史之所以能复用 KV 缓存，是因为子代理<strong>不重选模型</strong>——provider 和 model 与父代理保持一致（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:382" data-expect="the inherited history remains eligible for KV Cache reuse.">cordis.patch.yml:382</code>）。同一个前缀在不同模型上是两份缓存，「顺手换个小模型省点钱」的代价可能比省下来的多。</p>
+
+<h2 id="hx-06-s6">观测：命中率必须在日志里</h2>
+
+<p>前面所有设计都有一个共同前提：缓存失效是静默的。模型照常回答，功能全对，界面全绿——只有账单和延迟在变。所以这一章的最后一块是观测：<strong>如果命中率不可见，前面所有的纪律都会在三个月内被一次「顺手加个时间戳」的提交悄悄破坏。</strong></p>
+
+<p>provider 侧的信号在 usage 里。DSH 的适配器把厂商字段直接映射成内部字段：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const keys = { input_tokens: 'inputTokens', output_tokens: 'outputTokens', cache_read_input_tokens: 'cacheReadTokens', cache_creation_input_tokens: 'cacheWriteTokens' } as const</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:36" data-expect="cache_read_input_tokens: 'cacheReadTokens'">llm-deepseek/translate.ts:36</code>；内部字段 <code class="inl">cacheReadTokens?: number</code> 定义在 <code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:186" data-expect="cacheReadTokens?: number">llm/types.ts:186</code>。注意「缓存读」和「缓存写」是两个分开的字段，不是「缓存命中 bool」——这个区分很重要，下面讲坑的时候会用到。</p>
+
+<p>更值得抄的是 DSH 怎么把这件事变成一条<strong>可执行的断言</strong>：一个需要真实 API key 的 e2e 测试，跑一轮包含工具调用的多步 turn 加一轮后续，然后要求<strong>第二次之后的每一次请求</strong>的 <code class="inl">cacheReadTokens</code> 都大于 0。</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    // The first request has nothing to hit; every later one shares its
+    // predecessor as a byte-identical prefix, so the provider must report
+    // cached prompt tokens (prompt_cache_hit_tokens → cacheReadTokens).
+    for (const usage of usages.slice(1)) {
+      expect(usage!.cacheReadTokens ?? 0).toBeGreaterThan(0)
+    }</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/request-cache.e2e.ts:91-96" data-expect="The first request has nothing to hit; every later one shares its">request-cache.e2e.ts:91-96</code>。测试文件开头把这条测试的定位写得很清楚：mock 只能证明「追加式扩展」，只有真实 provider 才能证明「真的命中了」（<code class="inl">request-cache.e2e.ts:14-22</code>）。里面还有一个容易被忽略的细节：那段系统提示词被刻意写长，作者注明<strong>长到足以覆盖 provider 的缓存块粒度（64 token）</strong>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/request-cache.e2e.ts:24-25" data-expect="// Long enough that the shared request prefix comfortably spans the provider's">request-cache.e2e.ts:24-25</code>）。真实缓存有最小可缓存长度，短前缀本来就不该命中——不知道这一点的人会对着一个必然为 0 的数字查半天。</p>
+
+<p>还有一个反向的观测：<strong>谁在花钱、谁在省钱</strong>。上下文压缩（<a href="#hx-07">下一章</a>）的摘要调用是个典型：它要重新读一遍历史来生成摘要，如果这段历史和正常请求的字节不一致，那这次读是全新的、无法复用的。DSH 的做法是让摘要调用的前缀<strong>逐字节对齐</strong>对话最后一次请求的系统提示词、工具和历史：</p>
+
+<blockquote><p>The replayed system prompt, tools, and shadowed-region messages match the conversation's last routed request byte-for-byte, so the provider's warm prefix cache is reused up to the trailing instruction; only that instruction, and the summary output, is uncached.</p></blockquote>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/README.md:233" data-expect="The replayed system prompt, tools, and shadowed-region messages match the conversation's last routed request byte-for-byte">compaction-basic/README.md:233</code>，源码里的注释同义（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/summarizer.ts:76" data-expect="lets the auxiliary call reuse the provider's warm prefix cache; the trailing">summarizer.ts:76</code>）。它同时说明了一件事的代价：<em>Routing the summarizer to a different provider/model, or compacting a non-head range, forgoes this reuse.</em>——「压缩用便宜的小模型」和「缓存复用」是互斥的，得算清楚再选。</p>
+
+<h3 id="hx-06-s6-1">我们的离线观测</h3>
+
+<p>没有真实 API 的时候，观测靠 labs 里的模拟缓存。它给的是「单位级命中数」，落到正文里就是那句最关键的话：<strong>先看增量请求的复用比例，再看累计命中率</strong>。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/prompt_cache.py::PrefixCache.hit_ratio">    <span class="kw">def</span> <span class="fn">hit_ratio</span>(self) <span class="op">-&gt;</span> float<span class="op">:</span>
+        <span class="str">"""教学示意：整段过程中的命中字节占比（分母含首次请求的全量）。"""</span>
+        <span class="kw">return</span> round(self.hit_bytes <span class="op">/</span> self.sent_bytes, <span class="num">4</span>) <span class="kw">if</span> self.sent_bytes <span class="kw">else</span> <span class="num">0.0</span></code></pre></div>
+
+<p>这个定义的缺陷要主动写出来：分母含第一次请求（必然 0 命中），所以会话越长这个数字越好看，短会话则天然难看。判断一次改动是不是稳定化改进，应该比「相邻两次请求的复用字节数」，也就是下面这个更直接的量：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/prompt_cache.py::common_unit_count"><span class="kw">def</span> <span class="fn">common_unit_count</span>(prev<span class="op">:</span> <span class="cls">RenderedRequest</span>, curr<span class="op">:</span> <span class="cls">RenderedRequest</span>) <span class="op">-&gt;</span> int<span class="op">:</span>
+    <span class="str">"""两个前缀哈希列表从前往后有多少个单位相等。"""</span>
+    count <span class="op">=</span> <span class="num">0</span>
+    <span class="kw">for</span> left, right <span class="kw">in</span> zip(prev.hashes, curr.hashes)<span class="op">:</span>
+        <span class="kw">if</span> left <span class="op">!=</span> right<span class="op">:</span>
+            <span class="kw">break</span>
+        count <span class="op">+=</span> <span class="num">1</span>
+    <span class="kw">return</span> count</code></pre></div>
+
+<p>它比累计命中率更适合当回归指标，因为它是<strong>增量的</strong>：把「上一轮渲染结果」和「这一轮渲染结果」一对比，得到一个整数，整数变了就是有人让前缀退化了。把它写进日志，就得到一条可以被测试守住的量。</p>
+
+<p>把它的输出写进日志，就得到一条可以被回归测试守住的量。这也是本章建议你立刻动手做的一件事：<strong>在每次请求前算一次 <code class="inl">diff_prefix</code>，把 「first_change」 记进会话日志</strong>。它比 provider 的 usage 早一步告诉你缓存为什么掉了——usage 告诉你「这次命中 0」，日志告诉你「因为系统提示词里的时间戳从 10:00 变成 10:01」。</p>
+
+<h2 id="hx-06-s7">逐库对照</h2>
+
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th></tr></thead><tbody>
+<tr><td>系统提示词何时组装</td><td>每个 step 组装一次，step 内重试不重组（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:407" data-expect="const renderedPrompt = renderPrompt(assembly)">agent.ts:407</code>）</td><td>提交一次消息时构建一次，构建后由引擎持有（<code class="inl src-ref" data-src="oh:src/openharness/ui/runtime.py:609" data-expect="system_prompt = build_runtime_system_prompt(">ui/runtime.py:609</code>）</td><td>每次调用模型前重新拼（<code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:3126" data-expect="system = assemble_system_prompt(context)">s15/code.py:3126</code>）</td></tr>
+<tr><td>系统提示词里有什么易变内容</td><td>可插值的变量 + 显式登记顺序的段；本地路径与端点排在最后（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:161" data-expect="Local paths and endpoints follow reusable instructions.">index.ts:161</code>）</td><td>工作目录、日期、git 分支、Python 版本等一整套环境信息（<code class="inl src-ref" data-src="oh:src/openharness/prompts/system_prompt.py:70-71" data-expect="f&quot;- Working directory: {env.cwd}&quot;,">system_prompt.py:70-71</code>）</td><td>当前时间（精确到秒）、技能目录、记忆、MCP 状态（<code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:858" data-expect="sections.append(f&quot;Current time: {datetime.now().isoformat(timespec='seconds')}&quot;)">s15/code.py:858</code>）</td></tr>
+<tr><td>运行时上下文放哪</td><td>独立消息来源 + 独立投影，追加在历史之后（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:152" data-expect="project(current: string, sections: readonly ContextSnapshotSection[]): UserMessage | undefined {">runtime-context.ts:152</code>）</td><td>没有单独分层，和指令、记忆、技能一起拼进系统提示词（<code class="inl src-ref" data-src="oh:src/openharness/prompts/context.py:102" data-expect="def build_runtime_system_prompt(">prompts/context.py:102</code>）</td><td>同 OH，全部拼进系统提示词</td></tr>
+<tr><td>工具顺序</td><td>按名字 code-unit 排序，或按显式 <code class="inl">toolOrder</code>（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:227" data-expect="if (toolOrder === undefined) return tools.sort(compareToolNames)">index.ts:227</code>）</td><td>按注册顺序输出，不排序（<code class="inl">base.py:80</code>）</td><td>列表写死在代码里，顺序天然固定</td></tr>
+<tr><td>工具集变化时</td><td>另写 <code class="inl">developer/message</code> 告知增删，追加而非改写（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:660" data-expect="session.append('developer/message', {">agent.ts:660</code>）</td><td>无机制；工具集在会话内基本不变</td><td>无机制；构建期确定</td></tr>
+<tr><td>缓存控制的显式信号</td><td>无 <code class="inl">cache_control</code>；稳定化靠渲染确定性 + 观测靠 <code class="inl">cacheReadTokens</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/request-cache.e2e.ts:95" data-expect="expect(usage!.cacheReadTokens ?? 0).toBeGreaterThan(0)">request-cache.e2e.ts:95</code>）</td><td>无 <code class="inl">cache_control</code>，也不读缓存用量</td><td>无（教学版）</td></tr>
+<tr><td>成本取舍</td><td>用「能力协商 + 追加」换复用，不保证命中率（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/README.md:154" data-expect="provider cache sharing and measured hit rates are not guaranteed">system-prompt/README.md:154</code>）</td><td>用「一次构建」换简单：环境快照变了要显式重设提示词</td><td>简单优先，前提前缀每轮都可能变</td></tr>
+</tbody></table></div>
+
+<p>三种取舍都成立，因为它们优化的是不同的东西。DSH 要的是「所有路由都不退化」——所以它做能力协商、做显式序列边界、把不确定的部分写进 README。OH 要的是「一次问清楚就有稳定的前缀」——把环境信息在开始时拍一次快照，之后不变；代价是日期跨天、<code class="inl">cd</code> 之后要主动重建提示词（它有 <code class="inl">set_system_prompt</code>，<code class="inl src-ref" data-src="oh:src/openharness/engine/query_engine.py:102" data-expect="def set_system_prompt(self, prompt: str) -&gt; None:">query_engine.py:102</code>）。lcc 是最简单的对照：<code class="inl">assemble_system_prompt</code> 每轮重新拼，里面有一行 <code class="inl">Current time: …（精确到秒）</code>——按本章的规则，这等于<strong>每一轮都自愿放弃整个系统提示词前缀</strong>。它作为教学代码完全合理，因为它的目标是让每个机制都看得见；但这也是一个绝好的反例：加了这一行，代码可读性没变，成本结构变了。</p>
+
+<p>顺带说一个诚实的观察：三家都没有设置 provider 侧的缓存断点。<code class="inl">cache_control</code> 这类显式标记能把缓存边界钉在你想要的位置（而不是让 provider 自己猜），但它需要按 provider 写分支，而且标记位置本身就是一份要维护的策略。DSH 的选择是把「让前缀天然稳定」当成主路径，把「显式标记」留给适配器层的一个能力字段（它的适配器目录里确实有「这个端点是否接受工具定义上的 cache_control」这一项）。这是一个可辩护的取舍：稳定化是普适的，标记是 provider 特有的。</p>
+
+<h2 id="hx-06-s8">坑与失败案例</h2>
+
+<h3 id="hx-06-s8-1">坑一：时间戳进系统提示词，而且是「精确到秒」</h3>
+
+<p><strong>触发条件</strong>：系统提示词里拼进当前时间、日期，或者「距会话开始已经过了 N 分钟」这类值。<strong>后果</strong>：系统提示词排在工具之后，它一变，之后的一切（包括整段历史）每轮重算。上面的实测里，坏版本的增量请求只复用了 153/337 字节，好版本是 428/428。<strong>没有症状</strong>：模型答得好好的，测试全过，日志正常，只有账单在涨。</p>
+
+<p><strong>源码里怎么防的</strong>：DSH 不给这类内容留位置——它连「运行时上下文」都单独分层，并且只在<strong>文本真的变了</strong>的时候才发新消息（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/runtime-context.ts:155" data-expect="if (this.retained?.text === snapshot) return">runtime-context.ts:155</code>）。它还留了一句「时间敏感」的边界：系统提示词里的本地路径和端点被排到顺序表的末尾，注释说明理由是「它们在可复用的指令之后」。而 OH 与 lcc 都走了另一条路——它们<strong>都在系统提示词里放了日期或时间</strong>（<code class="inl src-ref" data-src="oh:src/openharness/prompts/system_prompt.py:71" data-expect="f&quot;- Date: {env.date}&quot;,">system_prompt.py:71</code>、<code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:858" data-expect="Current time:">s15/code.py:858</code>）。OH 的日期只到「天」，所以同一天内不失效；lcc 精确到秒，等于每轮都失效。这条差别很适合当检验标准：<strong>问「这个字段改变时，模型真的需要知道吗？如果需要，它必须排在系统提示词里吗？」</strong></p>
+
+<h3 id="hx-06-s8-2">坑二：JSON 键顺序不稳定</h3>
+
+<p><strong>触发条件</strong>：工具 schema、消息的 extra 字段、任何进请求的结构化数据经过 <code class="inl">dict</code> 拼装，而且这个 dict 的字段顺序取决于并发任务的完成顺序、<code class="inl">set</code> 的迭代顺序、或某个中间件的实现细节。<strong>后果</strong>：内容和上一轮完全一样，序列化出来的字节不同 —— 缓存从第一个顺序不同的键起失效。这种失效比时间戳更难查，因为两次渲染在<strong>人眼里完全一样</strong>。</p>
+
+<p><strong>源码里怎么防的</strong>：本质上靠「不让顺序有机会漂移」。DSH 的 <code class="inl">headerEquals</code> 是把工具 schema <strong>按位置逐个比</strong>（<a href="#hx-04">hx-04</a> 讲过），也就是说位置本身被视为语义的一部分；而位置由 <code class="inl">orderTools</code> 的排序保证。我们的 <code class="inl">canonical_json</code> 用 <code class="inl">sort_keys=True</code> 把这件事压成一行。测试里对应的断言是「键顺序不同但内容相同，渲染必须逐字节一致」——没有这条测试，这个坑会在某次重构里悄悄回来。</p>
+
+<h3 id="hx-06-s8-3">坑三：把「缓存写」当成「缓存命中」</h3>
+
+<p><strong>触发条件</strong>：只看 usage 里的「有缓存相关的 token」就以为命中了，不区分 <code class="inl">cache_read_input_tokens</code> 和 <code class="inl">cache_creation_input_tokens</code>。<strong>后果</strong>：你会看到非零数字、以为一切正常，实际上每次都在<strong>写</strong>新缓存——也就是把整份输入按缓存写的价格付了一遍，比不缓存还贵。DSH 把这两个字段映射成两个独立字段（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:36" data-expect="cache_read_input_tokens: 'cacheReadTokens'">translate.ts:36</code>），就是为了让这一区分在类型上无法被抹掉。</p>
+
+<p><strong>检测的判定标准</strong>：官方文档给的说法是<strong>看 <code class="inl">cache_read_input_tokens</code> 是否为 0</strong>——为 0 就是没命中。DSH 的 e2e 测试把这条标准写成断言，而且要求的是「第一次之后的每一次都大于 0」（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/request-cache.e2e.ts:95" data-expect="expect(usage!.cacheReadTokens ?? 0).toBeGreaterThan(0)">request-cache.e2e.ts:95</code>）。这个「逐次断言」比「平均命中率」有用得多：平均值会掩盖「只有前两条命中、后面全废」这种最糟糕的情形。</p>
+
+<h3 id="hx-06-s8-4">坑四：前缀太短，本来就命不中</h3>
+
+<p><strong>触发条件</strong>：以为「内容没变就该命中」，结果发现小会话、短提示词怎么都是 0 命中。<strong>原因</strong>：真实缓存有<strong>最小可缓存长度</strong>（不同模型不同，常见量级是 1024 token；Anthropic 官方文档给了具体门槛）。比这个长度短的前缀根本不会被缓存，不管它多稳定。</p>
+
+<p><strong>源码里的痕迹</strong>：DSH 的缓存 e2e 测试特意把系统提示词写得很长，注释直接写明理由是「长到足以覆盖 provider 的缓存块粒度（64 token）」（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/request-cache.e2e.ts:24-25" data-expect="Long enough that the shared request prefix comfortably spans the provider's">request-cache.e2e.ts:24-25</code>）。也就是说：测试作者知道「短前缀必然不命中」，所以<strong>为测试造了一个足够长的前缀</strong>。这个细节值得记：如果你的回归测试在一个短提示词上断言缓存命中，它测的不是你的 harness，而是 provider 的块大小。</p>
+
+<h3 id="hx-06-s8-5">坑五：为了「模型看得更清楚」而重排系统提示词</h3>
+
+<p><strong>触发条件</strong>：想让提示词更易读，把「工具说明」挪到「身份说明」之前，或者把某个段插到中间。<strong>后果</strong>：这是<strong>故意的</strong>前缀断裂，而且是小改动造成的大面积失效——插入点之后的全部段都要重算。在长会话里，这一次编辑的成本可能是几十次请求的差额。</p>
+
+<p><strong>源码里怎么防的</strong>：DSH 把顺序集中登记在一张常量表里（<code class="inl src-ref" data-src="dsh:packages/core/system-prompt/src/index.ts:131" data-expect="const SECTION_ORDERS = {">index.ts:131</code>），每段用一个<strong>名字</strong>去取位置（<code class="inl">getSectionOrder('HARNESS_IDENTITY')</code> 之类），而不是在各自插件里写数字。好处是顺序的改动变成一个集中、显式、可 review 的动作，而不是几十个插件的相对位置在长期演进里慢慢漂移。这与 <a href="#hx-04">hx-04</a> 讲「格式版本要显式声明」是同一个思路：<strong>把隐式的、会累积的耦合变成一张显式的表。</strong></p>
+
+<h2 id="hx-06-s9">小结</h2>
+
+<p>这一章可以压成四句可执行的话：</p>
+
+<ol>
+<li><strong>渲染必须确定。</strong>键排序、固定分隔符、工具按名字排序、比较函数不依赖 locale。任何「取决于环境或时序」的字节，都是缓存失血的源头。</li>
+<li><strong>易变内容放尾部。</strong>运行时上下文作为追加消息存在，不要进系统提示词；真的变了才发新快照；作废发一句固定文本，而不是删消息。</li>
+<li><strong>变化要分类，不要一刀切。</strong>「工具集变了」和「历史尾巴长了一条」的成本差一个量级。工具变更写一条追加的 developer/message，系统提示词的准入交给一个集中的判定函数。</li>
+<li><strong>命中率要能被观测和断言。</strong>provider 的 <code class="inl">cache_read_input_tokens</code> 是真相；本地 <code class="inl">diff_prefix</code> 是原因。两个都进日志，前者进回归测试。</li>
+</ol>
+
+<p>labs 里对应的文件是 <code class="inl">labs/harness/prompt_cache.py</code>（<code class="inl">render_request</code> / <code class="inl">diff_prefix</code> / <code class="inl">PrefixCache</code> / <code class="inl">demo_stabilization</code>），测试是 <code class="inl">labs/tests/test_prompt_cache.py</code>，25 条断言覆盖了本章所有结论。跑法：</p>
+
+<div class="codeblock" data-lang="text"><pre><code class="lang-text">cd tech-reader-modular
+py -m unittest discover -s labs/tests -t labs -p "test_prompt_cache.py"</code></pre></div>
+
+<p>下一步：当上下文真的放不下时，压缩会重写历史（<a href="#hx-07">上下文压缩</a>）。那是对前缀缓存最粗暴的操作——一次替换让整段历史失效。所以「压缩之后能不能保住前缀」也是那一章要回答的问题。</p>
+</section>

@@ -53,7 +53,7 @@
   ```
 
   `data-lab` 取 `文件::函数或类名`（摘录该定义的完整源码，含装饰器）、`文件::类名.方法名`（方法摘录保留原缩进），或只写文件路径（摘录整个文件）。不要手工加高亮 span，集成时自动加。
-- 其他语言的源码摘录（TS 等）用 `data-lang="typescript"`，并且紧跟一个 src-ref 标明出处；摘录要逐字，可以用 `// …` 省略中间行。
+- 其他语言的源码摘录（TS 等）用 `data-lang="typescript"`，并且紧跟一个 src-ref 标明出处；摘录要逐字，可以用 `// …` 省略中间行。其他仓库的 Python 源码（如 OpenHarness）也一样：写 `<code class="lang-python">` 但**不带** `data-lab`，紧跟 src-ref；`data-lab` 只用于本仓库 `labs/` 里的代码。`data-lab` 也可以指模块级常量（例如提示词模板 `SUMMARY_INSTRUCTION`）。
 - 站内链接：本模块用 `#hx-NN-s1`，跨模块用 `#/dsh?section=…`、`#/codex-harness?section=…`、`#/book?section=…`。
 
 ## labs 约定

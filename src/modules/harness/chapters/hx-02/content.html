@@ -81,9 +81,9 @@ export interface ToolSchema {
         <span class="kw">return</span> tool</code></pre></div>
 <p>理由在错误信息里写全了：静默覆盖会让<strong>行为取决于安装顺序</strong>。插件 A 注册 <code class="inl">read_file</code>，插件 B 也注册 <code class="inl">read_file</code>，最后谁生效完全看谁后初始化；而出问题时你看到的日志里写着 A 的实现，实际跑的是 B 的。这类 bug 排查成本极高，报错成本几乎为零。</p>
 <p>但“报错”这个选择有一个必须同时决定的细节：<strong>报错的范围是什么</strong>。OH 的做法是最宽松的一种，注册就是一次纯赋值：</p>
-<div class="codeblock" data-lang="python"><pre><code class="lang-python">    def register(self, tool: BaseTool) -> None:
-        """Register a tool instance."""
-        self._tools[tool.name] = tool</code></pre></div>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    <span class="kw">def</span> <span class="fn">register</span>(self, tool<span class="op">:</span> <span class="cls">BaseTool</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="str">"""Register a tool instance."""</span>
+        self._tools[tool.name] <span class="op">=</span> tool</code></pre></div>
 <p><code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:66-68" data-expect="def register(self, tool: BaseTool) -&gt; None:">base.py:66-68</code></p>
 <p>没有检查、没有日志，同名后注册的赢。这是有意的权衡：OH 的注册表由 <code class="inl">tools/__init__.py</code> 集中装配，作者假定装配表本身是可信的，多一道检查只是浪费。代价是任何一次插件式扩展都可能踩到它。</p>
 <p>DSH 把这个问题拆得更细，因为它的注册天生就是“可撤销的 effect”（每个包在挂载时注册、卸载时自动撤销），所以它必须区分两种情况：同层重名要失败，跨层同门是<em>遮蔽</em>。这条规则写在 <code class="inl">register</code> 的 docstring 里：<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1064-1065" data-expect="Register globally or in the calling agent scope. Scoped tools shadow">index.ts:1064-1065</code>。具体的报错文案分了两句，一句给全局：</p>
@@ -118,14 +118,14 @@ export class ToolArgsError extends HarnessError {
 <p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/schema.ts:597-601" data-expect="async execute(args: unknown, exec: ToolRunContext): Promise&lt;JsonValue&gt; {">schema.ts:597-601</code>，其中 <code class="inl">validate</code> 在定义时就闭包捕获了编译好的 schema（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/schema.ts:579" data-expect="const validate = (args: unknown): string[] =&gt; validateJsonSchemaValue(parameters, args, '')">schema.ts:579</code>），所以每个工具只在注册时编译一次。</p>
 <p>抛出的这个 <code class="inl">ToolArgsError</code> 最终会到哪里去？到 <code class="inl">dispatchToolBody</code> 的 catch 里，被统一转成错误结果：<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1592-1593" data-expect="} catch (error: unknown) {">index.ts:1592-1593</code>。循环不会因为一次参数写错而中断，模型会在下一轮看到 <code class="inl">invalid arguments: ...</code> 然后自己纠正。</p>
 <p>OH 的校验点在<strong>循环里</strong>而不是工具类里，这是两者最大的结构差异：</p>
-<div class="codeblock" data-lang="python"><pre><code class="lang-python">    try:
-        parsed_input = tool.input_model.model_validate(tool_input)
-    except Exception as exc:
-        log.warning("invalid input for %s: %s", tool_name, exc)
-        return ToolResultBlock(
-            tool_use_id=tool_use_id,
-            content=f"Invalid input for {tool_name}: {exc}",
-            is_error=True,
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    <span class="kw">try</span><span class="op">:</span>
+        parsed_input <span class="op">=</span> tool.input_model.model_validate(tool_input)
+    <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> exc<span class="op">:</span>
+        log.warning(<span class="str">"invalid input for %s: %s"</span>, tool_name, exc)
+        <span class="kw">return</span> <span class="cls">ToolResultBlock</span>(
+            tool_use_id<span class="op">=</span>tool_use_id,
+            content<span class="op">=</span><span class="str">f"Invalid input for {tool_name}: {exc}"</span>,
+            is_error<span class="op">=</span><span class="kw">True</span>,
         )</code></pre></div>
 <p><code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:917-923" data-expect="parsed_input = tool.input_model.model_validate(tool_input)">query.py:917-923</code></p>
 <p>它校验的是“原始 dict”，校验器由 <code class="inl">tool.input_model</code>（一个 pydantic 模型）提供。回给模型的是 <code class="inl">str(exc)</code>，也就是 pydantic 自己生成的错误报告，带字段路径。这有个实际好处：你不需要自己写错误文案；坏处是文案是 pydantic 的措辞，可能很长（一个嵌套模型会打印好几十行），而且换了 pydantic 大版本措辞会变，靠文字匹配做断言/回放会脆。labs 的取舍是自己写一个短校验器，错误文案完全可控，代价是只支持 JSON Schema 的一个很小的子集。</p>
@@ -306,10 +306,10 @@ export class ToolArgsError extends HarnessError {
 
 <h2 id="hx-02-s5">5. 只读标记如何影响后续调度</h2>
 <p>“只读”这个标记之所以必须放在工具定义里，是因为它决定了循环能不能把一批调用并发发出去。OH 让它成为一个方法而不是字段，因为<strong>只读与否可能取决于参数</strong>：</p>
-<div class="codeblock" data-lang="python"><pre><code class="lang-python">    def is_read_only(self, arguments: BaseModel) -> bool:
-        """Return whether the invocation is read-only."""
-        del arguments
-        return False</code></pre></div>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    <span class="kw">def</span> <span class="fn">is_read_only</span>(self, arguments<span class="op">:</span> <span class="cls">BaseModel</span>) <span class="op">-&gt;</span> bool<span class="op">:</span>
+        <span class="str">"""Return whether the invocation is read-only."""</span>
+        <span class="kw">del</span> arguments
+        <span class="kw">return</span> <span class="kw">False</span></code></pre></div>
 <p><code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:46-49" data-expect="def is_read_only(self, arguments: BaseModel) -&gt; bool:">base.py:46-49</code>。基类默认返回 <code class="inl">False</code>，也就是 fail-safe：忘了覆盖就当写操作，宁可串行。具体工具覆盖它，例如文件读取工具恒为真（<code class="inl src-ref" data-src="oh:src/openharness/tools/file_read_tool.py:27-29" data-expect="def is_read_only(self, arguments: FileReadToolInput) -&gt; bool:">file_read_tool.py:27-29</code>）。这个标记在权限层直接被消费：只读调用无条件放行（<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:132-134" data-expect="# Read-only tools always allowed">checker.py:132-134</code>）。</p>
 <p>但要注意，OH 的<strong>执行</strong>调度并不看这个标记：多个调用一律并发（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:853" data-expect="raw_results = await asyncio.gather(">query.py:853</code>），只有单个调用时才走顺序分支，理由是事件要即时发出去（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:821-822" data-expect="if len(tool_calls) == 1:">query.py:821-822</code>）。这意味着两个写文件调用会被同时发出去。它为什么还能用？因为并发写同一个文件在多数场景下不出现，而且它用 <code class="inl">return_exceptions=True</code> 保证一个失败不会把兄弟调用取消掉，理由是保住 tool_use/tool_result 的配对（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:849-852" data-expect="# Use return_exceptions=True so a single failing tool does not abandon">query.py:849-852</code>）。配对这件事是硬约束，后面第 6 节会展开。</p>
 <p>DSH 把“能不能并发”抽成一个独立的、更严格的概念：<code class="inl">isConcurrencySafe</code>。它的三条规则值得背下来：</p>

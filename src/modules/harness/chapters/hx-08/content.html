@@ -1,0 +1,474 @@
+<section class="chapter" id="ch-hx-08" data-slug="hx-08"><div class="ch-head"><span class="ch-num">第 8 章</span></div><h1 id="hx-08">工具输出卸载</h1>
+<p>上一章讲完工具怎么执行、结果怎么写进历史，还剩一个没解决的问题：<strong>有些结果根本装不进上下文</strong>。一条 <code class="inl">grep -r</code>、一次 <code class="inl">npm install</code>、一个被拉下来的网页正文，随便就几万到几十万字符。这一章处理的就是从「工具产出内容」到「内容进入历史」之间的那一步。</p>
+<p>先看清这一步的位置。工具结果的生死链条是这样：工具执行 → 结果经过 <code class="inl">tools/post-execute</code> 之类的后置策略 → 写进会话日志 → 推导成模型可见的消息。<strong>卸载发生在第二步和第三步之间</strong>，它改的是「写进日志的那份内容」，而不是「日志里已有的内容」。这个位置决定了它和压缩（<a href="#hx-07">第 07 章</a>）是两件事：卸载在结果产生的那一刻就动手，压缩在历史已经太长之后才动手。后面第 6 节会把这条分界线画清楚。</p>
+<p>本章先讲清楚为什么不能直接塞（第 1 节），再区分截断和卸载（第 2 节），然后是 labs 的完整实现（第 3 节）、三个生产实现的逐库对照（第 4 节）、预览该长什么样（第 5 节）、与压缩的分工（第 6 节），最后是坑（第 7 节）。前置章节：工具执行流水线见 <a href="#hx-02">第 02 章</a>，会话日志见 <a href="#hx-04">第 04 章</a>，token 计量见 <a href="#hx-05">第 05 章</a>。</p>
+
+<h2 id="hx-08-s1">1. 大输出为什么不能直接塞进上下文</h2>
+<p>四条理由，严重程度递增。</p>
+<p><strong>一是窗口。</strong>这是最容易被高估的一条，因为大家会下意识觉得「窗口有 200K，塞几万字符没问题」。问题是窗口是<em>整轮对话共享</em>的：系统提示、工具 schema、前 40 轮的历史、这一轮你自己写的计划，全都在同一个预算里。一条 8 万字符的 <code class="inl">grep</code> 结果按四个字符一个 token 估算就是 2 万 token（教学示意：具体比例取决于语言和分词器），在 200K 窗口里占 10%，而这条结果的寿命往往只有一步——模型看完发现要找的字符串在第 3812 行，然后就再也不看它了。</p>
+<p><strong>二是成本。</strong>历史里的每一条消息在<em>之后每一次请求</em>里都会被重新发一遍。一步塞进去 2 万 token，后面还有 30 步，就是 60 万 token 的输入。卸载做的正是这件事：把「每步都要重发的 2 万 token」换成「只发一次的三百 token 预览」。</p>
+<p><strong>三是缓存。</strong>前缀缓存（prompt caching）命中要求请求前缀逐字节一致。把一条巨大的工具结果放进历史，本身不会破坏前缀——它在历史尾部。但如果它把上下文推到窗口边缘、触发了自动压缩，压缩会重写历史中段，<strong>从改写点往后的缓存全部失效</strong>。卸载的价值在这里是间接的：它让「还没到需要压缩的程度」这件事多维持很多步。DSH 对缓存这件事有明确表态，连子代理的派生方式都要为缓存让路（<code class="inl">fork</code> 方式继承父代理的历史，注释里写着 <em>the inherited history remains eligible for KV Cache reuse</em>）。</p>
+<p><strong>四是注意力稀释。</strong>这条最难量化，但在实际使用里最容易观察到。历史里躺着一份 8 万字符的日志，模型在回答一个和它无关的问题时会反复扫到它，偶尔还会被里面的内容带偏——比如日志里恰好有一行 <code class="inl">Error: permission denied</code>，模型就开始解释这个无关的错误。<strong>上下文里的一切都是提示</strong>，包括你不想让它看见的那部分。</p>
+<blockquote><p><strong>结论</strong>：大输出不是「大一点就慢一点」的线性问题，它同时抬高成本、挤占窗口、增加缓存失效概率、并且污染注意力。所以策略不是「尽量少塞」，而是<strong>根本不让它进来</strong>，同时保证模型需要时能拿回去。</p></blockquote>
+
+<h2 id="hx-08-s2">2. 截断和卸载的区别</h2>
+<p>表面上看两者都是「结果太长了，少放点进去」。区别在于<strong>信息有没有去处</strong>，以及<strong>模型知不知道自己在看不完整的东西</strong>。</p>
+<p>learn-claude-code 的 s08 保留了最原始的写法：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">        output <span class="op">=</span> (result.stdout <span class="op">+</span> result.stderr).strip()
+        <span class="kw">return</span> output[<span class="op">:</span><span class="num">50000</span>] <span class="kw">if</span> output <span class="kw">else</span> <span class="str">"(no output)"</span></code></pre></div>
+<p><code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:92" data-expect="return output[:50000] if output else &quot;(no output)&quot;">code.py:92</code></p>
+<p>这就是纯截断：切掉的部分没有任何去处，返回的字符串里也没有任何标记说明自己被切过。模型看到的是一个以第 50000 个字符结尾的普通字符串，它会理所当然地认为这就是 <code class="inl">bash</code> 命令的完整输出。于是出现最典型的失败：模型说「构建失败了，日志最后一行是 <code class="inl">Compiling foo v0.3.1</code>」——而真正的错误在下一行，正好被切掉了。模型没有任何线索去怀疑自己的判断。</p>
+<p>OpenHarness 的 <code class="inl">_offload_tool_output_if_needed</code> 在同一个位置做了相反的选择：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    inline_limit <span class="op">=</span> tool_output_inline_chars()
+    <span class="kw">if</span> len(output) <span class="op">&lt;=</span> inline_limit<span class="op">:</span>
+        <span class="kw">return</span> output, <span class="kw">None</span>
+
+    artifact_path <span class="op">=</span> (
+        _tool_artifact_dir()
+        <span class="op">/</span> <span class="str">f"{time.strftime('%Y%m%d-%H%M%S')}-{_safe_tool_artifact_name(tool_name)}-{uuid4().hex[:12]}.txt"</span>
+    )
+    artifact_path.write_text(output, encoding<span class="op">=</span><span class="str">"utf-8"</span>, errors<span class="op">=</span><span class="str">"replace"</span>)
+    preview <span class="op">=</span> output[<span class="op">:</span>tool_output_preview_chars()]
+    omitted <span class="op">=</span> max(<span class="num">0</span>, len(output) <span class="op">-</span> len(preview))
+    inline <span class="op">=</span> (
+        <span class="str">"[Tool output truncated]\n"</span>
+        <span class="str">f"Tool: {tool_name}\n"</span>
+        <span class="str">f"Tool use id: {tool_use_id}\n"</span>
+        <span class="str">f"Original size: {len(output)} chars\n"</span>
+        <span class="str">f"Full output saved to: {artifact_path}\n"</span>
+        <span class="str">f"Inline preview: first {len(preview)} chars"</span>
+    )
+    <span class="kw">if</span> omitted<span class="op">:</span>
+        inline <span class="op">+=</span> <span class="str">f" ({omitted} chars omitted)"</span>
+    <span class="kw">if</span> preview<span class="op">:</span>
+        inline <span class="op">+=</span> <span class="str">f"\n\nPreview:\n{preview}"</span>
+    <span class="kw">return</span> inline, artifact_path</code></pre></div>
+<p><code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:524-552" data-expect="def _offload_tool_output_if_needed(">query.py:524-552</code>。改成卸载之后，模型看到的第一行就是 <code class="inl">[Tool output truncated]</code>，然后是原始大小、完整文件路径、省略量。<strong>模型此刻知道三件事</strong>：我看到的不是全部；剩下多少没看到；去哪里拿。</p>
+<p>把两者的差别列成表更清楚：</p>
+<div class="table-wrap"><table><thead><tr><th></th><th>截断（<code class="inl">out[:N]</code>）</th><th>卸载（spill）</th></tr></thead><tbody>
+<tr><td>被去掉的内容</td><td>永久丢失（只在内存里的那份字符串上，进程退出即消失）</td><td>原样落盘，逐字节可恢复</td></tr>
+<tr><td>模型能不能知道</td><td>不能，看到的是一段普通文本</td><td>能，说明块里写着原始大小和省略量</td></tr>
+<tr><td>模型能不能自救</td><td>不能，只能换个命令重跑一遍</td><td>能，用读取工具按行取回</td></tr>
+<tr><td>磁盘成本</td><td>0</td><td>一份输出一个文件（同一内容去重后一份）</td></tr>
+<tr><td>适用场景</td><td>输出确定无价值（进度条、重复日志）</td><td>任何可能有价值的大输出</td></tr>
+</tbody></table></div>
+<p>还有一个反直觉的点：<strong>卸载比截断更省 token</strong>。截断版的 <code class="inl">out[:50000]</code> 是 50000 字符全部进入历史；卸载版只放 2000 + 2000 字符的预览加说明块。也就是说截断不是「卸载的廉价版」，它是「更贵且更差的那个版本」。</p>
+
+<h2 id="hx-08-s3">3. labs：一个最小可用的卸载器</h2>
+<p>先看三个常量，它们划定了策略的边界：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="cls">DEFAULT_LIMIT_CHARS</span> <span class="op">=</span> <span class="num">12_000</span>
+<span class="cmt"># 预览的头部/尾部分配。OH 只留头部 3000；DSH 把预算对半分给 head 和 tail，</span>
+<span class="cmt"># 因为报错信息常在输出的最后几行。</span>
+<span class="cls">DEFAULT_HEAD_CHARS</span> <span class="op">=</span> <span class="num">2_000</span>
+<span class="cls">DEFAULT_TAIL_CHARS</span> <span class="op">=</span> <span class="num">2_000</span>
+<span class="cmt"># 分页读取的默认每页行数，模拟模型后续怎么按需取回。</span>
+<span class="cls">DEFAULT_PAGE_LINES</span> <span class="op">=</span> <span class="num">200</span></code></pre></div>
+<p>十二万字符这个阈值是<strong>教学示意</strong>，不是任何仓库里的常量。真实实现给出的数字：DSH 用 token 计（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:412" data-expect="maxInlineTokens: 12500">maxInlineTokens: 12500</code>），OpenHarness 用字符计（<code class="inl src-ref" data-src="oh:src/openharness/services/tool_outputs.py:10" data-expect="DEFAULT_TOOL_OUTPUT_INLINE_CHARS = 16_000">16000 字符</code>），learn-claude-code 用字符计且阈值是 30000（<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:257" data-expect="LARGE_RESULT_CHAR_LIMIT = 30000">code.py:257</code>）。三个数字差了两倍多，说明这个阈值没有「正确答案」，它取决于你的工具集和平均输出大小。</p>
+<p>labs 选择字符而不是 token，理由很实际：算 token 要依赖分词器，而分词器版本会变；字符数是确定的。代价是同一个阈值对中文和英文的语义不同（中文一个字符约等于一个 token，英文大约三到四个字符一个 token）。生产实现必须解决这个问题，DSH 的做法是接一个 <code class="inl">ctx.tokenMeter</code> 服务做统一计量（<a href="#hx-05">第 05 章</a>）。</p>
+
+<h3 id="hx-08-s3-1">3.1 什么不能卸载</h3>
+<p>这是全章最容易被跳过的一节，也是最容易踩坑的一节。前面讲的所有好处都建立在「卸载是无害的」这个前提上，而三种情况下它有害：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/spill.py::should_spill"><span class="kw">def</span> <span class="fn">should_spill</span>(<span class="op">*</span>, is_error<span class="op">:</span> bool, content<span class="op">:</span> str) <span class="op">-&gt;</span> bool<span class="op">:</span>
+    <span class="str">"""判断一份工具结果能不能卸载。
+
+    三种不卸载的情况，理由各不相同：
+
+    - **错误结果**：错误信息是模型纠正自己的唯一依据，长度通常很小，卸载只会让它
+      多一次取回操作。DSH 的 spill-policy 不区分 isError（``retainable()`` 只看
+      block 类型），但它的阈值是 12500 token，错误信息根本够不到。
+    - **二进制**：预览里是乱码，尾部也是乱码，模型看不出内容是什么。
+    - **完整的 JSON**：预览必然把它截断，而模型看到以 ``{`` 开头的内容会当成 JSON
+      去解析，然后得到一个「语法错误」——比不卸载更糟。
+    """</span>
+    <span class="kw">if</span> is_error<span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">False</span>
+    <span class="kw">if</span> looks_binary(content)<span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">False</span>
+    <span class="kw">if</span> is_complete_json(content)<span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">False</span>
+    <span class="kw">return</span> <span class="kw">True</span></code></pre></div>
+<p><strong>错误结果</strong>。错误文本是模型下一步行动的唯一依据，而且它天然很短（一个栈顶、一条 <code class="inl">permission denied</code>）。把它卸载掉只会让模型多花一步去取回。<strong>注意 DSH 的 spill-policy 在这一点上是不设防的</strong>：它的 <code class="inl">retainable()</code> 只看内容块的类型（<code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:37-39" data-expect="function retainable(content: readonly ContentBlock[]): content is RetainableBlock[] {">index.ts:37-39</code>），完全不看 <code class="inl">isError</code>。它能这么做是因为阈值（12500 token）远高于任何正常错误信息的长度，也就是说<strong>这条防线是靠阈值间接提供的，不是显式写的</strong>。你自己写的时候要显式区分——一旦你的工具会产生带完整堆栈的错误（Python 的 traceback 里带一段源码上下文，几千字符很常见），这条间接防线就没了。</p>
+<p><strong>二进制内容</strong>。预览里是乱码，尾部也是乱码，说明块说的是「路径在哪」，但模型打开也看不懂。<code class="inl">looks_binary</code> 的实现刻意写得很土——只查 NUL 字节：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/spill.py::looks_binary"><span class="kw">def</span> <span class="fn">looks_binary</span>(content<span class="op">:</span> str) <span class="op">-&gt;</span> bool<span class="op">:</span>
+    <span class="str">"""粗略判断是不是二进制内容。
+
+    真正的 harness 在工具层就知道输出的类型（DSH 的工具必须声明 output schema）；
+    到了卸载这一步只剩字符串，只能靠特征猜。猜错的方向要选对：把二进制当文本
+    交给模型，代价是一堆乱码 token；把文本当二进制不卸载，代价只是上下文变大一点。
+    """</span>
+    <span class="kw">return</span> _BINARY_PROBE <span class="kw">in</span> content</code></pre></div>
+<p>这里有一个设计信号值得注意：<strong>如果卸载层只剩一个字符串可用，说明前面某层把信息丢掉了。</strong>DSH 的工具必须声明输出 schema（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1075" data-expect="must declare output { schema, render, presentationMeta? }">index.ts:1075</code>），所以「这是不是文本」在工具层就是已知的，卸载层不需要猜。</p>
+<p><strong>完整的 JSON</strong>。这条最隐蔽：工具返回一份 4 万字符的完整 JSON，预览截成头 2000 + 尾 2000，中间省略。模型看到以 <code class="inl">{</code> 开头、以 <code class="inl">}</code> 结尾的内容 —— 它认为这是一份完整的 JSON 文档，尝试解析，然后在中间撞上省略标记，得到一个「语法错误」的结论。比这更糟的是它会认为<em>工具返回了坏数据</em>。所以完整 JSON 要么整体放进去，要么明确告诉模型「这份 JSON 不完整」——但后者的正确做法是在工具层就改成流式或分页接口，而不是在卸载层打补丁。</p>
+
+<h3 id="hx-08-s3-2">3.2 预览怎么切</h3>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/spill.py::build_preview"><span class="kw">def</span> <span class="fn">build_preview</span>(content<span class="op">:</span> str, head_chars<span class="op">:</span> int, tail_chars<span class="op">:</span> int) <span class="op">-&gt;</span> tuple[str, int]<span class="op">:</span>
+    <span class="str">"""切出头部 + 尾部，返回（预览文本，被省略的字符数）。
+
+    两个细节：
+
+    - 头尾之和可能超过原内容（内容比阈值大但比 head+tail 小），这时直接退化成
+      整份内容，不能凭空多出省略标记。
+    - 省略量必须按 ``原文长度 - 头 - 尾`` 算，不能用 ``len(TRUNCATION_MARK)``
+      之类的近似值——这个数字会写进预览给模型看。
+    """</span>
+    <span class="kw">if</span> len(content) <span class="op">&lt;=</span> head_chars <span class="op">+</span> tail_chars<span class="op">:</span>
+        <span class="kw">return</span> content, <span class="num">0</span>
+    head <span class="op">=</span> content[<span class="op">:</span>head_chars] <span class="kw">if</span> head_chars <span class="op">&gt;</span> <span class="num">0</span> <span class="kw">else</span> <span class="str">""</span>
+    tail <span class="op">=</span> content[<span class="op">-</span>tail_chars<span class="op">:</span>] <span class="kw">if</span> tail_chars <span class="op">&gt;</span> <span class="num">0</span> <span class="kw">else</span> <span class="str">""</span>
+    omitted <span class="op">=</span> len(content) <span class="op">-</span> len(head) <span class="op">-</span> len(tail)
+    <span class="kw">return</span> <span class="str">f"{head}{TRUNCATION_MARK}{tail}"</span>, omitted</code></pre></div>
+<p>头尾都留、而不是只留头部，是被实际使用逼出来的结论。<strong>错误信息在输出的尾部</strong>：编译失败在最后几行，测试失败的汇总在最后几行，<code class="inl">Traceback</code> 的最后一行才是异常类型。只留头部的话，模型看到的是 2000 字符的进度日志，最有价值的那几行被切掉了。</p>
+<p>DSH 把这一点做成了量化规则，值得照抄：<strong>头尾各拿预算的一半</strong>。</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  let remaining = Math.ceil(budget / 2)</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/retention.ts:58" data-expect="let remaining = Math.ceil(budget / 2)">retention.ts:58</code>（头部先取一半），<code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/retention.ts:75" data-expect="remaining = Math.floor(budget / 2)">retention.ts:75</code>（尾部再取一半）。两个数一个向上取整一个向下取整，是刻意的——头尾之和不能超过预算。</p>
+<p>它的切分函数还处理了一个 labs 没处理的边界：<strong>不能把 UTF-8 字符切成两半</strong>。<code class="inl">textSlice</code> 在切点落在代理对（surrogate pair）中间时往外挪一格（<code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/retention.ts:20" data-expect="if (previous &gt;= 0xd800 &amp;&amp; previous &lt;= 0xdbff &amp;&amp; current &gt;= 0xdc00 &amp;&amp; current &lt;= 0xdfff) {">retention.ts:20</code>）。emacs 里的乱码字符进到上下文，模型会把它当成需要解释的内容 —— 这是「输出被污染」而非「输出被截断」。</p>
+
+<h3 id="hx-08-s3-3">3.3 说明块：给模型的四句话</h3>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/spill.py::format_notice"><span class="kw">def</span> <span class="fn">format_notice</span>(
+    <span class="op">*</span>,
+    path<span class="op">:</span> <span class="cls">Path</span>,
+    original_chars<span class="op">:</span> int,
+    omitted_chars<span class="op">:</span> int,
+    head_chars<span class="op">:</span> int,
+    tail_chars<span class="op">:</span> int,
+) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""给模型看的说明块。这是整章最重要的一段文本。
+
+    它必须回答模型的三个问题：**我看到的不是全部吗**（已省略 N 字符）、**剩下
+    的去哪了**（路径）、**我怎么拿回来**（用带 offset/limit 的读取工具）。缺了
+    第一条模型会把预览当全文（lcc 的 ``out[:50000]`` 就是这个下场）；缺了第三条
+    模型只会说「输出被截断了，我换个命令重试一遍」。
+    """</span>
+    <span class="kw">return</span> (
+        <span class="str">f"[工具输出已卸载]\n"</span>
+        <span class="str">f"原始大小：{original_chars} 字符（本次只显示头部 {head_chars} 与尾部 {tail_chars} 字符，"</span>
+        <span class="str">f"已省略 {omitted_chars} 字符）\n"</span>
+        <span class="str">f"完整输出：{path}\n"</span>
+        <span class="str">f"取回方式：{RECALL_TOOL}(path, page=N)，每页 {DEFAULT_PAGE_LINES} 行；"</span>
+        <span class="str">f"也可以对路径做 grep 检索。\n"</span>
+        <span class="str">f"注意：上面只是预览，不是完整内容——不要根据预览的结尾断定输出已结束。"</span>
+    )</code></pre></div>
+<p>四句话各有各的用途，缺一句就有一类失败：</p>
+<ul>
+<li><strong>「原始大小 + 已省略」</strong>：让模型知道自己在看什么。少了它，模型把预览当全文，而它的推理会建立在这个错误前提上——这正是 lcc 那个 <code class="inl">out[:50000]</code> 的失败模式。</li>
+<li><strong>「完整输出：路径」</strong>：这是唯一的抓手。DSH 把这个字段叫 <code class="inl">locator</code> 并刻意做成不透明类型（<code class="inl">Branded&lt;'SpillLocator'&gt;</code>，<code class="inl src-ref" data-src="dsh:packages/spill/spill/src/types.ts:14-16" data-expect="Opaque model-facing handle for one spilled artifact.">types.ts:13-18</code>），说清楚是「本地后端可能是文件路径，远端或数据库后端可能是 URI 或 key，<strong>消费方渲染它但不要解析它</strong>」。这个区分很重要：一旦你的代码去 <code class="inl">split('/')</code> 解析这个 locator，换成远端存储时整条链路都要改。</li>
+<li><strong>「取回方式」</strong>：少了它，模型最可能的反应是「输出被截断了，我重跑一遍命令」。重跑一轮的成本远高于读几页文件。DSH 的本地后端把这句话写死在返回值里（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/index.ts:159" data-expect="Use read with offset/limit, or grep this path to search within it.">index.ts:159</code>），理由写在接口定义里：<em>backend supplies the locator and retrieval hint appropriate for its storage substrate</em>（<code class="inl src-ref" data-src="dsh:packages/spill/spill/src/index.ts:11-12" data-expect="search API. The backend supplies the locator and retrieval hint appropriate">index.ts:11-12</code>）——提示语由后端提供，因为只有后端知道该怎么取。</li>
+<li><strong>最后那句「不要根据预览的结尾断定输出已结束」</strong>：labs 额外加的。因为头尾都保留时，预览的结尾<em>看起来</em>像是输出的结尾（它就是尾部那段），模型很容易据此下结论。这是唯一一条在其他实现里没看到、但实验下来确实需要的提示。</li>
+</ul>
+<p>DSH 的说明块还多一个字段：<strong>被省略的图片数量</strong>。它的说明块格式化函数把三样东西拼在一起（<code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/notice.ts:21-24" data-expect="export function formatSpillNotice(omitted: Omitted, ref: Pick&lt;SpillRef, 'locator' | 'retrievalHint'&gt;, images = 0): string {">notice.ts:21-24</code>）：省略量、locator、取回提示。常量在文件顶部单独抽出来定义（<code class="inl">LOCATION = ' Full formatted result stored at: '</code>、<code class="inl">GUIDANCE_SEPARATOR = '. '</code>），因为同一个文件里还有一个 <code class="inl">hasSpillNotice</code> 函数要<strong>反向识别</strong>这段文本——回放旧日志时，harness 需要判断「这条历史里已经带着说明块了，不要重复处理」。用常量而不是字面量，是为了让正反两侧不可能漂移。</p>
+
+<h3 id="hx-08-s3-4">3.4 落盘：命名、去重、路径穿越</h3>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/spill.py::SpillStore.spill">    <span class="kw">def</span> <span class="fn">spill</span>(
+        self,
+        <span class="op">*</span>,
+        tool_name<span class="op">:</span> str,
+        call_id<span class="op">:</span> str,
+        content<span class="op">:</span> str,
+        is_error<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>,
+        limit_chars<span class="op">:</span> int <span class="op">=</span> <span class="cls">DEFAULT_LIMIT_CHARS</span>,
+        head_chars<span class="op">:</span> int <span class="op">=</span> <span class="cls">DEFAULT_HEAD_CHARS</span>,
+        tail_chars<span class="op">:</span> int <span class="op">=</span> <span class="cls">DEFAULT_TAIL_CHARS</span>,
+    ) <span class="op">-&gt;</span> <span class="cls">SpillResult</span><span class="op">:</span>
+        <span class="str">"""需要就卸载，不需要就原样返回。
+
+        ``call_id`` 目前只用于让调用方把预览和自己的日志对上；DSH 把
+        ``{kind: 'tool', toolName, callId, label}`` 整份塞进 spill 存储，
+        因为它的后端可能是数据库或远端，需要这份来源信息建索引。
+        """</span>
+        <span class="kw">del</span> call_id  <span class="cmt"># 本地后端只靠内容哈希和工具名命名，来源信息记在会话日志里。</span>
+        <span class="kw">if</span> <span class="kw">not</span> should_spill(is_error<span class="op">=</span>is_error, content<span class="op">=</span>content)<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">SpillResult</span>(content<span class="op">=</span>content, spilled<span class="op">=</span><span class="kw">False</span>, original_chars<span class="op">=</span>len(content))
+        <span class="kw">if</span> len(content) <span class="op">&lt;=</span> limit_chars<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">SpillResult</span>(content<span class="op">=</span>content, spilled<span class="op">=</span><span class="kw">False</span>, original_chars<span class="op">=</span>len(content))
+
+        digest <span class="op">=</span> hashlib.sha256(content.encode(<span class="str">"utf-8"</span>)).hexdigest()[<span class="op">:</span><span class="num">16</span>]
+        path <span class="op">=</span> self.session_dir <span class="op">/</span> <span class="str">f"{digest}-{safe_name(tool_name)}.txt"</span>
+        deduplicated <span class="op">=</span> digest <span class="kw">in</span> self._written
+        <span class="kw">if</span> <span class="kw">not</span> deduplicated<span class="op">:</span>
+            self.session_dir.mkdir(parents<span class="op">=</span><span class="kw">True</span>, exist_ok<span class="op">=</span><span class="kw">True</span>)
+            <span class="cmt"># 先写临时文件再原子替换：并发写同一份内容时不会留下半份文件。</span>
+            tmp <span class="op">=</span> path.with_suffix(<span class="str">".tmp"</span>)
+            tmp.write_text(content, encoding<span class="op">=</span><span class="str">"utf-8"</span>)
+            tmp.replace(path)
+            self._written[digest] <span class="op">=</span> path
+
+        preview, omitted <span class="op">=</span> build_preview(content, head_chars, tail_chars)
+        notice <span class="op">=</span> format_notice(
+            path<span class="op">=</span>path,
+            original_chars<span class="op">=</span>len(content),
+            omitted_chars<span class="op">=</span>omitted,
+            head_chars<span class="op">=</span>head_chars,
+            tail_chars<span class="op">=</span>tail_chars,
+        )
+        <span class="kw">return</span> <span class="cls">SpillResult</span>(
+            content<span class="op">=</span><span class="str">f"{notice}\n\n--- 预览开始 ---\n{preview}\n--- 预览结束 ---"</span>,
+            spilled<span class="op">=</span><span class="kw">True</span>,
+            path<span class="op">=</span>path,
+            original_chars<span class="op">=</span>len(content),
+            omitted_chars<span class="op">=</span>omitted,
+            deduplicated<span class="op">=</span>deduplicated,
+        )</code></pre></div>
+<p>三个决定值得展开。</p>
+<p><strong>文件名由内容哈希决定</strong>。同一份输出（比如同一个 <code class="inl">git status</code> 跑两遍）第二次落盘没有任何收益：磁盘上多一份一模一样的文件，而模型看到的说明块指向不同路径，回放日志时更难对上。用内容哈希做前缀，第二次直接复用。<strong>注意这里和 DSH 的选择相反</strong>：DSH 的文件名是 <code class="inl">{随机 6 字节十六进制}-{转义后的 suggestedName}</code>（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:110" data-expect="const path = join(dir, `${randomBytes(6).toString('hex')}-${encodeSegment(options.suggestedName)}`)">store.ts:110</code>），也就是说<strong>同一份内容卸载两次会写两个文件</strong>。它选随机名的理由是安全：名字不可预测，别的本地用户没法预先放一个符号链接来重定向写入（注释里明说不允许被 <em>redirectable via a planted symlink</em>）。所以这是一个真实的取舍——<strong>去重 vs 防符号链接攻击</strong>，labs 选了前者因为它是教学实现，DSH 选了后者因为它是多用户系统上的真实部署。</p>
+<p><strong>会话目录名用哈希而不是会话 id 本身</strong>。会话 id 可能来自配置、命令行参数、或另一个服务，直接当路径段用就是一个路径穿越入口。DSH 的做法是同一套（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:79" data-expect="const hash = createHash('sha256').update(sessionId).digest('hex').slice(0, 12)">store.ts:79</code>），目录名是 <code class="inl">session-{sha256 前 12 位}</code>。哈希的另一个好处是：会话 id 本身不会泄露到文件系统上。</p>
+<p><strong>工具名要清洗，但不能只靠清洗</strong>。labs 用白名单正则 <code class="inl">safe_name()</code>，把 <code class="inl">../../etc/passwd</code> 变成 <code class="inl">etc_passwd</code>。DSH 走得更远，用的是一个<strong>单射</strong>编码：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    out += ch !== '~' &amp;&amp; /^[A-Za-z0-9._-]$/.test(ch)
+      ? ch
+      : '~' + code.toString(16).toUpperCase().padStart(4, '0')</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:63-65" data-expect="out += ch !== '~' &amp;&amp; /^[A-Za-z0-9._-]$/.test(ch)">store.ts:63-65</code>。注释把单射的理由写全了（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:44-50" data-expect="Encode an arbitrary string as one safe path segment, injectively over ALL JS">store.ts:43-50</code>）：每个码位要么原样保留，要么转义成 <code class="inl">~XXXX</code>，而 <code class="inl">~</code> 自身也要转义，所以<strong>不同的输入永远不会映射到同一个文件名</strong>。清洗法的弱点是两个不同的工具名可能洗出同一个名字（<code class="inl">a/b</code> 和 <code class="inl">a_b</code> 都变成 <code class="inl">a_b</code>），如果没有哈希前缀就会互相覆盖。整段 <code class="inl">.</code> 和 <code class="inl">..</code> 也单独处理成 <code class="inl">~002E</code>，因为它们是路径段里唯一有特殊含义的值。</p>
+<p>写入本身有两处细节。第一，文件权限是 <code class="inl">0600</code>、目录权限是 <code class="inl">0700</code>，且用 <code class="inl">wx</code>（独占创建）打开：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    await mkdir(dir, { recursive: true, mode: 0o700 })
+    try {
+      handle = await open(path, 'wx', 0o600)
+      break
+    } catch (error: unknown) {
+      /* v8 ignore start -- requires another process to remove the directory
+         between mkdir and open, or an external permission/IO race. */
+      if (isErrno(error, 'ENOENT')) continue
+      throw error
+      /* v8 ignore stop */
+    }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:111-124" data-expect="  let handle">store.ts:111-124</code>。<code class="inl">wx</code> 的含义是「文件已存在就失败」，这挡住了「别人预先在同名位置放一个软链接」的情况。第二，那个 <code class="inl">ENOENT</code> 重试循环处理的是一个真实的竞态：<code class="inl">mkdir</code> 和 <code class="inl">open</code> 之间目录被别人删掉（比如清理进程刚好扫到这里）。它被 <code class="inl">v8 ignore</code> 包着，注释老实承认「要靠另一个进程在 mkdir 和 open 之间删目录才能触发」——这是那种「不写也行，但写了就不会在凌晨三点炸」的代码。</p>
+
+<h3 id="hx-08-s3-5">3.5 取回：分页读取的边界</h3>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/spill.py::SpillStore.read_page">    <span class="kw">def</span> <span class="fn">read_page</span>(self, path<span class="op">:</span> <span class="cls">Path</span>, page<span class="op">:</span> int <span class="op">=</span> <span class="num">0</span>, page_lines<span class="op">:</span> int <span class="op">=</span> <span class="cls">DEFAULT_PAGE_LINES</span>) <span class="op">-&gt;</span> str<span class="op">:</span>
+        <span class="str">"""按页取回卸载文件，模拟模型后续的读取。
+
+        两件事必须做：**把路径钉回会话目录**（否则模型可以传 ``../`` 去读别的
+        会话甚至别的用户的文件），以及**在页尾明确写出「还有没有下一行」**——
+        模型无法从一页内容的结尾看出来它是不是文件的结尾。
+        """</span>
+        resolved <span class="op">=</span> <span class="cls">Path</span>(path).resolve()
+        base <span class="op">=</span> self.session_dir.resolve()
+        <span class="kw">if</span> <span class="kw">not</span> resolved.is_relative_to(base)<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">SpillPathError</span>(<span class="str">f"取回路径必须在 {base} 之内：{resolved}"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> resolved.is_file()<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">FileNotFoundError</span>(<span class="str">f"卸载文件不存在（可能已被清理）：{resolved}"</span>)
+        <span class="kw">if</span> page <span class="op">&lt;</span> <span class="num">0</span><span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ValueError</span>(<span class="str">"page 不能为负数"</span>)
+
+        lines <span class="op">=</span> resolved.read_text(encoding<span class="op">=</span><span class="str">"utf-8"</span>).splitlines()
+        start <span class="op">=</span> page <span class="op">*</span> page_lines
+        chunk <span class="op">=</span> lines[start<span class="op">:</span>start <span class="op">+</span> page_lines]
+        <span class="kw">if</span> <span class="kw">not</span> chunk<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">f"[空页] page={page} 超出范围：共 {len(lines)} 行。"</span>
+        last <span class="op">=</span> start <span class="op">+</span> len(chunk)
+        more <span class="op">=</span> <span class="str">f"还有 {len(lines) - last} 行，用 page={page + 1} 继续。"</span> <span class="kw">if</span> last <span class="op">&lt;</span> len(lines) <span class="kw">else</span> <span class="str">"这是最后一页。"</span>
+        <span class="kw">return</span> <span class="str">f"[page={page} 第 {start + 1}-{last} 行 / 共 {len(lines)} 行] {more}\n"</span> <span class="op">+</span> <span class="str">"\n"</span>.join(chunk)</code></pre></div>
+<p>这里有两个必须自己做、不能指望模型的判断。</p>
+<p><strong>路径必须钉回会话目录。</strong>说明块里给了模型一个路径，模型下一轮会把它传回来。中间这一圈里，路径可以被模型改写（它能自己编一个路径，也可以被提示注入影响）。所以取回端必须<code class="inl">resolve()</code> 之后检查它是不是还在会话目录下——用 <code class="inl">is_relative_to</code> 做<strong>结构判断</strong>，而不是字符串前缀匹配（<code class="inl">/work/session-news</code> 的字符串前缀是 <code class="inl">/work/session-ne</code>，前缀判断会误放行）。labs 的这条检查偏严：连同一个 root 下<em>别的会话</em>的目录也读不了，因为那同样是别的会话的工具输出。生产实现里这条边界有的在存储层（DSH 的会话目录划分），有的在工具层（只允许读工作区内的路径）。</p>
+<p><strong>页尾必须说明还有没有下一行。</strong>模型从一页内容的结尾看不出这是文件的结尾还是分页的结尾——如果 <code class="inl">read_page</code> 只返回内容，模型看到最后一行是 <code class="inl">}</code> 就会认为「读完了」。所以响应头里带位置信息（<code class="inl">第 1-200 行 / 共 3812 行</code>）和明确的续读指令。<strong>空结果也不能静默返回空字符串</strong>：模型请求第 50 页而文件只有 10 页时，返回 <code class="inl">&quot;&quot;</code> 会让它以为文件是空的，然后据此得出「工具输出是空的」这个错误结论。所以越界要显式回答（labs 返回 <code class="inl">[空页]</code> 加总行数）。</p>
+<p>DSH 在这个位置的做法是「不给模型新的取回工具，而是复用已有的 <code class="inl">read</code> 工具」。它的 <code class="inl">read</code> 接受 <code class="inl">offset</code>（1 起的起始行）和 <code class="inl">limit</code>（行数，默认 2000）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const offset = args.offset === undefined ? 1 : parsePositiveInteger(args.offset, 'offset')
+  const limit = args.limit === undefined ? maxLimit : parsePositiveInteger(args.limit, 'limit')
+  if (limit &gt; maxLimit) throw new Error(`limit must be less than or equal to ${maxLimit}`)</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/fs/tool-fs/src/read.ts:57-59" data-expect="  const offset = args.offset === undefined ? 1 : parsePositiveInteger(args.offset, 'offset')">read.ts:57-59</code>。这个选择比 labs 的专用取回工具更好，理由是<strong>模型只需要学会一种读文件的方式</strong>：卸载文件是文件，会话产生的其他产物也是文件，读完再 <code class="inl">read_image</code> 看图片也是同一套。DSH 甚至把这个引导写进系统提示（<code class="inl src-ref" data-src="dsh:packages/fs/tool-fs/src/read.ts:74" data-expect="Use offset and limit to continue reading large files.">read.ts:74</code>），也就是说「大文件要分页读」这件事在提示词层面就被教过了。</p>
+
+<h2 id="hx-08-s4">4. 逐库对照</h2>
+<p>三个仓库的规模差了两个数量级，正好看到同一个机制在不同权重下的形态。</p>
+
+<h3 id="hx-08-s4-1">4.1 DSH：拆成三个包</h3>
+<p>DSH 把卸载拆成三个独立的包，接口定义在 <code class="inl">dsh-spill</code>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export abstract class SpillStore extends Service {
+  constructor(ctx: Context) {
+    super(ctx, 'spillStore')
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/spill/spill/src/index.ts:45-48" data-expect="export abstract class SpillStore extends Service {">index.ts:45-48</code>，整个抽象接口只有一个方法：<code class="inl src-ref" data-src="dsh:packages/spill/spill/src/index.ts:55" data-expect="abstract saveText(input: SaveTextSpill): Promise&lt;SpillRef&gt;">saveText</code>。它的模块注释把「故意只做这么点」写成了明确的设计声明（<code class="inl src-ref" data-src="dsh:packages/spill/spill/src/index.ts:8-12" data-expect="The Service Definition is deliberately minimal: `saveText` and nothing else. It owns NO">index.ts:8-12</code>）：<strong>它不拥有保留策略</strong>（那是 <code class="inl">dsh-output-retention</code>）、<strong>不拥有工具结果替换</strong>（那是 <code class="inl">dsh-spill-policy</code>）、<strong>不拥有取回或检索 API</strong>。</p>
+<p>这个三分的好处是每一层可以单独换。存储层换成远端对象存储时，只要 <code class="inl">saveText</code> 还能返回一个 locator，策略层一个字都不用改——locator 被刻意做成不透明类型就是为了保证这一点。代价是多两个包、多两个包的测试和维护。</p>
+<p>本地存储实现里的关键路径：会话目录由会话 id 的哈希派生（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:78-81" data-expect="export function sessionDir(root: string, sessionId: string): string {">store.ts:78-81</code>），写入走 <code class="inl">saveTextFile</code>（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:108" data-expect="export async function saveTextFile(options: SaveTextOptions): Promise&lt;SavedText&gt; {">store.ts:108</code>），返回路径和 UTF-8 字节数（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:130" data-expect="return { path, bytes: Buffer.byteLength(options.content, 'utf8') }">store.ts:130</code>）。字节数由后端算而不是让策略层算，因为只有后端知道自己写进磁盘的是什么编码。</p>
+<p>存储根默认是进程私有的临时目录（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:37" data-expect="defaultRoot ??= mkdtempSync(join(tmpdir(), DEFAULT_ROOT_PREFIX))">store.ts:37</code>，前缀 <code class="inl">dsh-spill-</code>）。因为它不在会话目录里，<strong>会话被删除时卸载文件不会跟着删</strong>，所以它必须自带清理：插件激活时启动一次清理扫描（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/index.ts:96-101" data-expect="if (this.config.cleanupPeriodDays &gt; 0) {">index.ts:96-101</code>），默认清掉 30 天前的文件（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/index.ts:68" data-expect="cleanupPeriodDays: z.number().step(1).min(0).default(30),">index.ts:68</code>）。注释解释了为什么不设更短：<em>Retention is deliberate — a resumed or forked session may still reference an older locator until it ages out</em>（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/index.ts:44-46" data-expect="Retention is deliberate">index.ts:44-46</code>）。<strong>这是一个容易被忽略的耦合</strong>：只要卸载文件的路径存在于历史里，清理它就是在制造一个模型能看见但不存在的引用。</p>
+<p>策略层挂在工具流水线的 post-execute 上，第一件事是先跑别人的决定：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  ctx.on('tools/post-execute', async (exec, result, next): Promise&lt;PostToolDecision&gt; =&gt; {
+    const decision = await next()
+    if (decision.kind !== 'accept' || Object.hasOwn(decision, 'value') || exec.name === 'read') return decision</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:133-135" data-expect="ctx.on('tools/post-execute', async (exec, result, next): Promise&lt;PostToolDecision&gt; =&gt; {">index.ts:133-135</code>。三个跳过条件各有理由：<code class="inl">next()</code> 的结果不是 <code class="inl">accept</code> 就别碰（别人已经决定了）；<code class="inl">Object.hasOwn(decision, 'value')</code> 说明有人替换了整个值（那是值级替换，不是内容级保留）；<strong><code class="inl">exec.name === 'read'</code> 是排除 <code class="inl">read</code> 工具本身</strong>——这是一个很实际的保护。</p>
+<p>为什么排除 <code class="inl">read</code>？因为 <code class="inl">read</code> 的输出已经是它自己按预算切好的（前面看到 <code class="inl">READ_LIMIT = 2000</code> 行），而且读的往往<em>就是</em>一个卸载文件。如果卸载对 <code class="inl">read</code> 也生效，模型读一个 3000 行的卸载文件会得到「一个指向卸载文件的卸载文件」，多一层跳转。「读工具的输出不该被再次卸载」这条规则，在你自己的实现里同样成立。</p>
+<p>最后一个细节是注册时那个 <code class="inl">{ prepend: true }</code>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  }, { prepend: true })</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:150" data-expect="  }, { prepend: true })">index.ts:150</code>。<code class="inl">prepend</code> 是 Cordis 事件系统的监听者排序选项（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:255" data-expect="const method = options.prepend ? 'unshift' : 'push'">events.ts:255</code>），注册时用 <code class="inl">unshift</code> 插到数组头而不是 <code class="inl">push</code> 到尾。为什么必须排在前面？因为 <code class="inl">tools/post-execute</code> 是 waterfall（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1787-1790" data-expect="private async postExecute(exec: ToolExecution, result: ToolExecutionResult): Promise&lt;ToolExecutionResult&gt; {">index.ts:1787-1790</code>），监听者按顺序串成 <code class="inl">next</code> 链，每个监听者拿到的 <code class="inl">result</code> 是<em>前一个处理过的</em>。如果卸载排在后面，它看到的是已经被别人裁过的内容——可能已经被截断成 8192 字符（DSH 的 tool-result-pruner 就是这么干的），那时卸载就无从判断「原本有多大」。<strong>要拿到最原始的完整结果，就必须排在链条最前。</strong>这是一个通用规则：任何「基于结果全长做决策」的后置策略，都必须 prepend。</p>
+
+<h3 id="hx-08-s4-2">4.2 OpenHarness：一个函数</h3>
+<p>OH 把整个卸载逻辑放在引擎循环里，紧挨着工具执行：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    inline_output, artifact_path <span class="op">=</span> _offload_tool_output_if_needed(
+        tool_name<span class="op">=</span>tool_name,
+        tool_use_id<span class="op">=</span>tool_use_id,
+        output<span class="op">=</span>result.output,
+    )
+    <span class="kw">if</span> artifact_path <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+        _remember_active_artifact(context.tool_metadata, str(artifact_path))
+    tool_result <span class="op">=</span> <span class="cls">ToolResultBlock</span>(
+        tool_use_id<span class="op">=</span>tool_use_id,
+        content<span class="op">=</span>inline_output,
+        is_error<span class="op">=</span>result.is_error,
+        result_metadata<span class="op">=</span>dict(result.metadata <span class="kw">or</span> {}),
+    )</code></pre></div>
+<p><code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:985-997" data-expect="    inline_output, artifact_path = _offload_tool_output_if_needed(">query.py:985-997</code>。这是最省事的形态：没有服务、没有扩展点、没有独立的包————因为在 OH 的架构里这个位置只有一个消费者（引擎循环），抽象出来只是多一层间接。</p>
+<p><strong>注意 <code class="inl">is_error</code> 是在卸载之后才填进结果的</strong>（<code class="inl">tool_result</code> 的构造里 <code class="inl">is_error=result.is_error</code> 直接抄工具的返回，与卸载无关）。所以 OH 的错误结果<strong>也会被卸载</strong>——如果一个工具返回了几万字符的错误堆栈，它照样会变成「预览 + 路径」。这是 labs 显式排除的情况，值得留意：两种做法都说得通（错误信息太长时确实该落盘），但你要<strong>知道自己选了哪种</strong>。</p>
+<p>路径命名在这里是另一套思路：<code class="inl">{时间戳}-{清洗后的工具名}-{随机 12 位}.txt</code>（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:534-537" data-expect="    artifact_path = (">query.py:534-537</code>），时间戳按 <code class="inl">%Y%m%d-%H%M%S</code> 排前缀，好处是按目录列表排序就是时间序，排查问题时很直观。清洗函数只保留字母数字和 <code class="inl">._-</code>，最后截到 80 字符（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:519-521" data-expect="def _safe_tool_artifact_name(tool_name: str) -> str:">query.py:519-521</code>），空结果退化成字面量 <code class="inl">&quot;tool&quot;</code>。</p>
+<p>卸载文件路径还额外进了一个「活跃产物」追踪列表（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:990-991" data-expect="    if artifact_path is not None:">query.py:990-991</code>），供后续的微压缩（microcompact）判断「这个文件是不是还要用」。这正是 <a href="#hx-07">第 07 章</a>要讲的层与层之间的接口：卸载把文件交出去，压缩需要知道它还在不在用。</p>
+<p>OH 的另一个特点是三个阈值是<strong>运行时可调的</strong>：<code class="inl">OPENHARNESS_TOOL_OUTPUT_INLINE_CHARS</code>、<code class="inl">OPENHARNESS_TOOL_OUTPUT_PREVIEW_CHARS</code>、<code class="inl">OPENHARNESS_MICROCOMPACT_TOOL_RESULT_CHARS</code>，环境变量缺省时才用常量（<code class="inl src-ref" data-src="oh:src/openharness/services/tool_outputs.py:15-23" data-expect="def _read_positive_int_env(name: str, default: int, *, minimum: int = 1) -&gt; int:">tool_outputs.py:15-23</code>），并且有最小值下限（<code class="inl">minimum=256</code>）。非法值只记警告然后回退默认值，不崩。这套写法值得抄：<strong>阈值是最需要按部署调整的参数</strong>，改一行环境变量比改代码重新部署快得多。</p>
+
+<h3 id="hx-08-s4-3">4.3 learn-claude-code：只截断，以及在错误的时间点卸载</h3>
+<p>lcc 的 s08 里有两套并存的做法，而且它们的分工值得单独讲。</p>
+<p>第一套在工具内部，就是前面那个 <code class="inl">out[:50000]</code>（<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:92" data-expect="return output[:50000] if output else &quot;(no output)&quot;">code.py:92</code>）——纯截断，永久丢失。</p>
+<p>第二套在压缩器里，是真正的落盘加预览：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    <span class="kw">def</span> <span class="fn">save_output</span>(self, tool_use_id<span class="op">:</span> str, output<span class="op">:</span> str) <span class="op">-&gt;</span> <span class="cls">Path</span><span class="op">:</span>
+        self.tool_results_dir.mkdir(parents<span class="op">=</span><span class="kw">True</span>, exist_ok<span class="op">=</span><span class="kw">True</span>)
+        safe_id <span class="op">=</span> re.sub(<span class="str">r"[^A-Za-z0-9._-]"</span>, <span class="str">"_"</span>, str(tool_use_id))[<span class="op">:</span><span class="num">120</span>] <span class="kw">or</span> <span class="str">"unknown"</span>
+        path <span class="op">=</span> self.tool_results_dir <span class="op">/</span> <span class="str">f"{safe_id}.txt"</span>
+        path.write_text(output, encoding<span class="op">=</span><span class="str">"utf-8"</span>)
+        <span class="kw">return</span> path</code></pre></div>
+<p><code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:340-345" data-expect="    def save_output(self, tool_use_id: str, output: str) -&gt; Path:">code.py:340-345</code>，落盘目录是工作区下的 <code class="inl">.task_outputs/tool-results</code>（<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:65" data-expect="TOOL_RESULTS_DIR = WORKDIR / &quot;.task_outputs&quot; / &quot;tool-results&quot;">code.py:65</code>），文件名直接用清洗后的 <code class="inl">tool_use_id</code>。</p>
+<p>这里有 lcc 最值得学的一个设计：<strong>它会先检查输出里是不是已经带着一个路径</strong>，带着就直接复用，不再落一次盘：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    <span class="kw">def</span> <span class="fn">persisted_output_path</span>(self, output<span class="op">:</span> str) <span class="op">-&gt;</span> str <span class="op">|</span> <span class="kw">None</span><span class="op">:</span>
+        candidate <span class="op">=</span> <span class="kw">None</span>
+        <span class="kw">if</span> output.startswith(<span class="str">"&lt;persisted-output&gt;\n"</span>)<span class="op">:</span>
+            candidate <span class="op">=</span> next(
+                (line.removeprefix(<span class="str">"Full output: "</span>)
+                 <span class="kw">for</span> line <span class="kw">in</span> output.splitlines()
+                 <span class="kw">if</span> line.startswith(<span class="str">"Full output: "</span>)),
+                <span class="kw">None</span>,
+            )
+        prefix <span class="op">=</span> <span class="str">"[Earlier tool result saved at "</span>
+        <span class="kw">if</span> output.startswith(prefix) <span class="kw">and</span> output.endswith(<span class="str">"]"</span>)<span class="op">:</span>
+            candidate <span class="op">=</span> output.removeprefix(prefix).removesuffix(<span class="str">"]"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> candidate<span class="op">:</span>
+            <span class="kw">return</span> <span class="kw">None</span>
+        path <span class="op">=</span> <span class="cls">Path</span>(candidate)
+        <span class="kw">if</span> (<span class="kw">not</span> path.resolve().is_relative_to(self.tool_results_dir.resolve())
+                <span class="kw">or</span> <span class="kw">not</span> path.is_file())<span class="op">:</span>
+            <span class="kw">return</span> <span class="kw">None</span>
+        <span class="kw">return</span> str(path)</code></pre></div>
+<p><code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:320-338" data-expect="    def persisted_output_path(self, output: str) -&gt; str | None:">code.py:320-338</code>。三件事挤在一个函数里：识别自己的两种说明块格式（<code class="inl">&lt;persisted-output&gt;</code> 和 <code class="inl">[Earlier tool result saved at …]</code>）、<strong>把路径钉回自己的目录</strong>（<code class="inl">is_relative_to</code> 那两行——和 labs 的 <code class="inl">read_page</code> 完全同一个检查）、以及确认文件真的还在。这两条保护在同一个文件里出现两次（还有个名字几乎一样的方法在 <code class="inl">is_archive_marker</code> 里），说明作者是被真实问题咬过的：<strong>模型能看见的路径字符串是不可信输入，读之前必须验。</strong></p>
+<p>lcc 的第三套做法是<strong>在压缩阶段卸载</strong>，这才是它的主线。压缩器维护一份「最近 3 条工具结果不算旧」的规则（<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:430" data-expect="        for _, _, block in consumed[:-self.KEEP_RECENT_RESULTS]:">code.py:430</code>），把更早的结果落盘并替换成一行引用：<code class="inl">block[&quot;content&quot;] = f&quot;[Earlier tool result saved at {saved_path}]&quot;</code>（<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:441" data-expect="            block[&quot;content&quot;] = f&quot;[Earlier tool result saved at {saved_path}]&quot;">code.py:441</code>）。</p>
+<p><strong>这是本章最想让你避开的一个形态</strong>：它是卸载，但它发生在历史已经产生之后。代价有两个。第一，<strong>不可逆</strong>——一旦 <code class="inl">block[&quot;content&quot;]</code> 被覆盖，原始工具结果就只剩磁盘上和原始历史里各一份，而「原始历史」如果本身是被 <code class="inl">snip_compact</code> 归档过的（<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:414-416" data-expect="        transcript_path = self.write_transcript(messages)">code.py:414-416</code>），链条就更长了。第二，<strong>时机太晚</strong>——它是在上下文已经逼近上限时（<code class="inl">CONTEXT_CHAR_LIMIT = 50000</code>）做的补救。而卸载的全部价值在于「一开始就别让它进来」，此时它已经进来了、已经花掉了每一轮的 token、已经把缓存推到了临界点。补救能救回容量，救不回已经付出的成本。</p>
+<p>顺带记一个 lcc 做对的地方：它替换后的文本<strong>只保留路径</strong>，连一行预览都不留。这样做让模型对「这里有过一个大结果」完全没有上下文，只能去读文件——从「省 token」的角度是最优的，从「模型能不能自己决定要不要读」的角度是最差的。</p>
+
+<h3 id="hx-08-s4-4">4.4 对比表</h3>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code s08</th></tr></thead><tbody>
+<tr><td>结构</td><td>三个包：接口 / 本地存储 / 策略</td><td>一个函数，在引擎循环里</td><td>压缩器的一个方法</td></tr>
+<tr><td>触发时机</td><td>工具结果 post-execute，进日志之前</td><td>工具执行完，构造 <code class="inl">tool_result</code> 之前</td><td>压缩阶段，历史已经存在之后</td></tr>
+<tr><td>阈值</td><td>12500 token（按模型路由定价）</td><td>16000 字符（可用环境变量覆盖）</td><td>30000 字符</td></tr>
+<tr><td>预览</td><td>头尾各一半预算，含图片占位</td><td>只留头部 3000 字符</td><td>1000 字符，或只留路径</td></tr>
+<tr><td>文件名</td><td>随机 6 字节 + 转义名（防符号链接）</td><td>时间戳 + 清洗名 + 随机 12 位</td><td>清洗后的 tool_use_id（可覆盖）</td></tr>
+<tr><td>去重</td><td>无</td><td>无</td><td>靠「输出里已有路径就复用」</td></tr>
+<tr><td>权限</td><td>目录 0700 + 文件 0600 + <code class="inl">wx</code> 独占创建</td><td>未特殊处理</td><td>未特殊处理</td></tr>
+<tr><td>取回方式</td><td>复用 <code class="inl">read</code>（offset/limit）或 grep</td><td>路径直接交给模型，无引导工具</td><td>模型自己去读路径</td></tr>
+<tr><td>错误结果</td><td>不排除（靠阈值挡住）</td><td>同样卸载</td><td>同样卸载</td></tr>
+<tr><td>清理</td><td>启动时扫一次，默认 30 天</td><td>无（靠会话产物目录）</td><td>无</td></tr>
+<tr><td>适用场景</td><td>多用户、可插拔后端、要回放</td><td>单进程、单一消费者、要简单</td><td>教学：讲清原理</td></tr>
+</tbody></table></div>
+<p>一句话取舍：<strong>卸载逻辑本身很短（labs 里不到 100 行），复杂度全在它和周围系统的关系上</strong>——触发时机（进日志前还是后）、存储位置（会话目录还是系统临时目录）、路径可信度（谁给的路径）、以及和压缩的分工。DSH 那三个包不是在拆功能，是在拆<em>这些关系</em>。</p>
+
+<h2 id="hx-08-s5">5. 预览设计：什么信息值得占 token</h2>
+<p>预览是模型唯一能直接看到的东西，所以它上面每一个字符都在和别的字符竞争预算。四条经验。</p>
+<p><strong>第一，头尾不对称是有意的。</strong>如果输出是日志，头部是启动信息（通常已知），尾部是结果或错误（未知）。labs 给头尾各 2000 字符是简化的选择，DSH 的头尾各拿一半同样是简化——真实实现可以让比例可配：<code class="inl">headChars: 4096, tailChars: 1024</code>，也就是四比一（这是 DSH 的 <code class="inl">tool-result-pruner</code> 的默认值，<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-tool-result-pruner/src/config.ts:10-14" data-expect="export const DEFAULTS: ResolvedConfig = deepFreeze({">config.ts:10-14</code>）。<strong>注意同一份 DSH 代码里两个组件给的默认值不一样</strong>（卸载层头尾各半，裁剪层四比一），说明这确实是个按场景调参的东西，没有普适解。</p>
+<p><strong>第二，省略量必须是精确数字，不能是「若干」。</strong>模型用这个数字判断「值不值得去读」。看到「已省略 18400 字符」，它知道里面可能有东西；看到「已省略部分内容」，它没有任何判断依据。DSH 在这件事上做得最细：它有一个专门的类型来描述省略量，<code class="inl">none</code> / <code class="inl">exact</code> / <code class="inl">unknown</code> 三态（<code class="inl src-ref" data-src="dsh:packages/util/output-retention/src/index.ts:40-43" data-expect="export type Omitted =">output-retention/index.ts:40-43</code>），而且模块注释里专门划清了一件事：<code class="inl">truncated</code> 的含义是「<em>因为预算</em>而省略了本来可用的内容」，<strong>不是</strong>「上游本身就是不完整的」（<code class="inl src-ref" data-src="dsh:packages/util/output-retention/src/index.ts:11-12" data-expect="In particular {@link RetainedText.truncated}/{@link RetainedItems.truncated}">output-retention/index.ts:11-15</code>）。权限失败、跳过的二进制文件、部分不可读的候选，都留在工具自己的领域字段里，不混进 <code class="inl">truncated</code>。这个区分的价值是：模型看到 <code class="inl">truncated</code> 时会去读文件，看到「权限失败」时会去改权限。<strong>把两种都塞进一个布尔值，模型就只能靠猜。</strong></p>
+<p><strong>第三，说明块的开销要算进预算。</strong>DSH 在这件事上有一个不显眼但重要的处理：它在决定保留多少内容之前，先把说明块本身的价格<strong>预留出来</strong>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      const reserved = price(GAP) + price({ type: 'text', text: `\n\n${worstNotice.text}` })
+      if (price(worstNotice) &gt; maxTokens) throw new Error(`spill notice for ${toolName} exceeds maxInlineTokens`)
+      const retained = retainContent(content, Math.max(0, maxTokens - reserved), price)</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:112-114" data-expect="      const reserved = price(GAP) + price({ type: 'text', text: `\n\n${worstNotice.text}` })">index.ts:112-114</code>。先算「最坏情况说明块」的价格（用 <code class="inl">worstNotice</code>，即假设全部内容都被省略的那份），把它从预算里扣掉，剩下的才给内容；如果说明块本身就超预算，直接抛错而不是产出一个超预算的结果。这里的教训很直白：<strong>边界条件是能构造出来的</strong>——一个路径特别长、省略量位数特别多的说明块，在小预算下足以吃掉全部空间。</p>
+<p><strong>第四，相邻文本要合并。</strong>DSH 最后有一段看起来多余但确实是必要的代码：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      // Adjacent text has one framing cost on the wire and in the spill preview.
+      const merged: ContentBlock[] = []
+      for (const block of result) {
+        const previous = merged.at(-1)
+        if (block.type === 'text' &amp;&amp; previous?.type === 'text') previous.text += block.text
+        else merged.push(block.type === 'text' ? { ...block } : block)
+      }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:119-126" data-expect="      // Adjacent text has one framing cost on the wire and in the spill preview.">index.ts:119-126</code>。每一段独立的文本块在协议层都有封装开销（Anthropic 的 content 数组里每个块都要序列化一遍 <code class="inl">{&quot;type&quot;:&quot;text&quot;,&quot;text&quot;:…}</code>），相邻的文本块合并成一个能省下这点开销。头、省略标记、尾部、说明块在原结构里是四个块，合并后是一整个 —— <strong>省下的虽然不多，但这是免费省下的</strong>，因为它不改变任何语义。</p>
+
+<h2 id="hx-08-s6">6. 卸载和压缩的分工</h2>
+<p>这两个机制经常被混在一起讲，因为都能「减小上下文」。但它们作用在完全不同的时刻，解决完全不同的问题。</p>
+<div class="table-wrap"><table><thead><tr><th></th><th>卸载（本章）</th><th>压缩（<a href="#hx-07">第 07 章</a>）</th></tr></thead><tbody>
+<tr><td>触发位置</td><td>工具结果产生时，进日志之前</td><td>历史已经太长，或请求已被拒（上下文超长）</td></tr>
+<tr><td>作用对象</td><td>一条结果</td><td>一段历史（多条消息）</td></tr>
+<tr><td>判断依据</td><td>长度（绝对阈值）</td><td>总 token 与窗口容量的相对关系</td></tr>
+<tr><td>产出</td><td>预览 + 目录路径</td><td>摘要（模型生成）或裁剪标记（模型无关）</td></tr>
+<tr><td>可逆性</td><td>可逆，原文在磁盘上</td><td>摘要不可逆；裁剪如果写了标记事件则可在日志里还原</td></tr>
+<tr><td>成本</td><td>一次本地写盘</td><td>一次额外的模型调用（摘要式），或纯字符串操作（裁剪式）</td></tr>
+<tr><td>对缓存</td><td>无影响（结果还没进历史）</td><td>从改写点起前缀缓存全部失效</td></tr>
+</tbody></table></div>
+<p>DSH 的装配里两者并存，而且顺序写得很明确。先卸载：</p>
+<div class="codeblock" data-lang="yaml"><pre><code class="lang-yaml">    - id: spill-local
+      name: '@deepseek-ai/dsh-spill-local'
+
+    - id: spill-policy
+      name: '@deepseek-ai/dsh-spill-policy'
+      config:
+        maxInlineTokens: 12500</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:406-412" data-expect="    - id: spill-local">cordis.patch.yml:406-412</code>，再裁剪：</p>
+<div class="codeblock" data-lang="yaml"><pre><code class="lang-yaml">    # Compacts oversized tool results before the broader conversation compactor
+    # runs, preserving the model-visible result within the configured budget.
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:418-425" data-expect="    # Compacts oversized tool results before the broader conversation compactor">cordis.patch.yml:418-425</code>。注释直说了顺序理由：<em>Compacts oversized tool results <strong>before</strong> the broader conversation compactor runs</em>——先收拾工具结果，再动整段对话。</p>
+<p>两个组件的触发时机不同：卸载挂在 <code class="inl">tools/post-execute</code>（每次工具执行都跑，<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1655" data-expect="      const postResult = await this.postExecute(exec, projected)">tools/index.ts:1655</code>），裁剪挂在压缩流程里（只在压缩被触发时跑）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    if (trigger === 'context-overflow') {
+      if (prune !== undefined) {
+        prune.pruneSession(agent.session)
+        measurement = meter.measure(agent.session)
+      }
+      const range = selectCompactableRange(agent.session, measurement, 0)</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:294-299" data-expect="    if (trigger === 'context-overflow') {">compaction-basic/index.ts:294-299</code>。注意 <code class="inl">prune</code> 是从上下文里<strong>可选</strong>取出来的（<code class="inl">ctx.get('toolResultPruner')</code>），注释说明了理由：<em>Pruning is optional so compaction-basic remains independently composable</em>。也就是说裁剪是压缩的可选前置步骤，而不是压缩的一部分——没装裁剪插件压缩照样能跑，只是要多摘要一些内容。</p>
+<p>还有一个细节把本章的主题钉住了：<strong>裁剪是往日志里追加事件的，不是改写已有事件。</strong></p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      session.append('compaction/prune', {</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/compaction/compaction-tool-result-pruner/src/index.ts:160" data-expect="      session.append('compaction/prune', {">index.ts:160</code>。为什么？因为日志是事实来源（<a href="#hx-04">第 04 章</a>），它只能追加。所以裁剪不是「把历史里的大结果删掉」，而是「追加一条事件说明这个节点以后的可见内容被裁过了」。这也是它能被回放的原因——重放一遍日志，裁剪的效果会原样重现。</p>
+<p>这一点对卸载同样成立，而且它决定了卸载的<strong>唯一正确位置</strong>：既然日志只追加，那么结果一旦写进去就没法改。所以「结果写进日志」这一步必须发生在卸载之后。DSH 的顺序是：工具执行 → <code class="inl">finalizeScheduledExecution</code> 里调 <code class="inl">postExecute</code>（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1655" data-expect="      const postResult = await this.postExecute(exec, projected)">tools/index.ts:1655</code>）→ 循环拿到已经处理过的结果 → <code class="inl">appendToolResult</code> 写日志（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:282-289" data-expect="  session.append('tool/result', {">tool-calls.ts:282-289</code>）。<strong>卸载在 <code class="inl">postExecute</code> 里，写日志在它之后</strong>，所以落进日志的就是预览版，原始全文从未进入过历史。</p>
+<p>对照 lcc 的做法（在压缩阶段覆盖 <code class="inl">block["content"]</code>）就能看出这条顺序的价值：lcc 的历史是一个可以在原地改的 Python 列表，所以它能「事后修改」；代价是这个修改不留下任何记录，进程重启后历史里就只有引用，而它想复活原文需要一个额外的转录文件兜底。DSH 不允许这种事后修改，所以它必须把卸载放在正确的位置上——<strong>「日志只追加」这条约束看起来很麻烦，实际上它替你排除了「事后补救」这个错误选项</strong>。</p>
+<blockquote><p><strong>一句话分工</strong>：卸载决定「什么东西允许进入历史」，压缩决定「已经进了历史的东西怎么变短」。前者管入口，后者管存量。入口管好了，存量压力就小得多——这也是为什么 DSH 的卸载阈值（12500 token）设得比裁剪阈值（8192 字符）宽松：它宁可多卸载几次，也不愿意让大结果先进入历史再靠裁剪收拾。</p></blockquote>
+
+<h2 id="hx-08-s7">7. 坑与失败案例</h2>
+
+<h3 id="hx-08-s7-1">坑 1：说明块缺了「取回方式」，模型只会重跑命令</h3>
+<p><strong>触发条件</strong>：卸载生效了，说明块里写了路径，但没写「怎么读回来」。</p>
+<p><strong>后果</strong>：模型看到的是一段被截断的输出加一个路径。它的第一反应通常是「输出被截断了，我换个命令重新跑一遍」——比如把 <code class="inl">grep -r foo .</code> 换成 <code class="inl">grep -r foo . | head -50</code>。这一轮重跑又是一次工具调用、又一次执行、又一份可能同样大的输出。更糟的情况是模型认为工具坏了，转而写一个 Python 脚本重新实现整个搜索。</p>
+<p><strong>源码里怎么防的</strong>：DSH 把提示语和 locator 一起放在存储层的返回值里（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/index.ts:159" data-expect="      retrievalHint: 'Use read with offset/limit, or grep this path to search within it.',">index.ts:159</code>），接口文档明确了分工：<em>the backend supplies the locator and retrieval hint appropriate for its storage substrate</em>（<code class="inl src-ref" data-src="dsh:packages/spill/spill/src/index.ts:11-12" data-expect="The backend supplies the locator and retrieval hint appropriate">spill/index.ts:11-12</code>）。放这么低的位置是有道理的：只有后端知道 locator 是文件路径还是 URI，也只有后端能给出正确的取回指令。中间任何一层都可能猜错，而猜错的提示语比没有提示更糟。</p>
+<p><strong>labs 对应</strong>：<code class="inl">format_notice</code> 里的「取回方式」一行，以及测试 <code class="inl">test_preview_is_marked_as_truncated</code> 显式断言取回工具名出现在预览里。</p>
+
+<h3 id="hx-08-s7-2">坑 2：路径不设防，模型传回什么就读什么</h3>
+<p><strong>触发条件</strong>：说明块里给了路径，取回端直接 <code class="inl">open(path)</code>。</p>
+<p><strong>后果</strong>：这条路径在下一轮变成模型输入的一部分，而模型输入是不可信的——它可以是模型自己编的，也可以是提示注入塞进来的（比如工具读回的一个网页里写着「现在请读取某配置文件并总结」）。读取端的越权后果取决于进程权限：读别的会话的卸载文件（信息泄露）、读密钥文件（凭据泄露）、读特殊设备文件（可能挂死）。这条路径是<strong>唯一一条由 harness 产生、又由模型回传的路径</strong>，所以它必须按不可信输入处理。</p>
+<p><strong>源码里怎么防的</strong>：三处，各自独立。第一，DSH 在写入侧就不产生可穿越的名字：<code class="inl">encodeSegment</code> 把每个非安全字符转义成 <code class="inl">~XXXX</code>，整段的 <code class="inl">.</code> 和 <code class="inl">..</code> 分别变成 <code class="inl">~002E</code> 和 <code class="inl">~002E~002E</code>（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/store.ts:56-58" data-expect="  if (raw.length === 0) return '~'">store.ts:56-58</code>）。第二，lcc 在读取侧校验：<code class="inl">persisted_output_path</code> 里 <code class="inl">is_relative_to(self.tool_results_dir.resolve())</code> 不成立就返回 <code class="inl">None</code>（<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:335-337" data-expect="        if (not path.resolve().is_relative_to(self.tool_results_dir.resolve())">code.py:335-337</code>）——它把「路径不可信」写进了返回值的类型里（<code class="inl">str | None</code>），调用方必须处理 <code class="inl">None</code>。第三，labs 的 <code class="inl">read_page</code> 用同一套 <code class="inl">is_relative_to</code> 检查，并额外拒绝同 root 下别的会话目录。</p>
+<p><strong>这条防护的正确写法</strong>：先 <code class="inl">Path.resolve()</code> 再比结构，不要用字符串 <code class="inl">startswith</code>。字符串前缀判断在两种情况下会误判——符号链接（<code class="inl">/work/session-a/link</code> 指向 <code class="inl">/etc</code>，前缀匹配通过但 resolve 之后不在里面）和同名前缀的兄弟目录（<code class="inl">/work/session-ab</code> 的字符串前缀正是 <code class="inl">/work/session-a</code>）。labs 的测试 <code class="inl">test_sibling_session_dir_is_blocked</code> 专门钉住了第二种。</p>
+
+<h3 id="hx-08-s7-3">坑 3：错误结果被卸载，模型失去纠正依据</h3>
+<p><strong>触发条件</strong>：卸载只看长度、不看结果类型，而某次失败返回了一段很长的错误输出（Python traceback 带源码上下文、编译器输出几百行错误、依赖解析失败的完整树）。</p>
+<p><strong>后果</strong>：模型拿到的是「错误已卸载，看路径」而不是错误本身。它必须多花一步去读文件——而这一步不保证会发生（模型可能直接放弃，或者转而去改别的代码）。更关键的是<strong>错误信息通常是「读了才知道怎么办」的</strong>：少一个字符都可能让模型做出错误的修复。比如 <code class="inl">KeyError: 'user_id'</code> 被截成 <code class="inl">KeyError: 'user</code>，模型会去改错的字段名。</p>
+<p><strong>源码里怎么防的</strong>：<strong>DSH 和 OH 都没防。</strong>DSH 的 <code class="inl">retainable</code> 只检查内容块的类型（<code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:37-39" data-expect="function retainable(content: readonly ContentBlock[]): content is RetainableBlock[] {">index.ts:37-39</code>），<code class="inl">bound</code> 里的判断同样只看 token 数（<code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:98" data-expect="      if (content.reduce((total, block) =&gt; total + price(block), 0) &lt;= maxTokens) return undefined">index.ts:98</code>），完全没有 <code class="inl">isError</code> 这一维。它靠的是 12500 token 这个阈值——正常错误信息够不到，所以这个洞没被触发。OH 同样不区分：<code class="inl">is_error</code> 是在卸载<em>之后</em>才填进 <code class="inl">ToolResultBlock</code> 的（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:992-997" data-expect="    tool_result = ToolResultBlock(">query.py:992-997</code>）。</p>
+<p><strong>labs 对应</strong>：<code class="inl">should_spill</code> 第一行就检查 <code class="inl">is_error</code>，测试 <code class="inl">test_error_results_stay_inline</code> 钉住它。这是 labs 相对三个生产实现唯一「更严格」的地方，理由是教学版没有生产级的阈值调优余量——写死一条规则比依赖「阈值够大」更可靠。</p>
+
+<h3 id="hx-08-s7-4">坑 4：卸载排在别人后面，看到的是已经被裁过的内容</h3>
+<p><strong>触发条件</strong>：多个监听者挂在同一个 <code class="inl">tools/post-execute</code> waterfall 上，卸载没有排在前面。</p>
+<p><strong>后果</strong>：waterfall 的语义是每个监听者拿到的 <code class="inl">result</code> 是前一个处理过的（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:228" data-expect="run outermost-first; a listener that does not call `next()` vetoes the">events.ts:228</code>）。如果前面有个「把工具结果裁到 8192 字符」的监听者，卸载看到的就是 8192 字符——它不认为需要卸载，于是进历史的是一份被<strong>静默截断</strong>的内容。信息永久丢失，而且模型不知道。<strong>这是最隐蔽的一种失败</strong>，因为卸载自己的日志会显示「本次没有卸载」，看起来一切正常。</p>
+<p><strong>源码里怎么防的</strong>：spill-policy 注册时带 <code class="inl">{ prepend: true }</code>（<code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:150" data-expect="  }, { prepend: true })">index.ts:150</code>），Cordis 据此用 <code class="inl">unshift</code> 而不是 <code class="inl">push</code> 插监听者（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:255" data-expect="    const method = options.prepend ? 'unshift' : 'push'">events.ts:255</code>）。<code class="inl">prepend</code> 本身是标准的监听者选项（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:114" data-expect="  prepend?: boolean">events.ts:114</code>）。另一个理由在 DSH 的注释里：post-execute 的监听者按注册顺序串成链，先注册的看到更原始的结果。</p>
+<p><strong>通用化这条经验</strong>：任何「基于结果全长或全貌做决策」的后置策略都必须 prepend。反过来说，任何「在别人的结果上做进一步加工」的策略（加语法高亮、加元数据）应该排在后面。这个顺序不是风格问题，它决定了策略能不能看到真实输入。<strong>labs 的 <code class="inl">SpillStore.spill</code> 是纯函数式的</strong>（把完整 <code class="inl">content</code> 当参数传进来），等于用函数签名表达了「必须看到原文」这件事——如果你的架构里有 waterfall，就要靠 prepend 表达同一件事。</p>
+
+<h3 id="hx-08-s7-5">坑 5：完整 JSON 被截成预览，模型当成坏数据</h3>
+<p><strong>触发条件</strong>：工具返回一份完整的大 JSON（搜索结果、API 响应、导出数据），卸载按字符切头尾。</p>
+<p><strong>后果</strong>：模型看到的预览以 <code class="inl">{</code> 开头、以 <code class="inl">}</code> 结尾——这在语法上看起来就是一份完整的 JSON 文档。它尝试解析，在中间撞上省略标记，然后得出「工具返回了非法 JSON」的结论。这是一个彻底的误判：工具没问题，JSON 也没问题，是卸载把一份正确的文档改成了错误的。更糟的是模型可能因此去「修工具」，而真正该做的是分页读取数据。</p>
+<p><strong>源码里怎么防的</strong>：<strong>没有直接防，靠的是工具设计。</strong>DSH 的工具必须声明输出 schema（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1075" data-expect="must declare output { schema, render, presentationMeta? }">index.ts:1075</code>），所以返回结构化数据的工具是已知的，理论上可以在卸载层识别出来绕开。但 DSH 的 spill-policy 走的是内容块路线（<code class="inl">ContentBlock[]</code>），结构化结果早已被渲染成文本（<code class="inl">read-render.ts</code> 之类的模块负责把对象渲染成行号文本），卸载层看到的仍然是一个文本块——<strong>它已经没有「这是 JSON」这个信息了</strong>。所以正确的做法在更上游：需要返回大结构化数据的工具应该自己分页（像 <code class="inl">read</code> 的 offset/limit 那样），而不是返回一坨然后指望卸载层处理。</p>
+<p><strong>labs 对应</strong>：<code class="inl">is_complete_json</code> 保守地检查首尾配对，配对成功就不卸载。测试 <code class="inl">test_complete_json_stays_inline</code> 和 <code class="inl">test_json_looking_log_can_still_spill</code> 是一对，分别钉住「真 JSON 不卸载」和「长得像 JSON 的日志照卸载」。</p>
+
+<h3 id="hx-08-s7-6">坑 6：卸载文件被清理了，历史里还留着路径</h3>
+<p><strong>触发条件</strong>：卸载根不在会话目录下（比如放系统临时目录），且清理策略按时间删除。</p>
+<p><strong>后果</strong>：一条几十步之前的历史里写着「完整输出在某临时目录下的某个文件」，模型（或用户点开链接）去读，文件已经没了。这时模型只能看到「文件不存在」这个事实，它无法判断「是我记错了」还是「文件被删了」，于是可能去重跑那个工具。如果这是一次昂贵的网络请求，重跑就是白花。</p>
+<p><strong>源码里怎么防的</strong>：DSH 用两个手段。第一，清理周期默认 30 天（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/index.ts:68" data-expect="    cleanupPeriodDays: z.number().step(1).min(0).default(30),">index.ts:68</code>），注释解释了为什么不设短：<em>Retention is deliberate — a resumed or forked session may still reference an older locator until it ages out</em>（<code class="inl src-ref" data-src="dsh:packages/spill/spill-local/src/index.ts:44-46" data-expect="Retention is deliberate">index.ts:44-46</code>）。<strong>「被续跑的会话仍可能引用旧 locator」这句话给出了一个很容易漏掉的约束</strong>：卸载文件的寿命不能短于会话历史的寿命，而分叉出来的会话会继承父会话历史里的 locator。第二，清理只删文件不删历史，所以最坏情况是「路径存在但文件不存在」，模型得到的是一个明确的失败而不是一个沉默的错误。</p>
+<p>lcc 的读取端在这一点上是更彻底的做法：<code class="inl">persisted_output_path</code> 会检查 <code class="inl">path.is_file()</code>（<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:336" data-expect="                or not path.is_file()):">code.py:336</code>），文件不在了就当从来没有过路径，让上层走正常的落盘流程重新写一份。</p>
+<p><strong>labs 对应</strong>：<code class="inl">read_page</code> 对不存在的文件抛 <code class="inl">FileNotFoundError</code>，错误文本里写明「可能已被清理」——因为那是最可能的解释，直接写出来能让模型少猜一步。</p>
+
+<h2 id="hx-08-s8">8. 小结</h2>
+<p>四句话。</p>
+<ul>
+<li><strong>卸载的位置在「结果产生」和「写进日志」之间</strong>，不是历史已经太长之后的补救。日志只追加这条约束决定了它必须在入口处解决。</li>
+<li><strong>它和截断的区别不在「少了多少」，而在「信息有没有去处」和「模型知不知道」</strong>。缺了说明块，卸载就退化成一种更贵的截断。</li>
+<li><strong>说明块要回答四个问题</strong>：原始多大（已省略多少）、去哪了（路径）、怎么拿回来（取回指令）、以及「这不是全文」。DSH 的接口文档把 locator 和取回提示都归给存储后端，因为只有后端知道该怎么说。</li>
+<li><strong>三个「不卸载」的边界要靠自己显式写</strong>：错误结果、二进制内容、完整结构化的 JSON。三个生产实现里有两个对错误结果不设防，靠阈值兜着——那是建立在阈值调优之上的隐式约定，你的阈值一变它就不成立了。</li>
+</ul>
+<p>labs 的完整实现和测试在 <code class="inl">labs/harness/spill.py</code> 与 <code class="inl">labs/tests/test_spill.py</code>，27 条测试覆盖了阈值两侧、预览切分、去重、路径穿越、分页边界、以及不可卸载的情况。下一章进入权限与审批（<span class="xref-pending" data-href="#hx-13">第 13 章</span>）：工具能执行了、结果也安置好了，但「这个调用该不该执行」这件事还没人管。</p>
+</section>

@@ -1,0 +1,756 @@
+<section class="chapter" id="ch-hx-07" data-slug="hx-07"><div class="ch-head"><span class="ch-num">第 7 章</span></div><h1 id="hx-07">上下文压缩</h1>
+<p>一个 agent 会话的上下文只涨不落。系统提示、工具 schema、用户消息、模型的每次回复、每个工具的执行结果，全都往里加。工具结果的增长速度还特别快：一次 <code class="inl">cat</code> 一个大文件就是几千行，一次 <code class="inl">grep</code> 递归扫仓库可能就是几万个字符。真跑起来，一个几十轮的会话把窗口塞满，往往只花十几分钟。</p>
+
+<p>塞满之后只有两条路：请求被厂商拒绝（<code class="inl">CONTEXT_WINDOW_EXCEEDED</code> 这类错误），或者你自己动手把历史折小。这一章讲第二条路——而且重点不在「怎么折」，在于<strong>折的时候会丢掉什么，以及怎么保证丢完之后那份历史还能发出去</strong>。</p>
+
+<p>压缩是本章唯一一个「会主动删除模型已经看到过的信息」的部件。别的部件出错，最多是慢一点、贵一点；这个部件出错，模型会开始忘事、重复劳动、甚至按照它自己编出来的摘要去改一个不存在的接口。所以这一章有相当一部分篇幅花在两件事上：切分点（不能拆开工具调用和它的结果），以及熔断（失败之后不要每轮都重试）。</p>
+
+<h2 id="hx-07-s1">压缩丢掉的是什么</h2>
+
+<p>先把损失说清楚，因为它决定了级联的顺序。<a href="#hx-04">hx-04</a> 建立的立场是「日志是事实来源，消息列表只是投影」——压缩动的是投影，不是日志。DSH 里这一点是显式的：真正从历史里消失的那些节点，官方的说法叫 <strong>shadowed</strong>（被遮蔽），它们的事件仍然原样躺在日志里，只是不再进入「下一次请求要发什么」这份推导结果。</p>
+
+<p>所以压缩的损失可以精确地分类：</p>
+
+<ul>
+<li><strong>可恢复的损失</strong>：事件还在日志里，只是不参与本轮请求。DSH 的日志里因此能查到「第 200 条工具结果原本是什么」，即使界面和模型都看不到它了。这也是为什么压缩在 DSH 里是一次<em>日志事件</em>（<code class="inl">compaction/start</code> / <code class="inl">compaction/summary</code> / <code class="inl">compaction/end</code>），而不是对历史数组的原地修改。</li>
+<li><strong>不可恢复的损失</strong>：摘要。原始文本被一段更短的话替换，那句话里没有的信息就永久没了——除非你把它写进了摘要。（后面 <a href="#hx-07-s4">第 4 节</a>会讲摘要提示词要盯住哪几项。）</li>
+<li><strong>看起来可恢复、实际很贵的损失</strong>：把工具结果的正文换成占位符。原始输出可能在磁盘上（<a href="#hx-08">hx-08</a> 的 spill），但让模型拿回来要走一次工具调用，上下文里又要放回来——通常等于把这轮省下的空间还回去。</li>
+</ul>
+
+<p>结论是：<strong>越便宜的压缩，丢掉的东西越少；越贵的压缩，丢掉的越多。</strong>级联的顺序不是性能优化，是损失控制。</p>
+
+<blockquote><p><strong>判断标准</strong>：一次压缩值不值得做，看它「省下的 token」和「模型下一次做决定时缺不缺这块信息」。工具结果的正文往往几千 token 里只有几行有用——这是最值得先砍的。用户那句「不要改公开接口」可能只有十几个 token，砍掉它省不下什么，却可能让整个任务跑偏。</p></blockquote>
+
+<h2 id="hx-07-s2">多级级联：先便宜低损失，再贵高损失</h2>
+
+<p>DSH 的装配把三个粒度不同的压缩件放在同一棵插件树上，它们的触发条件和代价完全不同。</p>
+
+<p>第 0 级是 <strong>spill</strong>（<a href="#hx-08">hx-08</a> 的主题）：工具结果超过 <code class="inl">maxInlineTokens</code> 就落盘，上下文里只留预览和路径。这一步发生在工具结果进入历史的时刻，不是事后补救，所以它不叫压缩。第 1 级是 <code class="inl">tool-result-pruner</code>：把<em>已经落在历史里</em>的超长工具结果掐头去尾，中间换成一个标记。第 2 级是 <code class="inl">compaction-basic</code>：调一次模型，把一段历史折成一条摘要。</p>
+
+<p>装配顺序写在 base 补丁里，注释把意图说得直接：</p>
+
+<div class="codeblock" data-lang="yaml"><pre><code class="lang-yaml">    # Compacts oversized tool results before the broader conversation compactor
+    # runs, preserving the model-visible result within the configured budget.
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:418-425" data-expect="    # Compacts oversized tool results before the broader conversation compactor">cordis.patch.yml:418-425</code>。配置值本身也是取舍：超过 8192 字符才动，保留开头 4096、结尾 1024。开头保留得多——错误信息、命令回显、文件头通常在开头；结尾保留得少，因为「最后几行」在长输出里往往是进度提示或没有任何信息量的收尾。</p>
+
+<p>裁剪必须保证结果<strong>一定变小</strong>，否则这一步就变成了纯粹的噪声。pruner 在配置解析阶段就把这件事算死：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const emittedChars = resolved.headChars
+    + codePointLength(PRUNE_MARKER)
+    + resolved.tailChars
+  if (emittedChars &gt; resolved.thresholdChars) {
+    throw new Error(
+      `ToolResultPruneConfig: headChars + marker + tailChars (${emittedChars}) `
+      + `must be at most thresholdChars (${resolved.thresholdChars})`,
+    )
+  }</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-tool-result-pruner/src/config.ts:55-63" data-expect="  const emittedChars = resolved.headChars">config.ts:55-63</code>。这条校验在<em>加载配置时</em>就抛错，而不是等到某次裁剪发现「换了标记反而更长」。配置错误越早暴露，越不会被当成偶发问题放过。裁剪后的内容还要再验一遍（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-tool-result-pruner/src/index.ts:118" data-expect="if (charsAfter &gt; this.config.thresholdChars || charsAfter &gt;= totalChars) {">index.ts:118</code>：替换后必须更小、且落在阈值内）。</p>
+
+<p>我们自己这一级的实现读起来就是这个思路的 Python 版：只换正文，别的一律不动。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::prune_tool_results"><span class="kw">def</span> <span class="fn">prune_tool_results</span>(
+    messages<span class="op">:</span> <span class="cls">Messages</span>,
+    <span class="op">*</span>,
+    keep_recent<span class="op">:</span> int <span class="op">=</span> <span class="num">4</span>,
+    min_chars<span class="op">:</span> int <span class="op">=</span> <span class="cls">PRUNE_MIN_CHARS</span>,
+) <span class="op">-&gt;</span> tuple[<span class="cls">Messages</span>, int]<span class="op">:</span>
+    <span class="str">"""第 1 级：把较旧的工具结果正文换成占位符。返回 ``(新历史, 省下的字符数)``。
+
+    只动 ``tool_result.content``。``tool_use_id``、``is_error``、消息顺序、
+    消息条数全部不变——所以这一步之后的历史一定还是合法的，
+    压缩本身不可能成为一次 400 的原因。（工具结果的 ``is_error`` 为真时默认跳过：
+    错误信息往往是模型下一步做决定的依据，见「坑与失败案例」。）
+
+    ``keep_recent`` 数的是**工具结果条数**，不是消息条数。
+    OpenHarness 的 ``microcompact_messages`` 是同一个口径
+    （``all_ids[-keep_recent:]`` 对应这里的最后 N 条结果），并且照样会
+    ``keep_recent = max(1, ...)`` 强制至少留一条。我们也保证至少留一条。
+    """</span>
+    positions<span class="op">:</span> list[tuple[int, int, dict[str, <span class="cls">Any</span>]]] <span class="op">=</span> []
+    <span class="kw">for</span> message_index, message <span class="kw">in</span> enumerate(messages)<span class="op">:</span>
+        content <span class="op">=</span> message.get(<span class="str">"content"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(content, list)<span class="op">:</span>
+            <span class="kw">continue</span>
+        <span class="kw">for</span> block_index, block <span class="kw">in</span> enumerate(content)<span class="op">:</span>
+            <span class="kw">if</span> isinstance(block, dict) <span class="kw">and</span> block.get(<span class="str">"type"</span>) <span class="op">==</span> <span class="str">"tool_result"</span><span class="op">:</span>
+                positions.append((message_index, block_index, block))
+
+    keep <span class="op">=</span> max(<span class="num">1</span>, keep_recent)
+    <span class="kw">if</span> len(positions) <span class="op">&lt;=</span> keep<span class="op">:</span>
+        <span class="kw">return</span> messages, <span class="num">0</span>
+
+    pruned <span class="op">=</span> _deep_copy(messages)
+    saved <span class="op">=</span> <span class="num">0</span>
+    <span class="kw">for</span> message_index, block_index, block <span class="kw">in</span> positions[<span class="op">:-</span>keep]<span class="op">:</span>
+        text <span class="op">=</span> block.get(<span class="str">"content"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(text, str) <span class="kw">or</span> len(text) <span class="op">&lt;</span> min_chars<span class="op">:</span>
+            <span class="kw">continue</span>
+        <span class="kw">if</span> <span class="cls">PRUNE_SKIP_ERRORS</span> <span class="kw">and</span> block.get(<span class="str">"is_error"</span>)<span class="op">:</span>
+            <span class="kw">continue</span>
+        target <span class="op">=</span> pruned[message_index][<span class="str">"content"</span>][block_index]
+        before <span class="op">=</span> len(pruned[message_index][<span class="str">"content"</span>][block_index][<span class="str">"content"</span>])
+        target[<span class="str">"content"</span>] <span class="op">=</span> <span class="cls">PRUNE_PLACEHOLDER</span>.format(n<span class="op">=</span>before)
+        saved <span class="op">+=</span> before <span class="op">-</span> len(target[<span class="str">"content"</span>])
+    <span class="kw">if</span> saved <span class="op">&lt;=</span> <span class="num">0</span><span class="op">:</span>
+        <span class="kw">return</span> messages, <span class="num">0</span>
+    <span class="kw">return</span> pruned, saved</code></pre></div>
+
+<p>注意 <code class="inl">positions[:-keep]</code> 只裁旧的那些，而且统计口径是<strong>工具结果条数</strong>而不是消息条数。OpenHarness 的微压缩是同一个口径，并且同样强制至少留一条：<code class="inl">keep_recent = max(1, keep_recent)  # never clear ALL results</code>（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:821" data-expect="keep_recent = max(1, keep_recent)  # never clear ALL results">compact/__init__.py:821</code>）。那条注释值得记住：<em>永远不要清掉全部结果</em>。最近一次工具输出几乎总是模型下一步的依据。</p>
+
+<h3 id="hx-07-s2-1">第 2 级只在第 1 级不够时才动</h3>
+
+<p>DSH 的 <code class="inl">compactIfNeeded</code> 把两级的先后写成了显式顺序：先让 pruner 落一轮（它不调模型），重新量一次，只有仍然超阈值才去选摘要范围。</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    // Once pressure qualifies, land the model-free pass before choosing a
+    // summary range, then remeasure through the singleton replay fold.
+    if (prune !== undefined) {
+      prune.pruneSession(agent.session)
+      measurement = meter.measure(agent.session)
+    }
+    if (measurement.totalTokens &lt; spec.thresholdTokens) return null</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:321-327" data-expect="    // Once pressure qualifies, land the model-free pass before choosing a">index.ts:321-327</code>。<code class="inl">prune</code> 是通过 <code class="inl">this.ctx.get('toolResultPruner')</code> 拿到的可选服务（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:292" data-expect="    const prune = this.ctx.get('toolResultPruner')">index.ts:292</code>），注释写明「Pruning is optional so compaction-basic remains independently composable」——压缩的每一级都是一个可独立卸载的插件，缺了哪一级就少一层，不是坏掉。这个设计对写 harness 的人有直接借鉴：级联的每一级都做成独立的、可取可不取的部件，联调时能单独关掉一层看效果。</p>
+
+<p>我们的控制器是同一个结构：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::Compactor.level_for">    <span class="kw">def</span> <span class="fn">level_for</span>(self, used<span class="op">:</span> int) <span class="op">-&gt;</span> str<span class="op">:</span>
+        <span class="str">"""按当前用量决定这次该做哪一级（还没考虑是否能成功）。"""</span>
+        ratio <span class="op">=</span> used <span class="op">/</span> self.budget
+        <span class="kw">if</span> ratio <span class="op">&gt;=</span> self.summarize_ratio<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"summarize"</span>
+        <span class="kw">if</span> ratio <span class="op">&gt;=</span> self.prune_ratio<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"prune"</span>
+        <span class="kw">return</span> <span class="str">"none"</span></code></pre></div>
+
+<p>这里的 <code class="inl">0.8</code> 和 <code class="inl">0.95</code> 是教学示意值——DSH 的同名默认是 0.8（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/config.ts:20" data-expect="const DEFAULT_THRESHOLD_RATIO = 0.8">config.ts:20</code>），但它只有一个压力阈值，第二个「必须压」的档位是我们为了看清级联加的。真实部署里这两个数应当来自按模型配置的窗口，而不是常量（<a href="#hx-05">hx-05</a>）。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::Compactor.compact_once">    <span class="kw">def</span> <span class="fn">compact_once</span>(self, messages<span class="op">:</span> <span class="cls">Messages</span>) <span class="op">-&gt;</span> <span class="cls">CompactionResult</span><span class="op">:</span>
+        <span class="str">"""跑一次级联。失败时原样返回历史，并记账到熔断器。
+
+        关键约定：**返回的历史永远可以直接发给 API**——第一条是 user、
+        tool_use 与 tool_result 配对完整。压缩不许把一份合法历史变成非法历史，
+        否则错误会从「上下文太长」变成「请求格式错误」，更难查也更难恢复。
+        """</span>
+        before <span class="op">=</span> _chars(messages)
+        <span class="kw">if</span> self.breaker.open<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">CompactionResult</span>(
+                messages<span class="op">=</span>messages,
+                level<span class="op">=</span><span class="str">"none"</span>,
+                chars_before<span class="op">=</span>before,
+                chars_after<span class="op">=</span>before,
+                notes<span class="op">=</span>[<span class="str">f"熔断已打开（连续失败 {self.breaker.failures} 次），本轮跳过压缩"</span>],
+            )
+        level <span class="op">=</span> self.level_for(self.count(messages))
+        <span class="kw">if</span> level <span class="op">==</span> <span class="str">"none"</span><span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">CompactionResult</span>(messages, <span class="str">"none"</span>, before, before, [<span class="str">"用量在阈值以下"</span>])
+
+        notes<span class="op">:</span> list[str] <span class="op">=</span> []
+        failed <span class="op">=</span> <span class="kw">False</span>
+        <span class="kw">try</span><span class="op">:</span>
+            pruned, saved <span class="op">=</span> prune_tool_results(messages, keep_recent<span class="op">=</span>self.keep_results)
+        <span class="kw">except</span> <span class="cls">CompactionError</span> <span class="kw">as</span> exc<span class="op">:</span>
+            self.breaker.record_failure(exc)
+            <span class="kw">return</span> <span class="cls">CompactionResult</span>(messages, <span class="str">"none"</span>, before, before, [<span class="str">f"第 1 级失败：{exc}"</span>])
+        <span class="kw">if</span> saved <span class="op">&gt;</span> <span class="num">0</span><span class="op">:</span>
+            notes.append(<span class="str">f"第 1 级裁剪旧工具结果，省 {saved} 字符"</span>)
+            messages <span class="op">=</span> pruned
+            achieved <span class="op">=</span> <span class="str">"prune"</span>
+        <span class="kw">else</span><span class="op">:</span>
+            notes.append(<span class="str">"第 1 级无可裁剪内容"</span>)
+            achieved <span class="op">=</span> <span class="str">"none"</span>
+
+        <span class="cmt"># 做第 1 级之后重新量一次：便宜的那一级可能已经够了，</span>
+        <span class="cmt"># 那就不要再花一次模型调用去做贵的那个。DSH 里的顺序也是这个：</span>
+        <span class="cmt"># 先让 toolResultPruner 落一轮（它不调模型），只有重新量完仍然超阈值，</span>
+        <span class="cmt"># 才去选摘要范围（compaction-basic/src/index.ts 的 compactIfNeeded）。</span>
+        <span class="kw">if</span> level <span class="op">==</span> <span class="str">"summarize"</span> <span class="kw">and</span> self.level_for(self.count(messages)) <span class="op">==</span> <span class="str">"summarize"</span><span class="op">:</span>
+            <span class="kw">if</span> self.summarize <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+                notes.append(<span class="str">"需要第 2 级但没有传入 summarize，止步于第 1 级"</span>)
+            <span class="kw">else</span><span class="op">:</span>
+                <span class="kw">try</span><span class="op">:</span>
+                    folded <span class="op">=</span> summarize_prefix(
+                        messages, self.summarize, keep_recent<span class="op">=</span>self.keep_recent
+                    )
+                <span class="kw">except</span> <span class="cls">CompactionError</span> <span class="kw">as</span> exc<span class="op">:</span>
+                    self.breaker.record_failure(exc)
+                    notes.append(<span class="str">f"第 2 级失败：{exc}"</span>)
+                    failed <span class="op">=</span> <span class="kw">True</span>
+                <span class="kw">else</span><span class="op">:</span>
+                    <span class="kw">if</span> len(folded) <span class="op">&lt;</span> len(messages)<span class="op">:</span>
+                        notes.append(<span class="str">f"第 2 级摘要，历史 {len(messages)} → {len(folded)} 条"</span>)
+                        messages <span class="op">=</span> folded
+                        achieved <span class="op">=</span> <span class="str">"summarize"</span>
+                    <span class="kw">else</span><span class="op">:</span>
+                        notes.append(<span class="str">"第 2 级没有缩短历史，按失败处理"</span>)
+                        self.breaker.record_failure(<span class="str">"summary did not shrink history"</span>)
+                        failed <span class="op">=</span> <span class="kw">True</span>
+
+        after <span class="op">=</span> _chars(messages)
+        <span class="kw">if</span> after <span class="op">&lt;</span> before<span class="op">:</span>
+            <span class="kw">if</span> <span class="kw">not</span> failed<span class="op">:</span>
+                self.breaker.record_success()
+        <span class="kw">elif</span> <span class="kw">not</span> failed<span class="op">:</span>
+            <span class="cmt"># 做完了却一点没省下来：算「压缩无效」，同样进熔断计数，</span>
+            <span class="cmt"># 否则下一轮会一模一样地再来一次。</span>
+            <span class="cmt"># （已经记过一次的失败不重复计数：阈值说的是「连续失败几次」，</span>
+            <span class="cmt"># 不是「失败有几条理由」。）</span>
+            self.breaker.record_failure(<span class="str">"compaction did not reduce the history"</span>)
+        <span class="kw">return</span> <span class="cls">CompactionResult</span>(messages, achieved, before, after, notes)</code></pre></div>
+
+<p>两个阈值给的是「大概要做什么」，实际做到哪一级由 <code class="inl">achieved</code> 记录。这两个值经常不一样，而且不一样才是正常的：阈值说「该做第 2 级」，但第 1 级裁剪之后重新量一次发现已经够了，于是不做摘要——省下一次模型调用，也少丢一块信息。反过来，第 2 级失败了，<code class="inl">achieved</code> 停在 <code class="inl">prune</code>，历史仍然比原来小，turn 可以继续。</p>
+
+<h3 id="hx-07-s2-2">DSH 的两个触发原因</h3>
+
+<p>自动压缩有两个入口，语义不同。一个挂在 step 边界上按压力触发：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    ctx.on('agent/pre-step', async (
+      { agent, signal },
+      next,
+    ): Promise&lt;PreStepDecision&gt; =&gt; {
+      if (!signal.aborted) {
+        try {
+          const result = await this.compactIfNeeded(agent, 'pressure', signal)
+          if (result !== null) logResult(result, 'step pressure')
+        } catch (error: unknown) {</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:158-166" data-expect="    ctx.on('agent/pre-step', async (">index.ts:158-166</code>。压力触发的阈值默认在窗口的 80%（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/config.ts:20" data-expect="const DEFAULT_THRESHOLD_RATIO = 0.8">config.ts:20</code>），并且还要额外扣掉一个 headroom（默认 65536 token，<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/config.ts:75" data-expect="  const headroomTokens = config.headroomTokens ?? 65_536">config.ts:75</code>）。实际阈值取「比例」和「窗口减去输出预留再减去余量」两个约束里更紧的那个（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/config.ts:191-194" data-expect="  const thresholdTokens = Math.floor(Math.min(">config.ts:191-194</code>）——这个算法和 <a href="#hx-05">hx-05</a> 里 <code class="inl">budget.py</code> 的 <code class="inl">pressure_budget</code> 是同一件事。</p>
+
+<p>另一个挂在请求失败上，只在厂商明确回报「上下文超长」时动作：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      if (failure.code !== CONTEXT_WINDOW_EXCEEDED_CODE || signal.aborted) return next()
+      this.overflowAgents.set(agent.session, agent)
+      const target = routedTarget(agent.session)
+      if (target === undefined) return next()
+      const policy = resolveTargetPolicy(this.config, target)
+      const retries = this.overflowRetries.get(agent) ?? 0
+      if (retries &gt;= policy.maxOverflowRetries) return next()</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:194-200" data-expect="      if (failure.code !== CONTEXT_WINDOW_EXCEEDED_CODE || signal.aborted) return next()">index.ts:194-200</code>。三件事挤在这五行里，每件都值得抄。</p>
+
+<ul>
+<li><strong>只处理那一种错误码</strong>。<code class="inl">CONTEXT_WINDOW_EXCEEDED_CODE</code> 自己是常量（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/error.ts:25" data-expect="export const CONTEXT_WINDOW_EXCEEDED_CODE = 'CONTEXT_WINDOW_EXCEEDED'">error.ts:25</code>），不拿错误文本做字符串匹配。上下文超长是一个可判定的状态，不是一个需要猜的句子。</li>
+<li><strong>超长恢复次数有上限</strong>。<code class="inl">maxOverflowRetries</code> 默认 1（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/config.ts:106" data-expect="    maxOverflowRetries: config.maxOverflowRetries ?? 1,">config.ts:106</code>）：同一个 Agent 连续两次因为超长被打回来，就放手让错误往上走。没有这个上限，压缩无效的历史会变成一个死循环。</li>
+<li><strong>按「有效路由」取策略</strong>。阈值和保留量挂在具体 provider/model 上，因为不同模型的窗口不同。</li>
+</ul>
+
+<p>压缩有进展时它才返回 retry：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while compaction is awaited.
+      if (signal.aborted
+        || agent.session.surface.replaceGeneration &lt;= generation) return next()
+      if (result !== null) logResult(result, 'context overflow recovery')
+      this.overflowRetries.set(agent, retries + 1)
+      return { kind: 'retry' }</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:229-233" data-expect="      if (signal.aborted">index.ts:229-233</code>。判据不是「压缩函数返回了没有报错」，而是「<code class="inl">replaceGeneration</code> 变了没有」——也就是<em>表面真的被改写过</em>。这是很好的一条纪律：重试的条件是「有实际进展」，不是「函数跑完了」。我们的 <code class="inl">compact_once</code> 里对应的判断是 <code class="inl">after &lt; before</code>。</p>
+
+<p>还有一个细节：失败发生在摘要阶段、而裁剪已经落地的时候，DSH 把这个部分成果视为「重试的依据」，不因为第二阶段抛错就丢掉：</p>
+
+<blockquote><p><strong>部分成果也是成果</strong>：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:208-219" data-expect="        // A model-free prune can land before later summary work fails. That">index.ts:208-219</code> 的注释原文是「A model-free prune can land before later summary work fails. That durable reduction is sufficient retry proof; do not discard it just because the optional second phase threw.」——免模型的那一级先落地了，那次持久的缩减本身就足够构成重试的理由。</p></blockquote>
+
+<h2 id="hx-07-s3">切分点：为什么不能拆开 tool_use 和它的结果</h2>
+
+<p>这是本章唯一一个「做错了会立刻 400」的点，所以它值得单独一节。</p>
+
+<p>工具调用在历史里的形状是一个请求加一个回答：助手发出一条带 <code class="inl">tool_use</code> 的消息，紧接着有一条带 <code class="inl">tool_result</code> 的消息（<a href="#hx-03">hx-03</a> 讲的是把这套配对真正执行起来的管线）。把历史切成「旧的要压缩」和「最近的原样保留」两段时，如果切点正好落在这一对中间，就会得到两种都不合法的东西：旧的那段以一个没人回答的工具调用结尾，新的那段以一个没有对应调用的结果开头。多数 API 会直接拒绝这份历史。</p>
+
+<p>所以「哪些位置可以切」是一个必须精确计算的问题，不能靠数消息条数。DSH 把它实现成一份缓存的前缀平衡表。</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** Return how one surface event changes the in-progress tool-call count. */
+function eventDelta(event: SessionEvent): number {
+  switch (event.type) {
+    case 'assistant/message':
+      return event.data.message.content.filter(block =&gt; block.type === 'tool-call').length
+    case 'tool/result':
+      return -1
+    default:
+      return 0
+  }
+}</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction/src/tool-pairing.ts:28-38" data-expect="/** Return how one surface event changes the in-progress tool-call count. */">tool-pairing.ts:28-38</code>。一条助手消息可能同时发起多个工具调用，所以增量是「<em>数出来的</em>」，不是 1。这个细节容易漏：一轮里模型并发调三个工具，按 +1 算就会在第 2、3 个结果处把计数压成负数。</p>
+
+<p>折的过程就是把这个增量累加，把「计数为 0」的每个位置记下来：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const processed = cache.cutBalanced.length - 1
+  const tail = seqs.slice(processed)
+  // Validate the unseen tail before mutating the live cache, so a corrupt
+  // append cannot leave a partially advanced state behind.
+  const pendingCuts: boolean[] = []
+  let inProgressToolCalls = cache.inProgressToolCalls
+  for (const seq of tail) {
+    // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+    const event = session.eventAt(seq)
+    if (event === undefined || event.seq !== seq) {
+      throw new Error(`tool-pairing balance: surface seq ${seq} has no matching session event (corrupt surface)`)
+    }
+    inProgressToolCalls += eventDelta(event)
+    if (inProgressToolCalls &lt; 0) {
+      throw new Error(`tool-pairing balance: tool/result at surface seq ${seq} has no matching tool-call (corrupt surface)`)
+    }
+    pendingCuts.push(inProgressToolCalls === 0)
+  }</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction/src/tool-pairing.ts:46-63" data-expect="  const processed = cache.cutBalanced.length - 1">tool-pairing.ts:46-63</code>。三个工程点：</p>
+
+<ul>
+<li><strong>增量缓存</strong>。每追加几条事件就只折新增的那几条（<code class="inl">seqs.slice(processed)</code>），不从头发起。历史越长，这一点越重要——每次压缩都重扫整份 history 是 O(n²) 的。</li>
+<li><strong>先在临时数组里攒，全部合法才写回缓存</strong>。注释的理由是「a corrupt append cannot leave a partially advanced state behind」：坏数据进来时缓存要么完全没动，要么整体重建，不会停在一个半新半旧的状态。</li>
+<li><strong>计数变负就抛错</strong>。这是「历史本身坏了」的信号（一个结果找不到它对应的调用），不是「这次不能压缩」。</li>
+</ul>
+
+<p>这份平衡表有两种用法，对应两个函数的差别：<code class="inl">toolPairingBalancedBefore</code> 判断某个位置<em>之前</em>可不可以切（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction/src/tool-pairing.ts:112" data-expect="export function toolPairingBalancedBefore(session: Session, seq: SessionSeq): boolean {">tool-pairing.ts:112</code>），<code class="inl">toolPairingBalancedAfter</code> 判断<em>之后</em>（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction/src/tool-pairing.ts:124" data-expect="export function toolPairingBalancedAfter(session: Session, seq: SessionSeq): boolean {">tool-pairing.ts:124</code>）。一次替换同时需要这两个检查：范围的<strong>两端</strong>都必须是平衡边界，否则砍出来的旧段在开头或结尾挂着半个工具调用。</p>
+
+<p>选范围时它从保留区的起点往回退，退到第一个平衡位置为止：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  while (keepFromIdx &gt; firstIdx) {
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    if (toolPairingBalancedBefore(session, surfaceNodes[keepFromIdx]!)) break
+    keepFromIdx -= 1
+  }
+  if (keepFromIdx &lt;= firstIdx) return null</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:143-148" data-expect="  while (keepFromIdx &gt; firstIdx) {">region.ts:143-148</code>。往回退的方向意味着「保留区变大一点、被压缩的部分小一点」——宁可这次少压一点，也不拆开配对。退到没有可用的平衡点就返回 <code class="inl">null</code>（不压缩），而不是硬压。</p>
+
+<p>我们的实现把同一件事写成一次前缀扫描加一次回退：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::balance_flags"><span class="kw">def</span> <span class="fn">balance_flags</span>(messages<span class="op">:</span> <span class="cls">Sequence</span>[dict[str, <span class="cls">Any</span>]]) <span class="op">-&gt;</span> list[bool]<span class="op">:</span>
+    <span class="str">"""返回每一处切分点是否「配对平衡」。
+
+    结果比消息数多一个：``flags[i]`` 是第 i 条消息**之前**的切分点，
+    ``flags[len(messages)]`` 是整段历史末尾的切分点。
+
+    做法是一次前缀扫描：助手消息里的每个 ``tool_use`` 记 +1，每条 ``tool_result``
+    记 -1，计数为 0 的位置才算平衡。这和 DSH 的做法一致
+    （``packages/compaction/compaction/src/tool-pairing.ts``：它维护的
+    ``inProgressToolCalls`` 就是同一个量，只是它按 surface 增量缓存）。
+
+    注意 flags 里出现 False 完全正常：一轮工具调用进行到一半时，
+    前缀里就有一个没人回答的 tool_use。只有**整段末尾**那个 flag 必须是 True。
+    所以下面两个问题要分开回答：
+
+    * 「哪些位置可以切」——看 :func:`safe_cut_index`；
+    * 「这份历史配对完整吗」——只看最后一个 flag，见 :func:`pairing_complete`。
+
+    遇到「结果比调用多」（计数变负）直接抛错：这样的历史本身就不合法，
+    压缩只会把坏数据带到更远的地方。
+    """</span>
+    flags <span class="op">=</span> [<span class="kw">True</span>]
+    pending <span class="op">=</span> <span class="num">0</span>
+    <span class="kw">for</span> message <span class="kw">in</span> messages<span class="op">:</span>
+        pending <span class="op">+=</span> _pending_delta(message)
+        <span class="kw">if</span> pending <span class="op">&lt;</span> <span class="num">0</span><span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">CompactionError</span>(
+                <span class="str">"历史里出现了没有对应 tool_use 的 tool_result：这份历史本身不合法，"</span>
+                <span class="str">"先修数据再压缩"</span>
+            )
+        flags.append(pending <span class="op">==</span> <span class="num">0</span>)
+    <span class="kw">return</span> flags</code></pre></div>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::_pending_delta"><span class="kw">def</span> <span class="fn">_pending_delta</span>(message<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> int<span class="op">:</span>
+    <span class="str">"""一条消息让「未配对的工具调用」计数变化多少。"""</span>
+    content <span class="op">=</span> message.get(<span class="str">"content"</span>)
+    <span class="kw">if</span> <span class="kw">not</span> isinstance(content, list)<span class="op">:</span>
+        <span class="kw">return</span> <span class="num">0</span>
+    delta <span class="op">=</span> <span class="num">0</span>
+    <span class="kw">for</span> block <span class="kw">in</span> content<span class="op">:</span>
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(block, dict)<span class="op">:</span>
+            <span class="kw">continue</span>
+        kind <span class="op">=</span> block.get(<span class="str">"type"</span>)
+        <span class="kw">if</span> kind <span class="op">==</span> <span class="str">"tool_use"</span><span class="op">:</span>
+            delta <span class="op">+=</span> <span class="num">1</span>
+        <span class="kw">elif</span> kind <span class="op">==</span> <span class="str">"tool_result"</span><span class="op">:</span>
+            delta <span class="op">-=</span> <span class="num">1</span>
+    <span class="kw">return</span> delta</code></pre></div>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::safe_cut_index"><span class="kw">def</span> <span class="fn">safe_cut_index</span>(messages<span class="op">:</span> <span class="cls">Sequence</span>[dict[str, <span class="cls">Any</span>]], desired<span class="op">:</span> int) <span class="op">-&gt;</span> int<span class="op">:</span>
+    <span class="str">"""把切分点从 ``desired`` 往回挪到最近的平衡位置。
+
+    返回的是「新历史从这里开始」的下标：0 表示不切，``len(messages)`` 表示全切。
+    只往后挪不往前挪是刻意的——往后挪会切掉更少的旧内容，但这比拆开配对安全。
+    一条 ``desired`` 之前全是未配对调用的历史（例如整段历史都在一对调用之间）
+    就退回 0，宁可这次不压。
+
+    DSH 在选范围时做的是同一件事，但方向相反：它从保留区的起点往前退
+    （``packages/compaction/compaction-basic/src/region.ts`` 里的
+    ``while (keepFromIdx &gt; firstIdx)`` 循环，每退一步查一次
+    ``toolPairingBalancedBefore``）。两边都在挪同一个点，差别只是
+    「保住最近 K 条」还是「多切一点旧内容」。
+    """</span>
+    flags <span class="op">=</span> balance_flags(messages)
+    index <span class="op">=</span> min(max(desired, <span class="num">0</span>), len(messages))
+    <span class="kw">while</span> index <span class="op">&gt;</span> <span class="num">0</span> <span class="kw">and</span> <span class="kw">not</span> flags[index]<span class="op">:</span>
+        index <span class="op">-=</span> <span class="num">1</span>
+    <span class="kw">return</span> index</code></pre></div>
+
+<p>两个实现有处值得注意的差别。DSH 的 <code class="inl">flags</code> 是<em>缓存</em>的增量折，我们的每次都从头扫（代价 O(n)，换来「绝不可能分叉」——和 <a href="#hx-04">hx-04</a> 里 <code class="inl">foldRequestHeader</code> 的取舍一样）。另外我们的 <code class="inl">safe_cut_index</code> 只往回挪，而 <code class="inl">_pending_delta</code> 对助手消息是数块数、对结果消息减一——和 <code class="inl">eventDelta</code> 一一对应。</p>
+
+<p>这里还有一个容易踩的细节：<strong><code class="inl">flags</code> 里出现 <code class="inl">False</code> 是正常的</strong>，一轮工具调用跑到一半时前缀里就有个没人回答的调用。所以「能不能切」看的是某个 <code class="inl">flags[i]</code>，而「这份历史合法吗」只看最后一个 flag。我们把后者单独拆成一个函数，就是为了不让这两件事混在一个 <code class="inl">all()</code> 里：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::pairing_complete"><span class="kw">def</span> <span class="fn">pairing_complete</span>(messages<span class="op">:</span> <span class="cls">Sequence</span>[dict[str, <span class="cls">Any</span>]]) <span class="op">-&gt;</span> bool<span class="op">:</span>
+    <span class="str">"""整段历史的 tool_use 与 tool_result 是否全部配平。
+
+    这就是「能不能直接发给 API」在配对维度上的答案。切分点的 flags 里可以有
+    False（正跑到一半的轮次），但末尾的 flag 必须是 True——否则就是
+    「助手调了工具，结果没回来」，多数 API 会直接拒这份历史。
+    """</span>
+    <span class="kw">try</span><span class="op">:</span>
+        <span class="kw">return</span> balance_flags(messages)[<span class="op">-</span><span class="num">1</span>]
+    <span class="kw">except</span> <span class="cls">CompactionError</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">False</span></code></pre></div>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::history_is_valid"><span class="kw">def</span> <span class="fn">history_is_valid</span>(messages<span class="op">:</span> <span class="cls">Messages</span>) <span class="op">-&gt;</span> bool<span class="op">:</span>
+    <span class="str">"""校验一份历史能不能直接发给 API。
+
+    两条规则，都是客户端可以自己检查、不必等 400 的：
+
+    * 第一条消息必须是 user（多数 API 要求，Anthropic 的 Messages 协议尤其如此）；
+    * 整段历史的 tool_use / tool_result 必须配平（见 :func:`pairing_complete`），
+      配对完整即可——中间某一轮跑到一半不算问题。
+
+    这个函数是本章的「断言」：任何压缩步骤之后都该能过。写测试时先拿它过滤，
+    比拿真 API 试错便宜得多。
+    """</span>
+    <span class="kw">if</span> <span class="kw">not</span> messages<span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">False</span>
+    <span class="kw">if</span> messages[<span class="num">0</span>].get(<span class="str">"role"</span>) <span class="op">!=</span> <span class="str">"user"</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">False</span>
+    <span class="kw">return</span> pairing_complete(messages) <span class="kw">and</span> _starts_with_real_user_content(messages)</code></pre></div>
+
+<p>OpenHarness 用的是局部检查而不是全表。它只看保留区的<em>第一处</em>边界会不会拆开配对：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="kw">def</span> <span class="fn">_split_preserving_tool_pairs</span>(
+    messages<span class="op">:</span> list[<span class="cls">ConversationMessage</span>],
+    <span class="op">*</span>,
+    preserve_recent<span class="op">:</span> int,
+) <span class="op">-&gt;</span> tuple[list[<span class="cls">ConversationMessage</span>], list[<span class="cls">ConversationMessage</span>]]<span class="op">:</span>
+    <span class="str">"""Split older/newer segments without cutting through a tool_use/result pair.
+
+    The preserved segment is also sanitized so trailing orphan tool_use blocks
+    never survive the compaction boundary.
+    """</span>
+
+    <span class="kw">if</span> len(messages) <span class="op">&lt;=</span> preserve_recent<span class="op">:</span>
+        <span class="kw">return</span> [], sanitize_conversation_messages(list(messages))
+
+    split_index <span class="op">=</span> max(<span class="num">0</span>, len(messages) <span class="op">-</span> preserve_recent)
+    <span class="kw">while</span> split_index <span class="op">&gt;</span> <span class="num">0</span> <span class="kw">and</span> _boundary_crosses_tool_pair(messages[split_index <span class="op">-</span> <span class="num">1</span>], messages[split_index])<span class="op">:</span>
+        split_index <span class="op">-=</span> <span class="num">1</span>
+
+    older <span class="op">=</span> list(messages[<span class="op">:</span>split_index])
+    newer <span class="op">=</span> sanitize_conversation_messages(list(messages[split_index<span class="op">:</span>]))
+    <span class="kw">return</span> older, newer</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:483-503" data-expect="def _split_preserving_tool_pairs(">compact/__init__.py:483-503</code>。同样是「往回退到不拆配对的位置」（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:498" data-expect="    while split_index &gt; 0 and _boundary_crosses_tool_pair(messages[split_index - 1], messages[split_index]):">第 498 行</code>的 while），判据是「前一条是助手且要调用、后一条是带对应结果的用户消息」（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:471-480" data-expect="def _boundary_crosses_tool_pair(previous: ConversationMessage, current: ConversationMessage) -&gt; bool:">第 471-480 行</code>）。差别在它多了一层保险：保留区还要再跑一次 <code class="inl">sanitize_conversation_messages</code>，把可能残留的孤立 <code class="inl">tool_use</code> 清掉（docstring 明说「trailing orphan tool_use blocks never survive the compaction boundary」）。<em>两边都做</em>是稳妥的写法：切点选对是预防，切完再校验是兜底。</p>
+
+<p>labs 里的测试直接盯着这条不变量：对每一个可能的 <code class="inl">desired</code>，<code class="inl">safe_cut_index</code> 的返回值都必须是平衡位置。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_compaction.py::SafeCutTests.test_safe_cut_never_returns_an_unbalanced_position">    <span class="kw">def</span> <span class="fn">test_safe_cut_never_returns_an_unbalanced_position</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        messages <span class="op">=</span> conversation(rounds<span class="op">=</span><span class="num">3</span>)
+        flags <span class="op">=</span> balance_flags(messages)
+        <span class="kw">for</span> desired <span class="kw">in</span> range(len(messages) <span class="op">+</span> <span class="num">1</span>)<span class="op">:</span>
+            self.assertTrue(flags[safe_cut_index(messages, desired)], <span class="str">f"desired={desired}"</span>)</code></pre></div>
+
+<h2 id="hx-07-s4">摘要要保留什么</h2>
+
+<p>第 2 级的成品是一段话。这段话里没写的，模型就真的不知道了。所以提示词不是文案问题，是接口问题——它决定了「压缩后模型还能不能继续干活」。</p>
+
+<p>DSH 的摘要指令是一份固定结构，八个小节，逐条列出来（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/summarizer.ts:32-67" data-expect="const COMPACTION_INSTRUCTION = [">summarizer.ts:32-67</code>）：任务与意图、关键技术概念、文件与代码、错误与修复、未完成的活、当前在做的事、下一步、关键上下文。旁边还跟着几条硬规则，其中两条特别值得抄：<strong>保留精确的文件路径、命令、错误字符串、标识符和数值</strong>；以及<strong>不要在摘要里提到「这次总结」或「上下文被压缩过」</strong>（原话是「Do NOT mention this summarization request or that the context was compacted.」）。后面这条不是为了好看：如果摘要里写了「我们刚才压缩了上下文」，模型会在下一步先跟你聊压缩这回事，白花一轮。</p>
+
+<p>更值得学的是摘要请求本身怎么发出去的。它没有另起一个「你是摘要器」的 system prompt，而是把<strong>原会话的系统提示、工具 schema、以及被压缩的那段消息原样拼在前面</strong>，只在最后追一条压缩指令，并对齐 KV cache：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const messages: RequestMessage[] = [
+    ...input.messages,
+    deepFreeze({
+      role: 'user',
+      content: [{ type: 'text', text: COMPACTION_INSTRUCTION }],
+    }),
+  ]</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/summarizer.ts:145-151" data-expect="  const messages: RequestMessage[] = [">summarizer.ts:145-151</code>，<code class="inl">input</code> 的构造在 <code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:544-563" data-expect="function buildSummarizationInput(">region.ts:544-563</code>（系统头 + 被遮蔽段逐条投影成消息）。注释给出的理由是「Keeping the conversation's own system prompt, tools, and message prefix in front of it makes the auxiliary call a genuine prefix of the last routed request, so the provider's KV cache is reused instead of invalidated」——摘要请求成了上一次请求的真前缀，缓存能接着用（<a href="#hx-06">hx-06</a> 讲这套前缀稳定性）。代价是摘要请求本身可能非常大；收益是它便宜得多，而且模型是在<em>真的那段对话</em>上做总结，不需要重新解释背景。</p>
+
+<p>我们这边的摘要指令保留了同一批要点：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::SUMMARY_INSTRUCTION"><span class="cls">SUMMARY_INSTRUCTION</span> <span class="op">=</span> <span class="str">"""把上面的对话折成一份可以继续干活的检查点。用要点罗列，不要散文。
+必须覆盖下面每一项，没有内容就写「无」，不要省略任何一节：
+
+- 任务目标：用户最初提出、后来又补充过的目标，逐字保留关键约束
+- 已做的决定：选了什么、为什么这么选、被否决的方案
+- 改动过的文件：精确路径，以及每个文件为什么重要
+- 错误与修复：出过的错、怎么解决的、用户因此提过什么意见
+- 未完成的事：用户明确要求但还没做完的
+- 下一步：对齐最近一次请求的单个动作
+
+保留精确的文件路径、命令、错误字符串、标识符和数值。
+不要提及这次总结动作，也不要复述这份说明本身。"""</span></code></pre></div>
+
+<p>注意最后一句「不要提及这次总结动作，也不要复述这份说明本身」——这是从上面那条规则直接搬过来的。</p>
+
+<p>摘要落地时必须包装成一条 <strong>user 消息</strong>，这有两个理由：多数 API 要求历史以 user 开头（摘要替换的正是开头那段），以及模型对 user 消息里的内容更倾向于当成「既定事实」而不是「自己说过的话」。DSH 给这条消息加了固定前言，措辞的用意是让模型把它当背景、不复述：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">const CHECKPOINT_PREAMBLE =
+  'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.'</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/summarizer.ts:70-71" data-expect="const CHECKPOINT_PREAMBLE =">summarizer.ts:70-71</code>；它还用一个标记对把摘要正文包起来（<code class="inl">&lt;compacted-summary&gt;</code>，<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/summarizer.ts:22" data-expect="const SUMMARY_OPEN_TAG = '&lt;compacted-summary&gt;'">summarizer.ts:22</code>），并且明确规定「如果对话里已经有一个先前的检查点，不要照抄，把仍然成立的事实保留、过时的丢掉、新的合并进来」。<em>反复压缩</em>因此不会变成摘要的摘要的摘要那样层层衰减。</p>
+
+<p>我们的对应实现更朴素，但把「反复压缩」这件事也考虑进去了：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::summary_message"><span class="kw">def</span> <span class="fn">summary_message</span>(summary<span class="op">:</span> str, <span class="op">*</span>, cut<span class="op">:</span> int, total<span class="op">:</span> int) <span class="op">-&gt;</span> dict[str, <span class="cls">Any</span>]<span class="op">:</span>
+    <span class="str">"""把摘要包成一条 user 消息，替换掉被折掉的那段历史。
+
+    必须是 user 消息：多数 API 要求历史以 user 开头，而摘要替换的正是开头那一段。
+    措辞明确要求模型把摘要当作背景、不要复述它——否则模型经常会在下一步
+    先来一句「我了解到我们正在……」白白花掉一轮。
+    """</span>
+    <span class="kw">return</span> {
+        <span class="str">"role"</span><span class="op">:</span> <span class="str">"user"</span>,
+        <span class="str">"content"</span><span class="op">:</span> (
+            <span class="str">f"【自动检查点】以下是较早的 {cut} 条消息（共 {total} 条）的压缩摘要。"</span>
+            <span class="str">"把它当成既有背景，直接接着干活，不要复述它。\n\n"</span>
+            <span class="str">f"{summary}"</span>
+        ),
+    }</code></pre></div>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::summarize_prefix"><span class="kw">def</span> <span class="fn">summarize_prefix</span>(
+    messages<span class="op">:</span> <span class="cls">Messages</span>,
+    summarize<span class="op">:</span> <span class="cls">Summarizer</span>,
+    <span class="op">*</span>,
+    keep_recent<span class="op">:</span> int <span class="op">=</span> <span class="num">6</span>,
+) <span class="op">-&gt;</span> <span class="cls">Messages</span><span class="op">:</span>
+    <span class="str">"""第 2 级：把较早的若干条折成一条摘要，最近 ``keep_recent`` 条原样保留。
+
+    切分点由 :func:`safe_cut_index` 决定；``summarize`` 是调用方传进来的函数
+    （测试里用普通函数或 FakeLLM，生产里可能就是一次 ``LLM.complete``）。
+
+    摘要失败会把原始异常包成 :class:`CompactionError` 抛出——注意是**抛出**，
+    不是「退化成不压缩」。调用方（:class:`Compactor`）知道该怎么记账并继续，
+    而这里静默吞掉失败会让上层以为压缩成功、于是每轮都重试。
+    """</span>
+    cut <span class="op">=</span> safe_cut_index(messages, len(messages) <span class="op">-</span> max(<span class="num">0</span>, keep_recent))
+    <span class="kw">if</span> cut <span class="op">&lt;=</span> <span class="num">0</span><span class="op">:</span>
+        <span class="kw">return</span> messages
+    older, newer <span class="op">=</span> messages[<span class="op">:</span>cut], messages[cut<span class="op">:</span>]
+    <span class="kw">try</span><span class="op">:</span>
+        summary <span class="op">=</span> summarize(_deep_copy(older))
+    <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> exc<span class="op">:</span>  <span class="cmt"># noqa: BLE001 —— 任何失败都要让调用方看到</span>
+        <span class="kw">raise</span> <span class="cls">CompactionError</span>(<span class="str">f"摘要失败：{exc}"</span>) <span class="kw">from</span> exc
+    <span class="kw">if</span> <span class="kw">not</span> isinstance(summary, str) <span class="kw">or</span> <span class="kw">not</span> summary.strip()<span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">CompactionError</span>(<span class="str">"摘要为空：压缩没有腾出任何信息空间，视为失败"</span>)
+    <span class="kw">return</span> [summary_message(summary, cut<span class="op">=</span>cut, total<span class="op">=</span>len(messages)), <span class="op">*</span>newer]</code></pre></div>
+
+<p>两处约定值得单独说。第一，摘要为空按<strong>失败</strong>处理（<code class="inl">摘要为空：压缩没有腾出任何信息空间，视为失败</code>）：一个空摘要换掉了整段历史，是一种比不压缩严重得多的损坏。第二，摘要不能把历史变长——所以 <code class="inl">compact_once</code> 里判断的是 <code class="inl">len(folded) &lt; len(messages)</code>，DSH 也有同样一条守卫，比较的是摘要的估算 token 和被遮蔽内容的 token（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:418-422" data-expect="  if (framedSummaryTokenCount &gt;= prepared.shadowedRouteTokenCount) {">region.ts:418-422</code>，报错文本是「summary is not smaller than the shadowed content」）。压完不缩小的压缩是纯亏损：花了钱、丢了信息、位置还占着。</p>
+
+<h2 id="hx-07-s5">压缩与日志：DSH 为什么在日志层表达压缩</h2>
+
+<p>DSH 的压缩结果不是「一份新的消息数组」，而是一条带 <code class="inl">replace</code> 的日志事件：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  session.append('user/message', checkpointMessage, {
+    surfaceOp: { op: 'replace', startSeq: start, endSeq: end },
+    sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...shadowedSeqs],
+  })</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:506-509" data-expect="  session.append('user/message', checkpointMessage, {">region.ts:506-509</code>。这一行同时做了四件事，每一件都是为回放服务的：</p>
+
+<ul>
+<li><strong>替换而不是删除</strong>。<code class="inl">surfaceOp: { op: 'replace', startSeq, endSeq }</code> 说的是「从这个 seq 到这个 seq 的位置，以后由我这条消息代表」。被替换的事件一条都没被删，它们只是不再出现在推导结果里。</li>
+<li><strong>来源可追</strong>。<code class="inl">sourceEventSeqs</code> 指回「压缩开始标记、摘要、以及所有被遮蔽的节点」——事后可以精确回答「这条摘要是从哪些事件折出来的」。</li>
+<li><strong>摘要本身也是日志事件</strong>。<code class="inl">session.append('compaction/summary', {...})</code>（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:491-505" data-expect="  const summaryEvent = session.append('compaction/summary', {">region.ts:491-505</code>）记录了摘要文本、provider/model、maxTokens、usage，以及被遮蔽的范围和 token 数。压缩花了多少钱、压掉了多少内容，都能从日志里算出来。</li>
+<li><strong>用一对标记框住整个事务</strong>。<code class="inl">compaction/start</code>（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:210" data-expect="  const startEvent = session.append('compaction/start', lifecycle)">region.ts:210</code>）和 <code class="inl">compaction/end</code>（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:237" data-expect="    const endEvent = session.append('compaction/end', lifecycle)">region.ts:237</code>）。<code class="inl">start</code> 一旦落地就是锁：别的压缩看到它还没配对的 <code class="inl">end</code>，就会以 <code class="inl">busy</code> 拒绝（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:308-320" data-expect="function assertCompactionInactive(">region.ts:308-320</code>，报错文本里写着「the session compaction lock is already active」）。失败时 <code class="inl">end</code> 带上错误照样写一条（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:245" data-expect="        session.append('compaction/end', { ...lifecycle, error: errorChain(error) })">region.ts:245</code>），注释说这是刻意的：<em>「every later failure makes exactly one <code class="inl">compaction/end</code> attempt; a failed close deliberately leaves the unmatched start detectable」</em>——失败的压缩在日志里是看得见的，不是静悄悄的。</li>
+</ul>
+
+<p>推导侧只有一句话要记：<code class="inl">deriveMessages</code> 沿着表面走，遇到 <code class="inl">replace</code> 就把被遮蔽的节点从推导里去掉（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:967-974" data-expect="   * Derive the LLM message history by walking the ordered sequences of">index.ts:967-974</code>的注释原话是「a compaction <code class="inl">replace</code> deletes the shadowed nodes from the derivation」）。所以「日志不丢」和「模型看不到」这两件事在 DSH 里是同一个机制的两面，而不是两套状态。</p>
+
+<p>第 1 级的裁剪用的是同一套 <code class="inl">replace</code>，只是范围退化成一个节点：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      session.append('compaction/prune', {
+        shadowedRange: { start: seq, end: seq },
+        shadowedSeqs: [seq],
+        shadowedTokenCount: this.ctx.tokenMeter.estimateMessage(original),
+      })
+      const replacement = session.append('tool/result', {
+        ...event.data,
+        message,
+      }, {
+        surfaceOp: { op: 'replace', startSeq: seq, endSeq: seq },
+        sourceEventSeqs: [seq],
+      })</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-tool-result-pruner/src/index.ts:160-171" data-expect="      session.append('compaction/prune', {">index.ts:160-171</code>。注意注释里的「shadow-price protocol」：<code class="inl">compaction/prune</code> 这条事件紧挨着替换事件写下，它的作用是<em>告诉纯消费者「刚才那个被替换掉的节点值多少 token」</em>，这样计费方不需要自己保存每个节点的历史价格。把「这次替换省了多少」也写进日志，是一个很实用的习惯——不写的话，压缩的效果事后就查不出来了。</p>
+
+<p>顺带说一句 <code class="inl">/compact</code> 这个人工入口。它做的事和自动压缩不完全一样：<em>在下限以下也压一次</em>，只是要求 Agent 处于空闲（<code class="inl src-ref" data-src="dsh:packages/compaction/command-compact/src/index.ts:67" data-expect="    const result = await ctx.compaction.compactNow(invocation.agent, invocation.signal, invocation.commandId)">command-compact/src/index.ts:67</code> → <code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:383-435" data-expect="  override compactNow(">compaction-basic/src/index.ts:383-435</code>），失败原因分成六类逐条报给用户（<code class="inl">busy</code> / <code class="inl">cancelled</code> / <code class="inl">changed</code> / <code class="inl">summary</code> / <code class="inl">commit</code> / <code class="inl">persistence</code>）。「用户手动触发的压缩要给出可读的失败原因」这件事，值得在自己的 harness 里保留——自动压缩失败可以静默重试，手动压缩失败必须说清楚为什么。</p>
+
+<h2 id="hx-07-s6">压缩失败的熔断</h2>
+
+<p>压缩失败之后最坏的做法是「下一轮再试一次」。摘要要花一次模型调用，而失败往往是确定性的：历史本身太大、模型不支持这么长的输入、配额用完了。每轮重试一遍等于每轮白花一次钱、白等一段时间，最后还可能把一整轮 turn 拖死。</p>
+
+<p>所以每个实现都有一个计数器加一条短路。OpenHarness 的短路写得很直白：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="kw">def</span> <span class="fn">should_autocompact</span>(
+    messages<span class="op">:</span> list[<span class="cls">ConversationMessage</span>],
+    model<span class="op">:</span> str,
+    state<span class="op">:</span> <span class="cls">AutoCompactState</span>,
+    <span class="op">*</span>,
+    context_window_tokens<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+    auto_compact_threshold_tokens<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+) <span class="op">-&gt;</span> bool<span class="op">:</span>
+    <span class="str">"""Return True when the conversation should be auto-compacted."""</span>
+    <span class="kw">if</span> state.consecutive_failures <span class="op">&gt;=</span> <span class="cls">MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">False</span></code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:1095-1105" data-expect="def should_autocompact(">compact/__init__.py:1095-1105</code>，阈值是 3（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:57" data-expect="MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3">第 57 行</code>）。计数在成功时清零、失败时加一（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:1642-1645" data-expect="        state.consecutive_failures = 0">第 1642-1645 行</code>），而且失败被 <code class="inl">except Exception</code> 接住后返回<strong>原历史</strong>（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:1660" data-expect="        return messages, False">第 1660 行</code>）——压缩失败绝不让整个 turn 崩掉。</p>
+
+<p>我们的版本把计数器和状态封装在一起：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/compaction.py::CircuitBreaker"><span class="dec">@dataclass</span>
+<span class="kw">class</span> <span class="cls">CircuitBreaker</span><span class="op">:</span>
+    <span class="str">"""连续失败计数。到阈值就停止尝试压缩，直到有人显式复位。
+
+    这条规则解决的是「压缩一直失败、于是每轮都重试一遍」：一次摘要要花一次
+    模型调用，失败还往往是确定性的（历史太大、模型不支持长输入、配额用尽），
+    每轮重试等于每轮白花一次钱。
+
+    OpenHarness 的做法是一个计数器加一条短路：
+    ``packages/.../compact/__init__.py`` 里 ``should_autocompact`` 的第一行就是
+    ``if state.consecutive_failures &gt;= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES: return False``。
+    我们在成功时也清零——它那边的清零挂在 turn 结束上，两者都在「环境变了」时
+    重新给一次机会。
+    """</span>
+
+    max_failures<span class="op">:</span> int <span class="op">=</span> <span class="cls">MAX_CONSECUTIVE_FAILURES</span>
+    failures<span class="op">:</span> int <span class="op">=</span> <span class="num">0</span>
+    last_error<span class="op">:</span> str <span class="op">=</span> <span class="str">""</span>
+
+<span class="dec">    @property</span>
+    <span class="kw">def</span> <span class="fn">open</span>(self) <span class="op">-&gt;</span> bool<span class="op">:</span>
+        <span class="str">"""是否已经熔断（停止尝试压缩）。"""</span>
+        <span class="kw">return</span> self.failures <span class="op">&gt;=</span> self.max_failures
+
+    <span class="kw">def</span> <span class="fn">record_success</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self.failures <span class="op">=</span> <span class="num">0</span>
+        self.last_error <span class="op">=</span> <span class="str">""</span>
+
+    <span class="kw">def</span> <span class="fn">record_failure</span>(self, error<span class="op">:</span> <span class="cls">BaseException</span> <span class="op">|</span> str) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self.failures <span class="op">+=</span> <span class="num">1</span>
+        self.last_error <span class="op">=</span> str(error)</code></pre></div>
+
+<p>什么时候算一次失败，值得单独列一下。我们把三类都算进去：</p>
+
+<ul>
+<li>摘要函数抛错（包成 <code class="inl">CompactionError</code> 后记一次）；</li>
+<li>摘要跑完但历史<strong>没有变短</strong>（DSH 的「summary is not smaller」守卫对应的情形）；</li>
+<li>整个级联跑完却一点没省下来（<code class="inl">after &gt;= before</code>）。这一类最容易被漏：函数没抛错、返回值也「正常」，但下一轮还会一模一样地再触发一次。</li>
+</ul>
+
+<p>反过来说，有几件事<strong>不该</strong>计入失败：第 2 级没被触发（第 1 级已经够了）、没有传摘要函数、用量在阈值以下。这些都是正常路径，记进熔断器会让熔断在毫无问题的时候打开。测试里这几种情形是分开断言。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_compaction.py::BreakerTests.test_consecutive_failures_open_the_breaker">    <span class="kw">def</span> <span class="fn">test_consecutive_failures_open_the_breaker</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        messages <span class="op">=</span> conversation(rounds<span class="op">=</span><span class="num">4</span>)
+        compactor <span class="op">=</span> self._failing_compactor(messages)
+        levels <span class="op">=</span> [compactor.compact_once(messages).level <span class="kw">for</span> _ <span class="kw">in</span> range(<span class="cls">MAX_CONSECUTIVE_FAILURES</span>)]
+        <span class="cmt"># 第 2 级失败，但第 1 级已经生效，所以每次都退到 prune。</span>
+        self.assertEqual(levels, [<span class="str">"prune"</span>] <span class="op">*</span> <span class="cls">MAX_CONSECUTIVE_FAILURES</span>)
+        self.assertTrue(compactor.breaker.open)
+        blocked <span class="op">=</span> compactor.compact_once(messages)
+        self.assertEqual(blocked.level, <span class="str">"none"</span>)
+        self.assertIn(<span class="str">"熔断"</span>, <span class="str">" "</span>.join(blocked.notes))
+        self.assertIs(blocked.messages, messages)</code></pre></div>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_compaction.py::BreakerTests.test_breaker_resets_after_a_success">    <span class="kw">def</span> <span class="fn">test_breaker_resets_after_a_success</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        breaker <span class="op">=</span> <span class="cls">CircuitBreaker</span>()
+        breaker.record_failure(<span class="str">"x"</span>)
+        breaker.record_failure(<span class="str">"y"</span>)
+        self.assertFalse(breaker.open)
+        breaker.record_success()
+        self.assertEqual(breaker.failures, <span class="num">0</span>)
+        self.assertFalse(breaker.open)</code></pre></div>
+
+<p>DSH 这边有更细的一层：超长恢复的计数是<strong>按 Agent</strong>存的（<code class="inl">WeakMap&lt;Agent, number&gt;</code>，<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:134" data-expect="  private readonly overflowRetries = new WeakMap&lt;Agent, number&gt;()">index.ts:134</code>），并且在两种「环境变了」的信号上清零：Agent 回到 idle（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:178-180" data-expect="    ctx.on('agent/status', ({ agent, status }) =&gt; {">index.ts:178-180</code>），以及这条会话又产生了一条助手消息——注释说这是为了「即使工具调用让同一个 turn 继续到下一次请求，成功的一次响应也开启一段新的超长恢复序列」（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:182-188" data-expect="    // A successful response starts a fresh overflow-recovery sequence even">index.ts:182-188</code>）。这个区分很细但很重要：熔断要记的是「<em>连续</em>失败」，只要中间成功过一次，就该重新给一次机会。</p>
+
+<h2 id="hx-07-s7">逐库对照</h2>
+
+<div class="table-wrap"><table><thead><tr><th></th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code s08</th></tr></thead><tbody>
+<tr><td>压缩的表达方式</td><td>日志事件：<code class="inl">compaction/*</code> + 带 <code class="inl">surfaceOp: replace</code> 的替换消息，被遮蔽的节点不删</td><td>直接重建消息列表：摘要消息 + 保留的最近若干条</td><td>直接改 <code class="inl">messages</code> 列表，把中间段换成一条带磁盘路径的标记</td></tr>
+<tr><td>分级</td><td>四级，分别独立装配：spill（落地时）→ pruner（免模型）→ 摘要（调模型）→ image-offload（按图预算）</td><td>三级：microcompact（免模型清旧结果）→ 会话记忆（本地拼装）→ 全量摘要</td><td>四级，全写在一个 <code class="inl">prepare()</code> 里顺序跑：<code class="inl">tool_result_budget</code> → <code class="inl">snip_compact</code> → <code class="inl">micro_compact</code>/<code class="inl">fit_tool_results</code> → <code class="inl">compact_history</code></td></tr>
+<tr><td>切分点</td><td>按 surface 缓存的前缀平衡表，两端都查（<code class="inl">toolPairingBalancedBefore/After</code>）</td><td>只看保留区第一处边界，切完再 <code class="inl">sanitize</code> 一次</td><td>手工挪 <code class="inl">head_end</code>/<code class="inl">tail_start</code> 各两步（<code class="inl">code.py:403-408</code>）</td></tr>
+<tr><td>阈值口径</td><td>token，比例 × 模型窗口，再和「窗口减输出预留减余量」取小</td><td>token，窗口减 20K 输出预留再减 13K 缓冲</td><td>字符，<code class="inl">CONTEXT_CHAR_LIMIT = 50000</code>，估算方式是序列化后取长度</td></tr>
+<tr><td>失败处理</td><td>计数按 Agent 存（WeakMap），idle 或下一次成功响应时清零；摘要阶段失败但裁剪已落地时仍算「有进展」并重试</td><td><code class="inl">consecutive_failures</code> 到 3 就不再自动压缩，返回原历史</td><td><code class="inl">MAX_REACTIVE_RETRIES = 1</code>：被动触发只重试一次</td></tr>
+<tr><td>原始文本去哪了</td><td>日志里，可按 seq 查回</td><td>压缩前的转录写盘（旧编号目录里），恢复不依赖它</td><td>写盘（<code class="inl">.transcripts/</code>），标记里带上路径</td></tr>
+<tr><td>适用场景</td><td>长会话、要回放、要能从中断处精确续跑</td><td>单进程 CLI，历史在内存里，够用就好</td><td>教学：一个文件看清四级级联长什么样</td></tr>
+</tbody></table></div>
+
+<p>三家的共同点是级联顺序，差别集中在「被压掉的内容还能不能找回来」。DSH 是唯一把压缩当成<em>日志事件</em>来记的，所以它能回答「第 200 条工具结果原本是什么」；另外两家都只有当前这份消息列表。代价是 DSH 的压缩路径要维护一套 surface/日志两层的对账。</p>
+
+<h2 id="hx-07-s8">坑与失败案例</h2>
+
+<h3 id="hx-07-s8-1">坑一：切分点拆开了 tool_use 和它的结果，请求直接 400</h3>
+
+<p><strong>触发条件</strong>：按「保留最近 N 条消息」切历史，N 刚好落在一对工具调用中间。</p>
+
+<p><strong>后果</strong>：旧段以孤儿 <code class="inl">tool_use</code> 结尾、新段以孤儿 <code class="inl">tool_result</code> 开头，厂商返回 400。最难受的地方是错误信息通常只说「格式不合法」，不告诉你哪一对拆了；而压缩逻辑看上去「成功执行了」，于是排查方向容易跑偏到工具 schema 或提示词上。</p>
+
+<p><strong>源码怎么防</strong>：DSH 在选范围时就把两端都限制在平衡边界上，而且范围一旦不合法<em>在压缩开始之前</em>就抛错（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/region.ts:349-355" data-expect="  if (!toolPairingBalancedBefore(session, nodes[startIdx]!)) {">region.ts:349-355</code>，报错文本直接点明「would split a step's tool-call/result pair」）。OpenHarness 在选完切点之后还会再把保留段 sanitize 一次。我们的 <code class="inl">safe_cut_index</code> 只往回挪不往前挪，就是这个坑的防线。测试里对每个可能的 <code class="inl">desired</code> 都断言结果平衡。</p>
+
+<h3 id="hx-07-s8-2">坑二：摘要丢掉了用户最初的约束</h3>
+
+<p><strong>触发条件</strong>：把「总结这段对话」当成通用任务交给模型，不指定必须覆盖哪些内容。模型倾向于总结<em>最近</em>的活动——它刚读完的那一大堆工具输出听起来最「重要」。</p>
+
+<p><strong>后果</strong>：三条优化建议、五个文件路径原样保留，而用户第三轮说的「不要改公开接口，线上有别的服务在调」没了。接下来模型高高兴兴重构了公开接口——而且它自己不知道记错了什么，因为它手上只有那份摘要。</p>
+
+<p><strong>源码怎么防</strong>：DSH 的压缩指令把「Primary Request and Intent」放在第一节，要求「quote verbatim where the exact wording matters」；OpenHarness 的 <code class="inl">BASE_COMPACT_PROMPT</code> 更直接，第九条要求「All User Messages: Non-tool-result user messages (preserve exact wording for context)」（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:991" data-expect="6. **All User Messages**: Non-tool-result user messages (preserve exact wording for context).">compact/__init__.py:991</code>）。两家都要求「逐字保留」，因为约束往往只在措辞里。</p>
+
+<p>另一个相关坑在裁剪这一级：它默认<strong>跳过带 <code class="inl">is_error</code> 的结果</strong>。labs 的 <code class="inl">PRUNE_SKIP_ERRORS</code> 就是这个开关。理由很实际——报错信息通常是模型下一步唯一的依据，而它往往不长（不占多少 token），裁它收益小、损失大。DSH 的 pruner 没有这个区分（它只按长度挑），所以这是个可以争论的选择；我们的实现选了保守的那一边。</p>
+
+<h3 id="hx-07-s8-3">坑三：每轮都触发压缩，成本飙升</h3>
+
+<p><strong>触发条件</strong>：压缩之后仍然超阈值（例如单条工具结果本身就塞满窗口，压不动）。下一轮的压力检测再触发一次，又调一次模型。</p>
+
+<p><strong>后果</strong>：账单上多出一串摘要调用，每一轮都白等一次模型；如果是确定性的失败（比如摘要请求本身也超长），这个循环永远不会自己停。</p>
+
+<p><strong>源码怎么防</strong>：四道，缺一不可。</p>
+
+<ol>
+<li><strong>压缩次数上限</strong>：<code class="inl">compactionRetries</code> 默认 1，超过还在阈值之上就抛错（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:343-346" data-expect="    throw new Error(">index.ts:343-346</code>，报错文本「compaction still above threshold after N compaction attempts」）。</li>
+<li><strong>超长恢复上限</strong>：<code class="inl">maxOverflowRetries</code> 默认 1（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/config.ts:105" data-expect="    compactionRetries: config.compactionRetries ?? 1,">config.ts:105</code>，下一行是 maxOverflowRetries），同一个 Agent 反复因超长被打回来就放手。</li>
+<li><strong>压缩锁</strong>：<code class="inl">compaction/start</code> 没配对 <code class="inl">compaction/end</code> 之前，第二次压缩以 <code class="inl">busy</code> 拒绝。</li>
+<li><strong>失败熔断</strong>：OpenHarness 的 <code class="inl">consecutive_failures</code> 到 3，或我们 <code class="inl">CircuitBreaker</code> 的同名机制。</li>
+</ol>
+
+<p>我们还有一个降级路径值得说：第 2 级失败但第 1 级已经落地时，历史仍然是小的，<code class="inl">achieved</code> 停在 <code class="inl">prune</code>，turn 继续跑——但因为这一轮记了一次失败，连续三次之后连第 1 级也不再试。这是有意的：如果裁剪有效，压力很快会落回阈值以下，熔断根本不会打开；熔断打开了，说明这个会话已经进入了「压缩解决不了」的状态，继续压只是浪费。</p>
+
+<h3 id="hx-07-s8-4">坑四：把「压缩成功」当成「一定有进展」</h3>
+
+<p><strong>触发条件</strong>：摘要返回了内容、函数没抛错，但估算下来没有比原来小——比如历史本来就只有两条消息，摘要加了前言反而更长。</p>
+
+<p><strong>后果</strong>：压缩被记为成功，压力检测下一轮照旧触发，形成一场「什么都没发生」的死循环，而且日志上看不出异常。</p>
+
+<p><strong>源码怎么防</strong>：DSH 用「写进日志的 <code class="inl">replaceGeneration</code> 有没有变」和「摘要 token 有没有小于被遮蔽的 token」两条硬判据（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:229-232" data-expect="      if (signal.aborted">index.ts:229-232</code>、<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-tool-result-pruner/src/index.ts:118" data-expect="    if (charsAfter &gt; this.config.thresholdChars || charsAfter &gt;= totalChars) {">pruner index.ts:118</code>）；我们的判据是 <code class="inl">after &lt; before</code> 和 <code class="inl">len(folded) &lt; len(messages)</code>，不满足就记一次失败。</p>
+
+<h3 id="hx-07-s8-5">坑五：压缩请求本身超长</h3>
+
+<p><strong>触发条件</strong>：把要压缩的那一整段原样发给模型去总结，而这段本身就快到窗口上限了。</p>
+
+<p><strong>后果</strong>：摘要请求也报超长，压缩永远失败——而失败的原因恰恰是「历史太长」，形成一个死结。</p>
+
+<p><strong>源码怎么防</strong>：OpenHarness 走的是「分段输入 + 截断重试」：请求前先把输入折叠到上限内（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:302" data-expect="def try_context_collapse(">compact/__init__.py:302</code> 一带的 <code class="inl">try_context_collapse</code>），摘要请求真的被拒了就丢掉最老的一段再试，最多三次（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:1291-1295" data-expect="            if _is_prompt_too_long_error(exc) and ptl_retries &lt; MAX_PTL_RETRIES:">第 1291-1295 行</code>，<code class="inl">MAX_PTL_RETRIES = 3</code>）。DSH 走的是另一条路：先让免模型的 pruner 把结果正文压掉（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:294-301" data-expect="    if (trigger === 'context-overflow') {">index.ts:294-301</code>，超长触发时先 pruner、重测、再选范围），常常在摘要之前就把体积降下来了。我们的 lab 没有实现这一层，这是本章没覆盖的部分之一。</p>
+
+<h2 id="hx-07-s9">小结</h2>
+
+<p>压缩这件事可以压缩成四条规则：</p>
+
+<ol>
+<li><strong>按代价排序</strong>。免模型的先做、只有不够才调模型；每做一级重新量一次，够了就停。阈值决定「本来打算做哪一级」，<code class="inl">achieved</code> 记录「实际做到哪一级」，两者不一样是正常的。</li>
+<li><strong>切分点必须配对平衡</strong>，两端都要查。宁可这次不压，也不要拆开 tool_use 与 tool_result；切完之后再校验一次历史能不能直接发出去（第一条是 user、配对完整）。</li>
+<li><strong>摘要里最该保住的是约束和路径</strong>。任务目标逐字、文件路径精确、未完成的事单列、不要提「压缩」这件事。摘要必须比被替换的内容小，否则算失败。</li>
+<li><strong>压缩是日志事件，不是对内存数组的删除</strong>。被遮蔽的节点留在日志里，推导时跳过；压缩花了多少钱、压掉了什么，都能事后查出来。失败要留痕（DSH 连失败的 <code class="inl">compaction/end</code> 都写），失败要有熔断，不能每轮重试。</li>
+</ol>
+
+<p>第 1 级（裁剪旧工具结果）属于 hx-08 讲的「工具输出卸载」的近亲，区别只在于它是事后补救、而且不动结构。下一章（<a href="#hx-08">hx-08</a>）会讲更彻底的一步：大输出在落地时就直接改成「预览 + 路径」，让上下文里根本不出现完整内容——那样连压缩都省了。压缩的输入是 token 用量，那套估算和分级在 <a href="#hx-05">hx-05</a>；摘要请求要复用上次请求的前缀，背后的缓存条件在 <a href="#hx-06">hx-06</a>。</p>
+</section>

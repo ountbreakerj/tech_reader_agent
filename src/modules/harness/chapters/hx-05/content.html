@@ -1,0 +1,358 @@
+<section class="chapter" id="ch-hx-05" data-slug="hx-05"><div class="ch-head"><span class="ch-num">第 5 章</span></div><h1 id="hx-05">Token 预算与计数</h1>
+<p>上下文窗口是 harness 面对的唯一硬上限。轮数、工具调用次数、重试次数都可以商量，窗口不行：请求一旦超过它，厂商直接返回 400，这一轮的推理、这一轮已经跑掉的工具全部作废。而按 token 计费的账单同样不给商量余地。所以一个能长时间跑的 harness 必须自己算账，而且要在<strong>发请求之前</strong>就算出来。</p>
+<p>本章先用 labs 里的 <code class="inl">budget.py</code> 把三件事拆开——估算、窗口切分、用量账本——再逐库对照它们各自怎么算这笔账。压缩策略本身是 <a href="#hx-07">hx-07</a> 的主题，本章只负责回答“什么时候该压缩”这个信号；prompt cache 的读写 token 怎么进成本，衔接 <a href="#hx-06">hx-06</a>。</p>
+<blockquote><p><strong>术语</strong>：<code class="inl">prompt</code> 指一次请求里所有输入（系统提示、工具定义、历史、本轮输入）合起来的 token 数，<code class="inl">completion</code> 指模型本次生成的 token 数，两者相加才是这一次请求对窗口的占用。厂商的 usage 字段名五花八门，本章统一用 input / output / cache_read / cache_write 四个桶。</p></blockquote>
+
+<h2 id="hx-05-s1">为什么 harness 必须自己算账</h2>
+<p>模型适配器当然知道窗口是多大，但它只在下游：等你把请求交给它，它要么发出去，要么发出去之后收到 400。harness 需要的判断发生在更上游——“这一批工具结果还能不能塞进历史”“还剩多少空间给下一次模型调用”“现在是不是该触发压缩”。这些决定必须自己算，因为只有 harness 知道下一个要填进上下文的东西是什么。</p>
+<p>DSH 把“窗口是多少”明确划给适配器，把“现在用了多少”留给 meter，中间靠一条命令式接口串起来。窗口值与路由绑定：</p>
+<blockquote><p><strong>原文</strong>：mount this plugin when a consumer needs token or context pressure for compaction decisions, occupancy displays, or telemetry … model capacity belongs to the adapter that owns the exact provider/model route and is available through <code class="inl">ctx.llm.resolveModelInfo().context</code>（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/README.md:28" data-expect="resolveModelInfo().context">token-meter/README.md:28</code>）。</p></blockquote>
+<p>同一份文档把这条分工的另一半说得很直白：meter 只测压力，<strong>不做任何循环决策</strong>，也<strong>不向模型增加任何可见内容</strong>。决策权留在压缩插件手里。</p>
+<p>OpenHarness 走的是另一条路：它把窗口大小写成一张按模型名猜测的表，没有 provider 元数据可查。默认 200K，靠字符串匹配模型名兜底：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="kw">def</span> <span class="fn">get_context_window</span>(model<span class="op">:</span> str, <span class="op">*</span>, context_window_tokens<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> int<span class="op">:</span>
+    <span class="str">"""Return the context window size for a model (conservative defaults)."""</span>
+    <span class="kw">if</span> context_window_tokens <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> context_window_tokens <span class="op">&gt;</span> <span class="num">0</span><span class="op">:</span>
+        <span class="kw">return</span> int(context_window_tokens)
+    m <span class="op">=</span> model.lower()
+    <span class="kw">if</span> <span class="str">"opus"</span> <span class="kw">in</span> m<span class="op">:</span>
+        <span class="kw">return</span> <span class="num">200_000</span>
+    <span class="kw">if</span> <span class="str">"sonnet"</span> <span class="kw">in</span> m<span class="op">:</span>
+        <span class="kw">return</span> <span class="num">200_000</span>
+    <span class="kw">if</span> <span class="str">"haiku"</span> <span class="kw">in</span> m<span class="op">:</span>
+        <span class="kw">return</span> <span class="num">200_000</span>
+    <span class="cmt"># Kimi / other providers — be conservative</span>
+    <span class="kw">return</span> _DEFAULT_CONTEXT_WINDOW</code></pre></div>
+<p><code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:1065-1077" data-expect="def get_context_window(model: str, *, context_window_tokens: int | None = None) -&gt; int:">compact/__init__.py:1065-1077</code>。所有分支都返回同一个数——这张表的实际作用是“允许环境变量覆盖，否则一律 200K”。对未知模型这会偏乐观；OpenHarness 的对策不是查得更准，而是把阈值压得更低（见 <a href="#hx-05-s4">第 4 节</a>）。</p>
+
+<h2 id="hx-05-s2">估算与实测：先估，再回填</h2>
+<h3 id="hx-05-s2-1">没有分词器时的估算</h3>
+<p>真实分词器要么是个几百 KB 的模型文件，要么是一次网络往返（厂商的 count_tokens 接口）。两者都不适合在每个决策点上调用。所以所有 harness 都先估：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/budget.py::HeuristicCounter"><span class="dec">@dataclass</span>
+<span class="kw">class</span> <span class="cls">HeuristicCounter</span><span class="op">:</span>
+    <span class="str">"""按字符类别估算的计数器：没有分词器时的兜底。
+
+    单调不减：count("") == 0，且 a 是 b 的前缀时 count(a) &lt;= count(b)。
+    估算必然有误差，误差用 provider 的 usage 修正，不靠调系数。
+    """</span>
+
+    ascii_chars_per_token<span class="op">:</span> float <span class="op">=</span> <span class="cls">ASCII_CHARS_PER_TOKEN</span>
+    cjk_chars_per_token<span class="op">:</span> float <span class="op">=</span> <span class="cls">CJK_CHARS_PER_TOKEN</span>
+    other_chars_per_token<span class="op">:</span> float <span class="op">=</span> <span class="cls">OTHER_CHARS_PER_TOKEN</span>
+
+    <span class="kw">def</span> <span class="fn">count</span>(self, text<span class="op">:</span> str) <span class="op">-&gt;</span> int<span class="op">:</span>
+        <span class="kw">if</span> <span class="kw">not</span> text<span class="op">:</span>
+            <span class="kw">return</span> <span class="num">0</span>
+        ascii_n <span class="op">=</span> cjk_n <span class="op">=</span> other_n <span class="op">=</span> <span class="num">0</span>
+        <span class="kw">for</span> ch <span class="kw">in</span> text<span class="op">:</span>
+            <span class="kw">if</span> ord(ch) <span class="op">&lt;</span> <span class="num">128</span><span class="op">:</span>
+                ascii_n <span class="op">+=</span> <span class="num">1</span>
+            <span class="kw">elif</span> _is_cjk(ch)<span class="op">:</span>
+                cjk_n <span class="op">+=</span> <span class="num">1</span>
+            <span class="kw">else</span><span class="op">:</span>
+                other_n <span class="op">+=</span> <span class="num">1</span>
+        tokens <span class="op">=</span> (
+            ascii_n <span class="op">/</span> self.ascii_chars_per_token
+            <span class="op">+</span> cjk_n <span class="op">/</span> self.cjk_chars_per_token
+            <span class="op">+</span> other_n <span class="op">/</span> self.other_chars_per_token
+        )
+        <span class="kw">return</span> int(tokens) <span class="kw">if</span> tokens <span class="op">==</span> int(tokens) <span class="kw">else</span> int(tokens) <span class="op">+</span> <span class="num">1</span></code></pre></div>
+<p>三个系数（ASCII 4 字符 / token、CJK 1 字 / token、其余 2 字符 / token）都是<strong>教学示意</strong>，不是任何厂商的分词器。<code class="inl">count</code> 保证单调不减：<code class="inl">count("") == 0</code>，且前缀的估计值不超过整体的估计值——预算决策依赖这一条，否则“再加一段内容”可能反而让估计值变小，分级信号会抖。</p>
+<p>按字符类别分开算不是洁癖。DSH 的固定启发式是一刀切的四字符一 token，它自己承认这个选择在中文上会严重低估：</p>
+<blockquote><p><strong>原文</strong>：The fixed four-characters-per-token heuristic underprices CJK text and JSON schemas; the provider anchor carries exactly that error when usage is reused.（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/README.md:154" data-expect="underprices CJK text and JSON schemas">token-meter/README.md:154</code>）。</p></blockquote>
+<p>低估的后果不是“省了钱”，而是压缩触发得太晚：你以为还剩 30% 空间，实际已经贴到窗口边。DSH 的取舍是接受这个误差，但让误差<strong>可测量</strong>——把 provider 的真实值当锚点，只把锚点之后的变化量按启发式算（<a href="#hx-05-s2-2">2.2</a>）。</p>
+<p>OpenHarness 的估算器更简单，也是四字符一 token，但方向相反——它向上取整再乘一个填充系数：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="kw">def</span> <span class="fn">estimate_tokens</span>(text<span class="op">:</span> str) <span class="op">-&gt;</span> int<span class="op">:</span>
+    <span class="str">"""Estimate tokens from plain text using a rough character heuristic."""</span>
+    <span class="kw">if</span> <span class="kw">not</span> text<span class="op">:</span>
+        <span class="kw">return</span> <span class="num">0</span>
+    <span class="kw">return</span> max(<span class="num">1</span>, (len(text) <span class="op">+</span> <span class="num">3</span>) <span class="op">//</span> <span class="num">4</span></code></pre></div>
+<p>除数就是 4，加 3 是向上取整；非空文本至少报 1。<code class="inl src-ref" data-src="oh:src/openharness/services/token_estimation.py:10" data-expect="return max(1, (len(text) + 3) // 4)">token_estimation.py:10</code>。往上再乘的填充系数是 4/3：</p>
+<blockquote><p><strong>原文</strong>：<code class="inl">TOKEN_ESTIMATION_PADDING = 4 / 3</code>（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:75" data-expect="TOKEN_ESTIMATION_PADDING = 4 / 3">compact/__init__.py:75</code>），注释写明是 conservative，用在汇总时：<code class="inl">return int(total * TOKEN_ESTIMATION_PADDING)</code>（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:131" data-expect="return int(total * TOKEN_ESTIMATION_PADDING)">compact/__init__.py:131</code>）。</p></blockquote>
+<p>两者合起来：OpenHarness 宁愿高估 33%，换来“阈值保守”。代价是压缩触发得早，多花一次摘要调用的钱。</p>
+<h3 id="hx-05-s2-2">用 usage 回填：DSH 的锚点与增量</h3>
+<p>估算的误差可以消除一半——每次响应返回时，厂商会告诉你这次请求的真实 prompt 有多大。聪明的做法不是用真实值替换历史，而是<strong>只把锚点之后的变化量按启发式算</strong>。</p>
+<p>DSH 的做法正是这样。<code class="inl">measure()</code> 返回的 <code class="inl">totalTokens</code> 由两部分相加：一个基线（<code class="inl">baseline</code>）和一个相对基线变化的带符号增量（<code class="inl">surfaceDeltaTokens</code>）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    return deepFreeze(structuredClone({
+      logRevision: state.consumedEvents,
+      baseline,
+      surfaceDeltaTokens,
+      totalTokens: Math.max(0, baseline.tokens + surfaceDeltaTokens),
+      surfaceTokens: surface.surfaceTokens,
+      nodes: surface.nodes,
+    }))</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:183-190" data-expect="return deepFreeze(structuredClone({">token-meter/src/index.ts:183-190</code>。注意 <code class="inl">Math.max(0, ...)</code>：增量可以是负数（比如压缩把一段历史换成了摘要），但合计不能为负。</p>
+<p>基线何时用真实值、何时用估算值，条件写得很紧：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      // Signed heuristic deltas remain conservative only from an anchor
+      // that is at least as large as the matching full heuristic price.
+      baseline = usage !== undefined &amp;&amp; usageTokens(usage) &gt;= estimatedAnchorTokens
+        ? { kind: 'usage', tokens: usageTokens(usage), usage }
+        : { kind: 'estimated', tokens: estimatedAnchorTokens }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:166-170" data-expect="// Signed heuristic deltas remain conservative only from an anchor">token-meter/src/index.ts:166-170</code>。三个条件缺一不可：有 usage、请求信封（envelope）与上次成功调用<strong>逐字相同</strong>、且真实值不低于同一份内容按启发式算出来的值。第三条是防止“真实值比估计值小”破坏保守性——若真实 prompt 比估计的小，而增量仍按启发式算，两者相减出来的压力会偏乐观。</p>
+<p>真实值怎么进桶也有讲究。DSH 内部把缓存读写当<strong>互不重叠</strong>的桶，加总时直接相加：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** Sum disjoint provider usage buckets without double-counting reasoning output. */
+function usageTokens(usage: TokenUsage): number {
+  return usage.inputTokens
+    + (usage.cacheReadTokens ?? 0)
+    + (usage.cacheWriteTokens ?? 0)
+    + usage.outputTokens
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:70-76" data-expect="Sum disjoint provider usage buckets without double-counting reasoning output.">token-meter/src/index.ts:70-76</code>。这条“互不重叠”的不变量写在类型定义里：</p>
+<blockquote><p><strong>原文</strong>：Counts are DISJOINT: <code class="inl">inputTokens</code> is uncached input only; cached input is reported separately as <code class="inl">cacheReadTokens</code>/<code class="inl">cacheWriteTokens</code> (billed input = sum of the three). Adapters whose providers fold cache hits into a total prompt count (DeepSeek's <code class="inl">prompt_tokens</code>) subtract them out.（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:170-173" data-expect="Counts are DISJOINT">llm/src/types.ts:170-173</code>）。</p></blockquote>
+<p>最后一句是重点：<strong>减去 cache 这件事由适配器做，不是由 meter 做</strong>。适配器是唯一知道厂商原始字段语义的地方。翻译层里就是一张字段映射表：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const keys = { input_tokens: 'inputTokens', output_tokens: 'outputTokens', cache_read_input_tokens: 'cacheReadTokens', cache_creation_input_tokens: 'cacheWriteTokens' } as const</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:36" data-expect="cache_read_input_tokens: 'cacheReadTokens'">llm-deepseek/src/translate.ts:36</code>。上游 Anthropic 兼容端点的四个字段名，直接映到内部四个桶名。labs 的 <code class="inl">normalize_usage</code> 做的是同一件事，但要多处理一种形状（<a href="#hx-05-s5">第 5 节</a>）。</p>
+<h3 id="hx-05-s2-3">回填的边界：锚点什么时候失效</h3>
+<p>“只算增量”要求增量算得对。DSH 的增量是<strong>按当前路由重新定价</strong>的差值，而重新定价只在两边的路由相同时才可比。所以锚点携带了当时的请求信封：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">interface MeasurementAnchor {
+  readonly header: EpochHeader | undefined
+  /** Priced surface immediately before the anchored assistant message commits. */
+  readonly nodes: readonly MeterSurfaceNode[]
+  /** Fixed-heuristic price of the call's provider output. */
+  readonly assistantTokens: number
+  /** Provider usage of the call, when it reported one under a known header. */
+  readonly usage: TokenUsage | undefined
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:52-60" data-expect="interface MeasurementAnchor {">token-meter/src/index.ts:52-60</code>。文档把失效条件列成一条明确的限制：</p>
+<blockquote><p><strong>原文</strong>：Provider usage is only reusable for an identical canonical envelope — tools, provider, model, or call-config changes deliberately fall back to full heuristic estimation.（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/README.md:142" data-expect="only reusable for an identical canonical envelope">token-meter/README.md:142</code>）。</p></blockquote>
+<p>换模型、换工具集、改 <code class="inl">max_tokens</code>，锚点立刻作废，退回全量估算。这是对的：真实的 prompt 大小是不同请求之间最不该被复用的东西。</p>
+
+<h2 id="hx-05-s3">预算怎么切分</h2>
+<p>窗口不是“历史能放多少”。同样一个 200K 的窗口，要先扣掉输出预留，再扣掉安全余量，剩下的才是历史能触顶的位置。labs 把切分显式写成属性，让每一层都能单独检查：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/budget.py::Budget.plan">    <span class="kw">def</span> <span class="fn">plan</span>(
+        self,
+        counter<span class="op">:</span> <span class="cls">Counter</span>,
+        system_prompt<span class="op">:</span> str <span class="op">=</span> <span class="str">""</span>,
+        tool_schemas<span class="op">:</span> list[dict[str, <span class="cls">Any</span>]] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+        messages<span class="op">:</span> list[dict[str, <span class="cls">Any</span>]] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+    ) <span class="op">-&gt;</span> <span class="cls">BudgetPlan</span><span class="op">:</span>
+        <span class="str">"""把窗口切成几块，并给出这次请求的分级。"""</span>
+        system_tokens <span class="op">=</span> counter.count(system_prompt) <span class="kw">if</span> system_prompt <span class="kw">else</span> <span class="num">0</span>
+        tools_tokens <span class="op">=</span> count_tools(counter, tool_schemas <span class="kw">or</span> [])
+        history_tokens <span class="op">=</span> count_messages(counter, messages <span class="kw">or</span> [])
+        used <span class="op">=</span> system_tokens <span class="op">+</span> tools_tokens <span class="op">+</span> history_tokens
+        budget <span class="op">=</span> self.pressure_budget
+        <span class="kw">return</span> <span class="cls">BudgetPlan</span>(
+            context_window<span class="op">=</span>self.context_window,
+            output_reserve<span class="op">=</span>self.output_reserve,
+            safety_margin<span class="op">=</span>self.safety_margin,
+            system_prompt<span class="op">=</span>system_tokens,
+            tool_schemas<span class="op">=</span>tools_tokens,
+            history<span class="op">=</span>history_tokens,
+            message_budget<span class="op">=</span>self.message_budget,
+            pressure_budget<span class="op">=</span>budget,
+            used<span class="op">=</span>used,
+            available_input<span class="op">=</span>budget <span class="op">-</span> used,
+            level<span class="op">=</span>self.level_for(used),
+            ratio<span class="op">=</span>used <span class="op">/</span> budget,
+        )</code></pre></div>
+<p>四层的关系：<code class="inl">message_budget = context_window - output_reserve</code>，<code class="inl">pressure_budget = message_budget - safety_margin</code>，<code class="inl">used = 系统提示 + 工具 schema + 历史</code>，<code class="inl">available_input = pressure_budget - used</code>。<code class="inl">available_input</code> 允许为负——负值表示“还差多少”，不是无意义值，调用方拿它直接算压缩目标。</p>
+<p>DSH 的压缩配置把同样的切分做成了带默认值的策略，并且每一层都有自己的名字。默认余量是 65536：</p>
+<blockquote><p><strong>原文</strong>：<code class="inl">const headroomTokens = config.headroomTokens ?? 65_536</code>（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/config.ts:75" data-expect="config.headroomTokens ?? 65_536">compaction-basic/src/config.ts:75</code>）。</p></blockquote>
+<p>输出预留则取自“这次请求实际会用的 <code class="inl">max_tokens</code>”，而不是某个配置常量：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">function reservedCompletionTokens(agent: Agent, defaultMaxTokens: number | undefined): number {
+  const configured = agent.session.requestHeader()?.config.maxTokens
+  return configured ?? defaultMaxTokens ?? 0
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:65-68" data-expect="function reservedCompletionTokens(agent: Agent, defaultMaxTokens: number | undefined): number {">compaction-basic/src/index.ts:65-68</code>。请求信封自带的上限优先，否则用适配器给该模型的默认值，都没有就不预留——注释解释了为什么必须这样查：厂商把输出和输入算在<strong>同一个窗口</strong>里。</p>
+<p>三级预算的减法在这里写成三段，每一段都带一条自己的报错信息：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const messageBudgetTokens = contextWindow - reservedCompletionTokens
+  if (messageBudgetTokens &lt;= 0) {
+    throw new TargetPressureConfigError(
+      targetKey,
+      `compaction-basic: ${targetKey} reserves ${reservedCompletionTokens} completion tokens `
+      + `of its ${contextWindow}-token context window, leaving no message budget; configure `
+      + "the adapter model's contextWindow above the effective request maxTokens",
+    )
+  }
+  const pressureBudgetTokens = messageBudgetTokens - policy.headroomTokens</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/config.ts:172-181" data-expect="const messageBudgetTokens = contextWindow - reservedCompletionTokens">compaction-basic/src/config.ts:172-181</code>。报错信息里直接写“把适配器的 contextWindow 配到 maxTokens 以上”——配置错误在启动时炸掉，而不是等到某个请求 400 才发现。</p>
+<p>阈值最后取两个数的较小值：按比例算出的窗口分数，与“输出预留和安全余量之后剩下的全部”：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const thresholdTokens = Math.floor(Math.min(
+    contextWindow * policy.thresholdRatio,
+    pressureBudgetTokens,
+  ))</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/config.ts:191-194" data-expect="const thresholdTokens = Math.floor(Math.min(">compaction-basic/src/config.ts:191-194</code>，比例默认 0.8（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/types.ts:11" data-expect="Defaults to `0.8`">compaction-basic/src/types.ts:11</code>）。<code class="inl">Math.min</code> 保证小窗口下不会因为比例太大而越界——比例是软的，预算是硬的。</p>
+<p>工具 schema 是容易被漏掉的一块。它每个请求都全额发送，且与历史无关，所以 DSH 把它单独算：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export function estimateToolsTokens(header: EpochHeader | undefined): number {
+  if (header?.tools === undefined || header.tools.length === 0) return 0
+  return Math.ceil(JSON.stringify(header.tools).length / CHARS_PER_TOKEN) + BLOCK_OVERHEAD
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/estimate.ts:99-102" data-expect="export function estimateToolsTokens(header: EpochHeader | undefined): number {">token-meter/src/estimate.ts:99-102</code>。JSON.stringify 意味着它算的是<strong>序列化之后</strong>的体积，包括括号、引号和键名——这正是模型实际看到的东西。</p>
+<blockquote><p><strong>不变量</strong>：<code class="inl">Budget.plan</code> 算出的 <code class="inl">used</code> 必须等于三个组成项之和，且 <code class="inl">available_input</code> 等于预算减 <code class="inl">used</code>。测试 <code class="inl">labs/tests/test_budget.py</code> 里的 <code class="inl">test_available_input_subtracts_every_consumer</code> 逐项检查。运行：<code class="inl">py -m unittest discover -s labs/tests -t labs -p "test_budget.py"</code>。</p></blockquote>
+
+<h2 id="hx-05-s4">分级信号：什么时候该压缩</h2>
+<p>预算算出来只是一个数，决策需要的是一个级别。labs 分四档，对应四种动作：正常继续、先发一次提示、压缩或拒绝、直接拒绝。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/budget.py::Budget.level_for">    <span class="kw">def</span> <span class="fn">level_for</span>(self, used<span class="op">:</span> int) <span class="op">-&gt;</span> <span class="cls">Level</span><span class="op">:</span>
+        <span class="str">"""分级：正常 / 接近上限 / 必须压缩 / 已经放不下。
+
+        四个档位对应四种决策：继续、先发一次提示、压缩或拒绝、直接拒绝。
+        """</span>
+        <span class="kw">if</span> used <span class="op">&gt;</span> self.pressure_budget<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"overflow"</span>
+        <span class="kw">if</span> used <span class="op">&gt;=</span> self.pressure_budget <span class="op">*</span> self.hard_ratio<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"must_compact"</span>
+        <span class="kw">if</span> used <span class="op">&gt;=</span> self.pressure_budget <span class="op">*</span> self.near_limit_ratio<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"near_limit"</span>
+        <span class="kw">return</span> <span class="str">"ok"</span></code></pre></div>
+<p>阈值是参数（<code class="inl">near_limit_ratio</code> 默认 0.8、<code class="inl">hard_ratio</code> 默认 0.95，都是<strong>教学示意</strong>），<code class="inl">__post_init__</code> 校验 <code class="inl">0 &lt; near_limit_ratio &lt; hard_ratio &lt;= 1</code>——档位顺序写反了在构造时就报错，而不是等到某次请求给出自相矛盾的信号。跟 <a href="#hx-01">hx-01</a> 的停止条件一样，这里也把“判定”和“动作”分开：<code class="inl">level_for</code> 只读不写，返回一个字符串。</p>
+<p>DSH 的对应物是压缩触发点。<code class="inl">measure()</code> 的结果拿去和一个阈值比，比不过就返回 <code class="inl">null</code>（不压缩）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">const spec = resolveCompactSpec(
+  policy,
+  info.context.contextWindow,
+  reservedCompletionTokens(agent, info.defaultMaxTokens),
+)
+if (measurement.totalTokens &lt; spec.thresholdTokens) return null</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:314-319" data-expect="const spec = resolveCompactSpec(">compaction-basic/src/index.ts:314-319</code>。窗口从 <code class="inl">resolveModelInfo</code> 拿，拿不到就直接抛错，<strong>不猜</strong>：</p>
+<blockquote><p><strong>原文</strong>：<code class="inl">compaction-basic: no context capacity for ${targetKey}; configure contextWindow on that adapter model</code>（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:307-312" data-expect="if (info.context === undefined) {">compaction-basic/src/index.ts:307-312</code>）。</p></blockquote>
+<p>对比 OpenHarness 的做法：窗口靠猜（<code class="inl">compact/__init__.py:1065</code>），阈值靠减：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    reserved <span class="op">=</span> min(<span class="cls">MAX_OUTPUT_TOKENS_FOR_SUMMARY</span>, <span class="num">20_000</span>)
+    effective <span class="op">=</span> context_window <span class="op">-</span> reserved
+    <span class="kw">return</span> effective <span class="op">-</span> <span class="cls">AUTOCOMPACT_BUFFER_TOKENS</span></code></pre></div>
+<p><code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:1090-1092" data-expect="reserved = min(MAX_OUTPUT_TOKENS_FOR_SUMMARY, 20_000)">compact/__init__.py:1090-1092</code>。预留输出取 <code class="inl">min(20000, ...)</code>，再减掉一段固定缓冲 <code class="inl">AUTOCOMPACT_BUFFER_TOKENS = 13_000</code>（<code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:55" data-expect="AUTOCOMPACT_BUFFER_TOKENS = 13_000">compact/__init__.py:55</code>）。没有比例阈值，就是一个绝对值的减法。触发判定是一行比较：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    token_count <span class="op">=</span> estimate_message_tokens(messages)
+    threshold <span class="op">=</span> get_autocompact_threshold(
+        model,
+        context_window_tokens<span class="op">=</span>context_window_tokens,
+        auto_compact_threshold_tokens<span class="op">=</span>auto_compact_threshold_tokens,
+    )
+    <span class="kw">return</span> token_count <span class="op">&gt;=</span> threshold</code></pre></div>
+<p><code class="inl src-ref" data-src="oh:src/openharness/services/compact/__init__.py:1106-1112" data-expect="token_count = estimate_message_tokens(messages)">compact/__init__.py:1106-1112</code>。注意 <code class="inl">&gt;=</code>：阈值本身算“该压了”，和 labs 的闭区间一致。</p>
+<p>OpenHarness 还有第三种信号，值得一提：它不只看自己估的数，还接住厂商的报错。识别“prompt 过长”靠一长串子串匹配（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:66-87" data-expect="def _is_prompt_too_long_error(exc: Exception) -&gt; bool:">query.py:66-87</code>），命中就做一次<strong>反应式压缩</strong>，而且只做一次：</p>
+<blockquote><p><strong>原文</strong>：<code class="inl">if not reactive_compact_attempted and _is_prompt_too_long_error(exc):</code>（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:768" data-expect="if not reactive_compact_attempted and _is_prompt_too_long_error(exc):">query.py:768</code>），配合 <code class="inl">MAX_PTL_RETRIES = 3</code> 这类上限。</p></blockquote>
+<p>这是估算失败时的兜底，不是主要路径——但它暴露了估算型 harness 的通用结构：<strong>主动信号（自己算）和被动信号（厂商报错）本来就需要各有一套</strong>，因为前者可能算错，后者只有在已经浪费一次请求之后才会出现。</p>
+
+<h2 id="hx-05-s5">用量账本与成本</h2>
+<p>预算管的是“能不能发出去”，账本管的是“发出去花了多少”。两者用同一批 usage 数据，但职责不同：预算吃估算值（要快），账本只吃 provider 的真实值（要对得上账）。</p>
+<p>第一步是归一化。同一个概念在不同厂商有不同的字段名，还有一种形状差异需要处理：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/budget.py::normalize_usage"><span class="kw">def</span> <span class="fn">normalize_usage</span>(raw<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> dict[str, int]<span class="op">:</span>
+    <span class="str">"""把厂商 usage 归一化成四个桶：input / output / cache_read / cache_write。
+
+    Anthropic 的三个输入桶互不重叠（input_tokens 只是未命中缓存的部分），
+    所以原样搬运即可。OpenAI 的 prompt_tokens 已经把命中缓存的量算在里面，
+    要减掉，否则成本会被重复计入。
+    """</span>
+    <span class="kw">if</span> <span class="kw">not</span> raw<span class="op">:</span>
+        <span class="kw">return</span> {<span class="str">"input"</span><span class="op">:</span> <span class="num">0</span>, <span class="str">"output"</span><span class="op">:</span> <span class="num">0</span>, <span class="str">"cache_read"</span><span class="op">:</span> <span class="num">0</span>, <span class="str">"cache_write"</span><span class="op">:</span> <span class="num">0</span>}
+
+    <span class="cmt"># 形状判定按「有没有 Anthropic 风格的 input_tokens」，不按有没有缓存字段：</span>
+    <span class="cmt"># 一次未命中任何缓存的响应里，两个 cache 字段都不会出现。</span>
+    <span class="kw">if</span> <span class="str">"input_tokens"</span> <span class="kw">in</span> raw <span class="kw">or</span> <span class="str">"output_tokens"</span> <span class="kw">in</span> raw<span class="op">:</span>
+        <span class="kw">return</span> {
+            <span class="str">"input"</span><span class="op">:</span> int(raw.get(<span class="str">"input_tokens"</span>, <span class="num">0</span>) <span class="kw">or</span> <span class="num">0</span>),
+            <span class="str">"output"</span><span class="op">:</span> int(raw.get(<span class="str">"output_tokens"</span>, <span class="num">0</span>) <span class="kw">or</span> <span class="num">0</span>),
+            <span class="str">"cache_read"</span><span class="op">:</span> int(raw.get(<span class="str">"cache_read_input_tokens"</span>, <span class="num">0</span>) <span class="kw">or</span> <span class="num">0</span>),
+            <span class="str">"cache_write"</span><span class="op">:</span> int(raw.get(<span class="str">"cache_creation_input_tokens"</span>, <span class="num">0</span>) <span class="kw">or</span> <span class="num">0</span>),
+        }
+
+    prompt <span class="op">=</span> int(raw.get(<span class="str">"prompt_tokens"</span>, <span class="num">0</span>) <span class="kw">or</span> <span class="num">0</span>)
+    details <span class="op">=</span> raw.get(<span class="str">"prompt_tokens_details"</span>) <span class="kw">or</span> {}
+    cache_read <span class="op">=</span> int(details.get(<span class="str">"cached_tokens"</span>, <span class="num">0</span>) <span class="kw">or</span> <span class="num">0</span>)
+    <span class="kw">return</span> {
+        <span class="str">"input"</span><span class="op">:</span> max(<span class="num">0</span>, prompt <span class="op">-</span> cache_read),
+        <span class="str">"output"</span><span class="op">:</span> int(raw.get(<span class="str">"completion_tokens"</span>, <span class="num">0</span>) <span class="kw">or</span> <span class="num">0</span>),
+        <span class="str">"cache_read"</span><span class="op">:</span> cache_read,
+        <span class="str">"cache_write"</span><span class="op">:</span> <span class="num">0</span>,
+    }</code></pre></div>
+<p>那个形状判定条件是个实战细节：最初的写法判断“有没有 cache 字段”，结果一次未命中任何缓存的 Anthropic 响应（两个 cache 字段都不存在）被当成了 OpenAI 形状，<code class="inl">input_tokens</code> 被读成 0，账本全是零。测试 <code class="inl">test_anthropic_shape</code> 覆盖不到它，因为那个用例特意带了缓存字段——所以 <code class="inl">test_accumulates_across_turns</code> 用的是最朴素的 <code class="inl">{input_tokens, output_tokens}</code>。这个 bug 是写这一章时真踩到的。</p>
+<p>账本按轮次汇总，并保留每次计费调用的明细：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/budget.py::UsageLedger.record_usage">    <span class="kw">def</span> <span class="fn">record_usage</span>(self, raw_usage<span class="op">:</span> dict[str, <span class="cls">Any</span>], calls<span class="op">:</span> int <span class="op">=</span> <span class="num">1</span>) <span class="op">-&gt;</span> dict[str, int]<span class="op">:</span>
+        <span class="str">"""记一次响应。`calls` 用于一次响应里含多次计费调用的情况（例如重试）。"""</span>
+        buckets <span class="op">=</span> normalize_usage(raw_usage)
+        <span class="kw">if</span> calls <span class="op">&gt;</span> <span class="num">1</span><span class="op">:</span>
+            buckets <span class="op">=</span> {key<span class="op">:</span> value <span class="op">*</span> calls <span class="kw">for</span> key, value <span class="kw">in</span> buckets.items()}
+        self.total <span class="op">=</span> _add(self.total, buckets)
+        self.per_turn[self.turn] <span class="op">=</span> _add(self.per_turn.get(self.turn, {
+            <span class="str">"input"</span><span class="op">:</span> <span class="num">0</span>, <span class="str">"output"</span><span class="op">:</span> <span class="num">0</span>, <span class="str">"cache_read"</span><span class="op">:</span> <span class="num">0</span>, <span class="str">"cache_write"</span><span class="op">:</span> <span class="num">0</span>,
+        }), buckets)
+        self.attempts.append({<span class="str">"turn"</span><span class="op">:</span> self.turn, <span class="str">"calls"</span><span class="op">:</span> calls, <span class="op">**</span>buckets})
+        <span class="kw">return</span> buckets</code></pre></div>
+<p>为什么要有 <code class="inl">calls</code> 参数：一次重试是<strong>两次计费</strong>。DSH 把这件事放进了投影单元的名称里：<code class="inl">llm/retry-started</code> 会关闭上一份用量样本的替换槽，让重试的那次另算一笔：</p>
+<blockquote><p><strong>原文</strong>：A final assistant-message sample replaces streaming usage from the same attempt; <code class="inl">llm/retry-started</code> ends that replacement scope, so a retry in the same step contributes another billed attempt.（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/README.md:49" data-expect="contributes another billed attempt">token-meter/README.md:49</code>）。</p></blockquote>
+<p>投影的具体实现是“同一 (turn, step) 内后者替换前者，超出这个范围就累加”：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    if (event.type === 'llm/retry-started') {
+      return state.last?.turn === event.data.turn &amp;&amp; state.last.step === event.data.step
+        ? { ...state, last: null }
+        : state
+    }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/usage-projection.ts:123-127" data-expect="if (event.type === 'llm/retry-started') {">usage-projection.ts:123-127</code>。清空替换槽之后，重试的样本落进来时 <code class="inl">previous</code> 是空的，于是走加法而不是减法。</p>
+<p>成本必须按四个桶分开算，因为缓存读和缓存写的单价和未命中输入不是一个量级。labs 把单价做成必传参数：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/budget.py::Prices.cost">    <span class="kw">def</span> <span class="fn">cost</span>(self, buckets<span class="op">:</span> dict[str, int]) <span class="op">-&gt;</span> float<span class="op">:</span>
+        <span class="kw">return</span> (
+            buckets.get(<span class="str">"input"</span>, <span class="num">0</span>) <span class="op">*</span> self.input
+            <span class="op">+</span> buckets.get(<span class="str">"output"</span>, <span class="num">0</span>) <span class="op">*</span> self.output
+            <span class="op">+</span> buckets.get(<span class="str">"cache_read"</span>, <span class="num">0</span>) <span class="op">*</span> self.cache_read
+            <span class="op">+</span> buckets.get(<span class="str">"cache_write"</span>, <span class="num">0</span>) <span class="op">*</span> self.cache_write
+        ) <span class="op">/</span> <span class="num">1_000_000</span></code></pre></div>
+<p>价格绝不写死。写死的那一刻，账单就变成了过期的账单——而且没人会记得回来改。OpenHarness 干脆完全不算钱，<code class="inl">CostTracker</code> 只累加两个整数：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    <span class="kw">def</span> <span class="fn">add</span>(self, usage<span class="op">:</span> <span class="cls">UsageSnapshot</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="str">"""Add a usage snapshot to the running total."""</span>
+        self._usage <span class="op">=</span> <span class="cls">UsageSnapshot</span>(
+            input_tokens<span class="op">=</span>self._usage.input_tokens <span class="op">+</span> usage.input_tokens,
+            output_tokens<span class="op">=</span>self._usage.output_tokens <span class="op">+</span> usage.output_tokens,
+        )</code></pre></div>
+<p><code class="inl src-ref" data-src="oh:src/openharness/engine/cost_tracker.py:14-19" data-expect="def add(self, usage: UsageSnapshot) -&gt; None:">engine/cost_tracker.py:14-19</code>。它甚至连缓存桶都没有——<code class="inl">UsageSnapshot</code> 只有 <code class="inl">input_tokens</code> 和 <code class="inl">output_tokens</code> 两个字段（<code class="inl src-ref" data-src="oh:src/openharness/api/usage.py:11-12" data-expect="input_tokens: int = 0">api/usage.py:11-12</code>）。这在只用 Anthropic 直接端点、不开 prompt cache 的部署里没问题，但一旦命中缓存，两边的账都对不上。</p>
+<p>OpenHarness 的 usage 每次响应重置一次再取最后一个事件的值，也就是<strong>只保留最近一次</strong>：</p>
+<blockquote><p><strong>原文</strong>：<code class="inl">usage = UsageSnapshot()</code>（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:725" data-expect="usage = UsageSnapshot()">query.py:725</code>），流结束时 <code class="inl">usage = event.usage</code>（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:752" data-expect="usage = event.usage">query.py:752</code>）。</p></blockquote>
+<p>累加是别人的事：调用方把每次的 snapshot 交给 <code class="inl">CostTracker.add</code>。分工清楚，但中间的每一步都要有人接住——漏接一次，账本就少一笔。DSH 用会话日志解决这个问题：用量是<strong>事件</strong>，投影单元从日志重放出来，不需要任何人“记得上报”。</p>
+
+<h2 id="hx-05-s6">多仓库取舍对比</h2>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th><th>Agent_Memory_Techniques</th></tr></thead><tbody>
+<tr><td>计数器</td><td>固定启发式 4 字符 / token + 块与角色结构开销（<code class="inl">estimate.ts:13</code>）</td><td><code class="inl">(len+3)//4</code> 向上取整，非空至少 1，汇总再乘 4/3 填充</td><td>数<strong>字符</strong>：<code class="inl">len(json.dumps(messages))</code>（<code class="inl">s08_context_compact/code.py:270</code>）</td><td>真分词器：<code class="inl">tiktoken</code> 按模型选 encoding（<code class="inl">05_token_buffer_memory.ipynb:221</code>）</td></tr>
+<tr><td>校准</td><td>provider usage 当锚点，仅信封逐字相同时复用，增量仍按启发式</td><td>不用 usage 校准，改用 4/3 填充换取保守</td><td>无校准</td><td>无校准（但计数本身准）</td></tr>
+<tr><td>窗口来源</td><td>适配器声明，经 <code class="inl">resolveModelInfo().context</code> 读，缺失即报错</td><td>按模型名猜，环境变量可覆盖，默认 200K</td><td>无窗口概念，只有字符阈值</td><td>调用方自己传 <code class="inl">max_token_limit</code></td></tr>
+<tr><td>预算切分</td><td>输出预留 + headroom + 比例阈值，三层各带报错</td><td>固定缓冲 13K，绝对减法</td><td>单个字符阈值 50000</td><td>窗口 减 系统提示 减 回复预算，纯手工</td></tr>
+<tr><td>超限信号</td><td>比值分级，压缩插件读 measure() 决定</td><td>估算超阈值自动压缩 + 反应式压缩兜底（最多重试有限次）</td><td>估算超阈值做压缩，<code class="inl">MAX_REACTIVE_RETRIES = 1</code></td><td>驱逐最旧消息直到装下</td></tr>
+<tr><td>用量账本</td><td>会话投影：从日志重放，四个桶齐全，含缓存读写</td><td><code class="inl">CostTracker</code> 只有 input/output 两个字段</td><td>只有两处按需统计（<code class="inl">s16</code>、<code class="inl">s17</code>），且只算总和</td><td>不看 usage，只看自己数出来的 token</td></tr>
+<tr><td>成本计算</td><td>不含（meter 只报数，价格由消费方定）</td><td>不含</td><td>无（<code class="inl">Budget</code> 限的是 token 不是钱）</td><td>不含</td></tr>
+<tr><td>代价</td><td>测量是 O(当前 surface)，每次 measure 都克隆节点</td><td>33% 高估，压缩触发偏早，多花摘要调用</td><td>字符数与 token 数在中文上差 1 倍以上</td><td>依赖 tiktoken，计数准但预算全是手工参数</td></tr>
+</tbody></table></div>
+<p>一句话概括：DSH 把“准确的窗口”和“可能不准的计数”组合起来，用锚点把误差锁在增量里；OpenHarness 两个都不准，于是把阈值压得更低来买安全；learn-claude-code 是教学实现，用字符数图省事；Agent_Memory_Techniques 是唯一把计数做准的，但把预算切分的活全留给了使用者。</p>
+<p>还有一条只有 DSH 做了的事：它把「一次 turn 的精确用量」单独抽成纯函数，且<strong>证据不全就拒绝给数</strong>。缺失的生命周期边界、不完整的 attempt、不安全的计数、互相矛盾的 total，任何一个出现，整个结果就是 <code class="inl">undefined</code>：</p>
+<blockquote><p><strong>原文</strong>：No attempt is inferred from a usage sample. Any missing lifecycle boundary, incomplete attempt usage, unsafe count, or contradictory exact total makes the whole disclosure unavailable.（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/turn-usage.ts:172-175" data-expect="No attempt is inferred from a usage sample.">turn-usage.ts:171-174</code>）。</p></blockquote>
+<p>这是仪表盘和图表的正确态度：宁可显示“无数据”，不要显示一个自己都不信的数。</p>
+
+<h2 id="hx-05-s7">坑与失败案例</h2>
+<h3 id="hx-05-s7-1">坑 1：把 cache 命中量重复计入</h3>
+<p><strong>触发条件</strong>：厂商的 usage 里 <code class="inl">prompt_tokens</code> 已经把命中缓存的部分算在内，而账本又单独加了一次 <code class="inl">cached_tokens</code>。</p>
+<p><strong>后果</strong>：prompt 越大、缓存命中越多，虚报越严重。开了 prompt cache 的部署里，账单会成倍偏大，而成本估算偏高通常没人会去查——它看起来“只是保守”。</p>
+<p><strong>源码怎么防的</strong>：DSH 把“互不重叠”写进类型注释，并把减法<strong>指定给适配器</strong>：</p>
+<blockquote><p><strong>原文</strong>：Adapters whose providers fold cache hits into a total prompt count (DeepSeek's <code class="inl">prompt_tokens</code>) subtract them out.（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:172-175" data-expect="Adapters whose providers fold cache hits into a total">llm/src/types.ts:172-173</code>）。</p></blockquote>
+<p>labs 的 <code class="inl">normalize_usage</code> 在归一化时减：<code class="inl">"input": max(0, prompt - cache_read)</code>。减完再 <code class="inl">max(0, ...)</code> 兜底，防止脏数据把 <code class="inl">input</code> 变成负数。注意 OpenHarness 没有防——它根本没有缓存桶，命中缓存的部分被当成 input 全额计入。</p>
+<h3 id="hx-05-s7-2">坑 2：估算偏低，压缩来得太晚</h3>
+<p><strong>触发条件</strong>：中文语料 + 大工具 schema（JSON）走 4 字符 / token 的估算。<code class="inl">int</code> 里的方括号、引号、<code class="inl">type</code> 字段名，在分词器眼里都占 token。</p>
+<p><strong>后果</strong>：真实占用比估出来的高出一大截，压缩信号迟迟不触发，直到某次请求直接 400。整轮推理作废，重试时还得先压缩——等于把成本付了两遍。</p>
+<p><strong>源码怎么防的</strong>：DSH 的选择是不防估算误差、但<strong>承认它并限制它的传播范围</strong>——真实值当锚点，只有锚点之后的变化量按启发式算，所以误差不会随轮数累积：</p>
+<blockquote><p><strong>原文</strong>：Present the composition rows as an approximate composition, never as a total.（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/README.md:154" data-expect="never as a total">token-meter/README.md:154</code>）。</p></blockquote>
+<p>OpenHarness 的方向相反：用 4/3 填充把估算<strong>系统性抬高</strong>。这也是防——用早触发换不爆窗口。两种取舍都可以接受，危险的是第三种：既不校准、也不留余量，还相信自己数出来的数。</p>
+<h3 id="hx-05-s7-3">坑 3：形状判定太窄，账本静默归零</h3>
+<p><strong>触发条件</strong>：按“有没有缓存字段”区分厂商 usage 形状。一次没命中任何缓存的响应里，<code class="inl">cache_read_input_tokens</code> 和 <code class="inl">cache_creation_input_tokens</code> 都不出现。</p>
+<p><strong>后果</strong>：Anthropic 形状的响应走进 OpenAI 分支，<code class="inl">prompt_tokens</code> 取不到，<code class="inl">input</code> 记成 0。账本安静地全零，不报错。这类 bug 特别难发现，因为“估算/预算”部分全都正常，只有对账时才看得出。</p>
+<p><strong>源码怎么防的</strong>：labs 改成按供应商独有的<strong>必需字段</strong>判定（<code class="inl">input_tokens</code> / <code class="inl">output_tokens</code>），并且测试用最朴素的响应形状：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_budget.py::UsageLedgerTest.test_accumulates_across_turns">    <span class="kw">def</span> <span class="fn">test_accumulates_across_turns</span>(self)<span class="op">:</span>
+        self.ledger.record_usage({<span class="str">"input_tokens"</span><span class="op">:</span> <span class="num">1_000</span>, <span class="str">"output_tokens"</span><span class="op">:</span> <span class="num">100</span>})
+        self.ledger.new_turn()
+        self.ledger.record_usage({<span class="str">"input_tokens"</span><span class="op">:</span> <span class="num">2_000</span>, <span class="str">"output_tokens"</span><span class="op">:</span> <span class="num">200</span>})
+        self.assertEqual(self.ledger.total[<span class="str">"input"</span>], <span class="num">3_000</span>)
+        self.assertEqual(self.ledger.total[<span class="str">"output"</span>], <span class="num">300</span>)
+        self.assertEqual(self.ledger.tokens_at_turn(<span class="num">1</span>)[<span class="str">"input"</span>], <span class="num">1_000</span>)
+        self.assertEqual(self.ledger.tokens_at_turn(<span class="num">2</span>)[<span class="str">"input"</span>], <span class="num">2_000</span>)</code></pre></div>
+<p>教训可以推广：<strong>形状判定的依据必须是“这种形状一定有的字段”，不是“某种形状可能有的字段”</strong>。DSH 的做法更彻底——它不认识形状，形状差异在适配器里被抹平，meter 只看到内部类型。</p>
+<h3 id="hx-05-s7-4">坑 4：重试的用量没另算一笔</h3>
+<p><strong>触发条件</strong>：一个 step 里发生重试，账本把两次 attempt 当成同一次调用，只记了后一次。</p>
+<p><strong>后果</strong>：账本比账单小。重试率高的部署里，偏差能达到一倍——而且方向很“安慰”：你以为成本可控。</p>
+<p><strong>源码怎么防的</strong>：DSH 用 <code class="inl">llm/retry-started</code> 显式关闭替换槽，让重试另立一笔（<code class="inl">usage-projection.ts:123-127</code>）；labs 用 <code class="inl">record_usage(..., calls=2)</code> 在调用点把倍数说清楚。判断标准很简单：<strong>厂商按调用计费，账本就必须按调用记账</strong>，不管这几次调用是不是属于同一个逻辑步骤。</p>
+<h3 id="hx-05-s7-5">坑 5：只归档“最后一份”用量样本</h3>
+<p><strong>触发条件</strong>：循环每轮把 usage 变量重置，只把最后一个事件的值交出去。</p>
+<p><strong>后果</strong>：任何一处忘了上报就永久丢失，账本无法重放核对。OpenHarness 里的 <code class="inl">usage = UsageSnapshot()</code>（<code class="inl">query.py:725</code>）就是这个形状——它本身没问题，但正确性依赖调用链上每一环都接住。</p>
+<p><strong>源码怎么防的</strong>：DSH 的选择是把用量变成<strong>事件</strong>，投影从会话日志重放，谁读谁算，不依赖“有人记得上报”。代价是日志里必须记全（这也是 DSH 那条“Model-visible means logged”的另一面）。</p>
+
+<h2 id="hx-05-s8">把它接进循环</h2>
+<p>本章的模块在 labs 里是独立的：它不认识 <code class="inl">run_agent</code>，也不知道工具怎么执行。接法是三处：</p>
+<ol>
+<li><strong>发请求前</strong>：<code class="inl">plan()</code> 一次，拿到 <code class="inl">level</code>。<code class="inl">ok</code> 直接发；<code class="inl">near_limit</code> 发出去并提示；<code class="inl">must_compact</code> / <code class="inl">overflow</code> 先压缩再发——压缩策略见 <a href="#hx-07">hx-07</a>。<code class="inl">available_input</code> 为负时，它就是要压掉的目标量。</li>
+<li><strong>响应回来时</strong>：<code class="inl">ledger.record_usage(turn.usage)</code>。<code class="inl">labs/harness/messages.py</code> 的 <code class="inl">AssistantTurn.usage</code> 已经放好了归一化前的原始字典，适配器不动它。</li>
+<li><strong>下一轮开始前</strong>：<code class="inl">ledger.new_turn()</code>。轮号与 <code class="inl">run_agent</code> 的 <code class="inl">turns</code> 计数口径一致（见 <a href="#hx-01">hx-01</a> 的术语框）。</li>
+</ol>
+<p>有两条纪律值得单独写下来。第一，<strong>预算用估算值，账本用真实值</strong>，不要把两者混在一个字段里——一旦混了，你既不知道预算为什么触发，也不知道账为什么对不上。第二，<strong>估算的系数和阈值都必须是参数</strong>，写死等于把配置债务藏进代码，等模型一换代就全部失效。</p>
+<p>下一章 <a href="#hx-06">hx-06</a> 会用到这里的两个桶：<code class="inl">cache_read</code> 和 <code class="inl">cache_write</code>。缓存能不能省钱，取决于命中率——而命中率只有靠这两个桶分别统计才看得出来。</p>
+</section>

@@ -62,6 +62,13 @@ def lab_source(ref: str) -> str:
             break
         scope = node.body
     if node is None and "." not in name:
+        # 模块级常量（如提示词模板）：`NAME = ...` / `NAME: T = ...`
+        for stmt in module_body:
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target] if isinstance(stmt, ast.AnnAssign) else []
+            if any(isinstance(t, ast.Name) and t.id == name for t in targets):
+                node = stmt
+                break
+    if node is None and "." not in name:
         # 没写类名的方法：在所有顶层类里找，必须唯一，避免摘错同名方法
         hits = [m for c in module_body if isinstance(c, ast.ClassDef)
                 for m in c.body if isinstance(m, defs) and m.name == name]
@@ -70,7 +77,7 @@ def lab_source(ref: str) -> str:
             raise KeyError(f"{file} 里有 {len(hits)} 个 {name}，请写成 类名.{name}")
     if node is None:
         raise KeyError(f"{file} 里没有 {name}")
-    start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+    start = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
     return "\n".join(text.splitlines()[start - 1 : node.end_lineno])
 
 
@@ -215,6 +222,11 @@ def render_chapter(draft: str, chapter_id: str, label: str) -> tuple[str, str, l
         return f'<code class="lang-python" data-lab="{ref}">{highlight_python(lab_source(ref))}</code>'
 
     body = LAB_BLOCK.sub(lab_repl, body)
+    # 不带 data-lab 的 Python 块是其他仓库的逐字摘录（紧跟 src-ref），只转义 + 高亮，不和 labs 比对
+    body = re.sub(
+        r'<code class="lang-python">(.*?)</code>',
+        lambda m: f'<code class="lang-python">{highlight_python(html.unescape(TAG.sub("", m.group(1))))}</code>',
+        body, flags=re.S)
     body = SOURCE_BLOCK.sub(escape_source_block, body)
     # 属性值里的尖括号（如 data-expect 引用的泛型）浏览器不会当标签，扫描前先去掉属性值
     tag_text = re.sub(r'="[^"]*"', '=""', body)

@@ -1,0 +1,634 @@
+<div class="book-scope">
+<section class="chapter" id="ch-dsh-02" data-slug="dsh-02"><div class="ch-head"><span class="ch-num">第 2 章</span></div><h1 id="dsh-02">LLM 层：provider 适配、流式组装与重试</h1>
+<p>前两章讲了 DSH 的整体形状（<a href="#/dsh?section=dsh-00">导读</a>）和插件怎么接成运行时（<a href="#/dsh?section=dsh-01">Cordis 与装配</a>）。这一章下沉一层，讲一条请求真正离开进程之前经过的那三个包：<strong>provider 无关的接口</strong>（<code class="inl">llm/llm</code>）、<strong>一个具体 provider 的翻译层</strong>（<code class="inl">llm/llm-deepseek</code>）、以及挂在循环扩展点上的<strong>重试执行器</strong>（<code class="inl">llm/llm-retry</code>）。全部结论基于 commit <code class="inl">d743267388641bc76f17c45ce8b4c231aed1d32c</code>。</p>
+<p>对写 Python 的人，这一章有一个统一的对照物：你在 <code class="inl">openai</code> / <code class="inl">anthropic</code> SDK 上包过的那一层 <code class="inl">class LLMClient</code>。DSH 做的事差不多，但把三件通常混在一起的事拆开了——<strong>协议翻译</strong>（适配器）、<strong>协议之上的统一词汇</strong>（<code class="inl">llm</code> 服务）、<strong>失败之后怎么办</strong>（重试策略与重试执行器分属两个包）。拆开的代价是文件更多；好处是同一个重试执行器能给所有 provider 用，而每家 provider 的超时判定、错误分类、退避偏好仍然是它自己的事。</p>
+
+<h2 id="dsh-02-s1">provider 无关的词汇表：请求、块、结束原因、用量</h2>
+<p><code class="inl">packages/llm/llm/src/types.ts</code> 开头的注释把这一层的职责写死了：它是一份"循环、会话日志和插件共用的 provider 无关词汇"，<strong>只有适配器负责翻译 provider 的线上消息</strong>（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:2" data-expect=" * Canonical provider-neutral message and streaming vocabulary for the loop,">llm/src/types.ts:2</code>）。这句话值得停一下：它意味着循环、压缩、token 计量、UI 全都不该 <code class="inl">if provider === 'deepseek'</code>，任何 provider 差异必须在适配器里被消化掉。</p>
+
+<h3 id="dsh-02-s1-1">请求：GenerateOptions</h3>
+<p>一次模型请求的全部输入是一个 <code class="inl">GenerateOptions</code>。最要紧的几条：<code class="inl">provider</code> + <code class="inl">model</code> 定位路由；<code class="inl">messages</code> 是"provider 看到的那份历史"；<code class="inl">tools</code> 是 JSON-schema 声明的工具表；<code class="inl">sessionId</code> 只用于路由和回放，适配器最多把它塞进模型看不见的传输头里（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:543" data-expect="   * Session identity stamped by the loop for request routing. Replay uses it">llm/src/types.ts:543</code>）。</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** A single model request, fully assembled. */
+export interface GenerateOptions {
+  /** Registered provider route selecting the adapter instance. */
+  provider: string
+  model: string
+  /** Adapter-owned reasoning effort selected for this exact model. */
+  reasoningEffort?: ReasoningEffortId
+  /**
+   * Ordered conversation messages, exactly as the provider sees them. A
+   * loop-built request passes the derived history (dsh-agent-loop), whose
+   * leading system-role message carries the system prompt; a hand-built
+   * one-shot may include identity-free user inputs.
+   */
+  messages: RequestMessage[]
+  /**
+   * System prompt text for one-shot callers; adapters map it to the provider's
+   * system slot ahead of `messages`. Loop-built requests leave it undefined.
+   */
+  system?: string
+  /** Tool schemas (adapters map to the provider's `tools` field). */
+  tools?: ToolSchema[]
+  /** Session-folded tool history used for route projection; omission sends complete declarations without tool updates. */
+  toolHistory?: ToolHistory
+  temperature?: number
+  maxTokens?: number</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:510" data-expect="/** A single model request, fully assembled. */">llm/src/types.ts:510-534</code>（省略处对应同文件第 535–553 行）</p>
+<p><code class="inl">purpose</code> 是这一层里一个小而关键的字段：<code class="inl">'compaction' | 'session-title'</code>，把"这次调用不是正常对话"这件事用 provider 无关的方式标出来，适配器可以据此加传输头（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:552" data-expect="  purpose?: 'compaction' | 'session-title'">llm/src/types.ts:552</code>）。DeepSeek 适配器就把它变成 <code class="inl">x-deepseek-harness-compact: 1</code>。</p>
+
+<h3 id="dsh-02-s1-2">内容块：一张可扩展的 type → block 表</h3>
+<p>消息内容是块数组，块类型不是硬编码的联合，而是一张<strong>可以被插件扩充的表</strong>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export interface ContentBlockMap {
+  'text': TextBlock
+  'reasoning': ReasoningBlock
+  'image': ImageBlock
+  'file': FileBlock
+  'tool-call': ToolCallBlock
+  'tool-addition': ToolAdditionBlock
+  'tool-removal': ToolRemovalBlock
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:137" data-expect="export interface ContentBlockMap {">llm/src/types.ts:137-145</code></p>
+<p>这张表里有两类东西要分开看。<strong>一类是内容</strong>：<code class="inl">text</code>、<code class="inl">reasoning</code>（思考，与可见文本故意分开）、<code class="inl">image</code>、<code class="inl">file</code>、<code class="inl">tool-call</code>。<strong>另一类是工具表的变化</strong>：<code class="inl">tool-addition</code> / <code class="inl">tool-removal</code> 只出现在 developer 消息里，记录"这一步起工具表变了"，让适配器可以只发增量而不是重发整张表（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:134" data-expect=" * with adapter, UI, and compaction support. Tool-change blocks belong to">llm/src/types.ts:134</code>）。</p>
+<p>工具调用块本身只有三个字段，注意 <code class="inl">arguments</code> 是<strong>模型产出的原始 JSON 字符串</strong>，不是解析后的对象（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:110" data-expect="  /** Raw JSON string as produced by the model. */">llm/src/types.ts:110</code>）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** A tool invocation requested by the model. */
+export interface ToolCallBlock {
+  type: 'tool-call'
+  /** Provider-issued call id; correlates with the matching tool result. */
+  id: ToolCallId
+  name: string
+  /** Raw JSON string as produced by the model. */
+  arguments: string
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:104" data-expect="/** A tool invocation requested by the model. */">llm/src/types.ts:104-112</code></p>
+<p>这个选择有后果：截断的 tool-call（JSON 只发了一半）在内部表示上仍然是<strong>合法的块</strong>，处理它的人必须自己判断字符串能不能解析。后面"坑 3"就出在这里。</p>
+
+<h3 id="dsh-02-s1-3">流式 chunk 与结束原因</h3>
+<p>适配器往外吐的不是完整消息，而是一串 <code class="inl">StreamChunk</code>。协议很短，五条：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export type StreamChunk =
+  | { type: 'block-start'; index: number; blockType: ContentBlockType }
+  | { type: 'text-delta'; index: number; text: string }
+  | { type: 'reasoning-delta'; index: number; text: string }
+  | { type: 'tool-call-delta'; index: number; id: ToolCallId; name?: string; argumentsDelta: string }
+  | { type: 'block-end'; index: number; block: ContentBlock }
+  | { type: 'usage'; usage: TokenUsage }
+  | {
+    type: 'finish'
+    reason: FinishReason
+    /** Replay metadata for a successful response; see {@link ReplayEnvelope}. */
+    replayState?: ReplayEnvelope
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:452" data-expect="export type StreamChunk =">llm/src/types.ts:452-464</code></p>
+<p>契约写在附近的注释里，三条：<strong>块用 index 关联交错的 delta</strong>；<strong><code class="inl">block-end</code> 携带组装好的块</strong>；<strong>适配器必须在终态 <code class="inl">finish</code> 之前发 usage，之后什么都不发</strong>，且 tool 参数始终是原始 JSON 字符串（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:448" data-expect=" * afterward; tool arguments remain raw JSON strings. An adapter implementation">llm/src/types.ts:448</code>）。</p>
+<p>结束原因是另一张可扩展表：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export interface FinishReasonMap {
+  'stop': { kind: 'stop' }
+  'tool-calls': { kind: 'tool-calls' }
+  'max-tokens': { kind: 'max-tokens' }
+  'aborted': { kind: 'aborted'; failure: LlmFailure }
+  'error': { kind: 'error'; failure: LlmFailure }
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:156" data-expect="export interface FinishReasonMap {">llm/src/types.ts:156-162</code></p>
+<p>五个 kind 里，前三个是"模型自己停的"，后两个是"没成功"。没有 <code class="inl">refusal</code>——被判为拒绝的回复在这一层只是普通的 <code class="inl">stop</code>，模型说了什么由内容块体现。（本章开头说"finish kind 例如 completed / max-tokens / error / aborted"，实际源码里没有 <code class="inl">completed</code>：那是循环层的 <code class="inl">turn/end</code> 说法，在 LLM 层对应的名字是 <code class="inl">stop</code>。这个改名点容易记错。）</p>
+<p><code class="inl">aborted</code> 与 <code class="inl">error</code> 都带一个 <code class="inl">LlmFailure</code>——一份<strong>可序列化的失败事实</strong>，不含决策：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** Serializable provider or transport failure facts; policy decides whether they are retryable. */
+export interface LlmFailure {
+  /** Human-readable provider or transport failure. */
+  readonly message: string
+  /** Stable provider-neutral machine-routing code. */
+  readonly code: string
+  /** HTTP status returned by the provider, when available. */
+  readonly status?: number
+  /** Provider-requested delay in milliseconds, when valid and available. */
+  readonly providerRetryAfterMs?: number</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:40" data-expect="/** Serializable provider or transport failure facts; policy decides whether they are retryable. */">llm/src/types.ts:40-49</code>（省略处对应同文件第 50–59 行）</p>
+<p><code class="inl">code</code> 是这一层的路由键：<code class="inl">LATE_LIMIT</code> 意义上的稳定字符串，重试策略、压缩恢复、UI 都按它分支，谁也不解析 <code class="inl">message</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/error.ts:14" data-expect="  /** Stable machine-routable failure class (e.g. `RATE_LIMIT`); route on this, never by parsing `message`. */">llm/src/error.ts:14</code>）。</p>
+
+<h3 id="dsh-02-s1-4">usage：一个必须"不相交"的约定</h3>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export interface TokenUsage {
+  inputTokens: number
+  outputTokens: number
+  /**
+   * Exact full-call total including aggregate prompt and output tokens.
+   *
+   * Adapters preserve a provider total or derive it from authoritative
+   * aggregate prompt/output counters; they omit it when unavailable or
+   * inconsistent.
+   */
+  totalTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:175" data-expect="export interface TokenUsage {">llm/src/types.ts:175-189</code></p>
+<p>注释里那条最狠的规定是<strong>各桶互斥</strong>：<code class="inl">inputTokens</code> 只算<em>没命中缓存</em>的输入，缓存命中的部分单独放在 <code class="inl">cacheReadTokens</code> / <code class="inl">cacheWriteTokens</code>，计费输入 = 三者相加（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:171" data-expect=" * reported separately as `cacheReadTokens`/`cacheWriteTokens` (billed input =">llm/src/types.ts:171</code>）。这条规定是给适配器出的活：provider 把缓存命中折进 <code class="inl">prompt_tokens</code> 的总数里，适配器得自己减出来，否则 token 统计会双计。</p>
+
+<h3 id="dsh-02-s1-5">一个适配器要实现什么</h3>
+<p>适配器基类是抽象类 <code class="inl">LlmAdapter</code>，七个方法里只有一个是 <code class="inl">abstract</code>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export abstract class LlmAdapter {
+  /**
+   * Describe one provider route owned by this adapter.
+   * @param provider - a route passed to `registerAdapter()` for this instance.
+   * @returns detached display metadata whose id must equal `provider`.
+   */
+  providerInfo(provider: string): LlmProviderInfo {
+    return { id: provider, name: provider }
+  }
+
+  /**
+   * Return the provider-owned retry policy captured with this route.
+   * @param _provider - a route passed to `registerAdapter()` for this instance.
+   * @returns a resolved policy, or `undefined` to use the normal defaults.
+   */
+  providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined {
+    return undefined
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:208" data-expect="export abstract class LlmAdapter {">llm/src/index.ts:208-225</code></p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  /**
+   * Stream one model call as raw chunks. The only required method.
+   * @param options - the fully-assembled request; implementations must honor `options.signal`.
+   * @returns the chunk stream, obeying the adapter contract documented on `StreamChunk`.
+   */
+  abstract stream(options: GenerateOptions): AsyncIterable&lt;StreamChunk&gt;</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:286" data-expect="Stream one model call as raw chunks. The only required method.">llm/src/index.ts:286-290</code></p>
+<p>其余四个（<code class="inl">imageRequestPricing</code>、<code class="inl">listModels</code>、<code class="inl">resolveModel</code>、<code class="inl">prepareCall</code>）都有默认实现。这个设计的意思很直白：<strong>写一个最小适配器只需要实现一个函数</strong>，其余能力按需覆盖。DeepSeek 适配器就把六个都覆盖了（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/adapter.ts:32" data-expect="  override providerInfo(provider: string) { return { id: provider, name: this.dependencies.providerName ?? 'DeepSeek' } }">llm-deepseek/src/adapter.ts:32</code>），因为它是官方路径。</p>
+<blockquote><p><strong>Python 对照</strong>：这在 Python 里对应 <code class="inl">class Adapter(ABC)</code> + 一组带默认实现的普通方法。区别是 TypeScript 的 <code class="inl">abstract</code> 只在编译期检查——运行时仍然是一个普通类，所以 DSH 的适配器可以被 <code class="inl">instanceof LlmAdapter</code> 检查，但混入、代理这些手段对它不起作用。真正的方法契约由 <code class="inl">StreamChunk</code> 的注释而不是类型系统承担。</p></blockquote>
+
+<h2 id="dsh-02-s2">llm 服务：注册表 + 唯一入口</h2>
+<p><code class="inl">ctx.llm</code> 就是 <code class="inl">LlmRuntime</code>，官方对它的描述是"一个适配器注册表加一次流式模型调用"（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:339" data-expect=" * The abstract `llm` service: an adapter registry plus a streaming model-call">llm/src/index.ts:339</code>，类定义在 <code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:342" data-expect="export class LlmRuntime extends TypertRemoteService {">llm/src/index.ts:342</code>）。它内部就是一张 <code class="inl">Map&lt;provider, AdapterRegistration&gt;</code>。</p>
+
+<h3 id="dsh-02-s2-1">注册一个 provider：一行 YAML 到一次 registerAdapter</h3>
+<p>provider 插件里只有一行是关键（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/host.ts:55" data-expect="  const registration = ctx.llm.registerAdapter([provider], adapter)">llm-deepseek/src/host.ts:55</code>）。注册是<strong>全有或全无</strong>的：任一 provider 已经被别人占了就整体抛 <code class="inl">DUPLICATE_ADAPTER</code>，注册前不产生任何副作用（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:430" data-expect="      if (unique.has(provider) || (this.adapters.has(provider) &amp;&amp; !owned.has(provider))) {">llm/src/index.ts:430</code>）。</p>
+<p>注意注册时会把<strong>重试策略一起冻结下来</strong>——这是本章后面重试那一节的伏笔：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      const retryPolicy = adapter.providerRetryPolicy(provider)
+        ?? resolveRetryPolicy(undefined, `llm: provider "${provider}" retryPolicy`)
+      registrations.push({
+        adapter,
+        provider: { id: info.id, name: info.name },
+        retryPolicy,
+      })</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:438" data-expect="      const retryPolicy = adapter.providerRetryPolicy(provider)">llm/src/index.ts:438-444</code></p>
+<p>也就是说：<strong>注册的那一刻，这家 provider 的重试策略就定型了</strong>；改配置要重新注册一行。DeepSeek 的 host 就是靠这个机制实现热更新——配置变了就 <code class="inl">registration.replace([provider])</code> 重注册同一份实例（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/host.ts:62" data-expect="    registration.replace([provider])">llm-deepseek/src/host.ts:62</code>）。</p>
+
+<h3 id="dsh-02-s2-2">prepareCall：把"这一步用哪个模型"冻住</h3>
+<p>循环不是直接调 <code class="inl">stream()</code>，而是先 <code class="inl">prepareCall()</code>，拿回一个 <code class="inl">PreparedLlmCall</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:604" data-expect="      preparedCall = await this.loopCtx.llm.prepareCall(proposedConfig, signal)">agent-loop/src/agent.ts:604</code>）。里面装着冻结后的配置、<strong>冻结后的重试策略</strong>、模型元数据，以及一个只能发一次的 stream 入口（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:974" data-expect="          throw new LlmError('a prepared LLM call can only be dispatched once', 'INVALID_PREPARED_CALL')">llm/src/index.ts:974</code>）。</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    let dispatched = false
+    return Object.freeze({
+      config: resolvedConfig,
+      retryPolicy: registration.retryPolicy,
+      adapterDefaults,</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:961" data-expect="    let dispatched = false">llm/src/index.ts:961-964</code></p>
+<p>它解决的是一个真实存在的竞态：模型解析是异步的，如果解析完之后再回头读一次当前配置，就可能<strong>把 A 代的模型能力和 B 代的 endpoint 拼在一起</strong>。pi-ai 适配器的注释把这个理由说得很清楚（<code class="inl src-ref" data-src="dsh:packages/llm/llm-pi-ai/src/adapter.ts:6" data-expect=" * operation captures a whole snapshot before its first `await`. A">llm-pi-ai/src/adapter.ts:6</code>）。对使用者的可见后果是：<strong>对话中途换模型，从下一个 step 生效，绝不在正在飞的那一步里生效</strong>。</p>
+
+<h3 id="dsh-02-s2-3">两侧的兜底：适配器抛错变成 finish，消费者抛错照旧往外扔</h3>
+<p>这一层最值得抄的一条设计在 <code class="inl">adapterStream</code> 的边界上。整个适配器调用被包在两次 try 里，任何一个环节抛错都被转成一个<strong>终态 finish 块</strong>而不是异常：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** Convert one adapter throw into the stream protocol's terminal outcome. */
+function adapterFailureChunk(error: unknown, signal?: AbortSignal): StreamChunk {
+  const failure = normalizeLlmFailure(error)
+  return {
+    type: 'finish',
+    reason: signal?.aborted || failure.code === 'ABORTED'
+      ? { kind: 'aborted', failure }
+      : { kind: 'error', failure },
+  }
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:1160" data-expect="/** Convert one adapter throw into the stream protocol's terminal outcome. */">llm/src/index.ts:1160-1169</code></p>
+<p>边界划在哪，注释写着：<strong>适配器选择、分发、迭代失败 → 变成终态失败块；中间件和下游消费者的失败 → 仍然抛出</strong>（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:1038" data-expect="and iteration failures become one terminal failure chunk. Middleware and">llm/src/index.ts:1037-1040</code>）。理由是这样一条流在任何位置中断都有确定的终点：只要迭代器正常结束或吐出一个 <code class="inl">finish</code>，上层就有一份完整协议；异常只用来标记"这不是 provider 的问题"。</p>
+<p>这条分界线让重试逻辑能写得非常笨：循环里只判 <code class="inl">finish.kind</code>，不需要同时捕异常（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:506" data-expect="        if (finish.kind === 'error' || finish.kind === 'aborted') {">agent-loop/src/agent.ts:506</code>）。</p>
+<p>顺便记一下 <code class="inl">llm/stream</code> 这个扩展点：它是包住每一次流式调用的 waterfall，设计用途写的是"重试、回放、路由"（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:64" data-expect="     * Waterfall around every streaming model call (retry, replay, routing).">llm/src/index.ts:64</code>）。实际的 llm-retry 没有挂在这里（原因见 4.2）——所以"设计时留的扩展点"和"实现时选的扩展点"可以不是同一个，读源码时要以 <code class="inl">ctx.on</code> 的实际调用为准。</p>
+
+<h2 id="dsh-02-s3">一个具体适配器：从内部消息到 Messages 请求，再翻回来</h2>
+<p>DeepSeek 适配器（<code class="inl">llm/llm-deepseek</code>，20 多个文件）除了网络之外只做两件事：<strong>出去的时候序列化</strong>（<code class="inl">serialize.ts</code>）、<strong>回来的时候翻译</strong>（<code class="inl">translate.ts</code>）。协议是 Anthropic 兼容的 Messages 接口，这一点从请求头就能看出来（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/adapter.ts:130" data-expect="            'anthropic-version': '2023-06-01',">llm-deepseek/src/adapter.ts:130</code>）。</p>
+
+<h3 id="dsh-02-s3-1">出去：角色映射与相邻合并</h3>
+<p>消息映射只有两条规则，但都踩过坑：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    if (message.role === 'user' &amp;&amp; content.length === 0) continue
+    const wireRole = message.role === 'tool' ? 'user' : message.role
+    const previous = messages.at(-1)
+    if (previous?.role === wireRole) previous.content.push(...content)
+    else messages.push({ role: wireRole, content })</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/serialize.ts:123" data-expect="    if (message.role === 'user' &amp;&amp; content.length === 0) continue">llm-deepseek/src/serialize.ts:123-127</code></p>
+<p>三条：<strong>①</strong> 内部 role 有五种（system / developer / user / assistant / tool），线上只有三种——<code class="inl">tool</code> 结果被翻译成 <code class="inl">user</code> 角色的 <code class="inl">tool_result</code> 块，因为 Messages 协议里工具结果就是用户侧内容。<strong>②</strong> 相邻同角色消息<strong>合并成一条</strong>，这既符合协议要求（连续同角色消息有些 provider 会拒绝），也让"一批工具结果"落进同一条 user 消息。<strong>③</strong> 空的 user 消息直接跳过。</p>
+<p><strong>developer 消息</strong>（工具增删）不走角色映射，而是被积累起来，等到出现下一条 user/tool 轮次之后再作为 system 消息插入（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/serialize.ts:86" data-expect="    if (messages.at(-1)?.role !== 'user') return unsupported('system update without a preceding user or tool-result turn')">llm-deepseek/src/serialize.ts:86</code>）；工具增删本身翻译成 <code class="inl">tool_addition</code> / <code class="inl">tool_removal</code> 引用块，只带工具名、不带 schema——因为 schema 的历史版本在会话日志的 request header 里（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/serialize.ts:94" data-expect="          case 'tool-addition': return [{ type: 'tool_addition', tool: { type: 'tool_reference', name: block.toolName } }]">llm-deepseek/src/serialize.ts:94</code>）。</p>
+<p><code class="inl">assistant</code> 消息的翻译是逐块 switch：<code class="inl">text</code> → <code class="inl">text</code>，<code class="inl">reasoning</code> → <code class="inl">thinking</code>（并把回放元数据里的 <code class="inl">signature</code> 一起带上），<code class="inl">tool-call</code> → <code class="inl">tool_use</code>，同时把原始 JSON 字符串解析回对象（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/serialize.ts:28" data-expect="  return message.content.map((block, index): WireBlock =&gt; {">llm-deepseek/src/serialize.ts:28</code>）。注意这里有个<strong>故意的降级</strong>：历史里存着但解析不了的参数，翻译成空对象 <code class="inl">{}</code>，而不是抛错（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/serialize.ts:15" data-expect="/** Historical arguments that Messages cannot represent use empty input; durable content stays unchanged. */">llm-deepseek/src/serialize.ts:15</code>）——日志里那份原始文本不动，只有发出去的那份降级。</p>
+
+<h3 id="dsh-02-s3-2">出去：一条本地校验，挡住最常见的 400</h3>
+<p>序列化的最后一段做了一次<strong>配对校验</strong>，这是整个文件里最实用的一段：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  let pending = new Set&lt;string&gt;()
+  for (const message of messages) {
+    if (message.role === 'assistant') {
+      const calls = message.content.filter(block =&gt; block.type === 'tool_use')
+      pending = new Set(calls.map(block =&gt; block.id))
+      if (pending.size !== calls.length) throw new LlmError('DeepSeek Messages duplicate tool call id', 'INVALID_REQUEST')
+    } else if (message.role === 'user') {
+      const results = message.content.filter(block =&gt; block.type === 'tool_result')
+      for (const result of results) {
+        if (!pending.delete(result.tool_use_id)) throw new LlmError('DeepSeek Messages tool result has no matching call', 'INVALID_REQUEST')
+      }
+      if (pending.size &gt; 0) throw new LlmError('DeepSeek Messages tool calls need immediate results', 'INVALID_REQUEST')
+      message.content = [...results, ...message.content.filter(block =&gt; block.type !== 'tool_result')]
+    }
+  }
+  if (pending.size &gt; 0) throw new LlmError('DeepSeek Messages history ends with unresolved tools', 'INVALID_REQUEST')</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/serialize.ts:130" data-expect="  let pending = new Set&lt;string&gt;()">llm-deepseek/src/serialize.ts:130-145</code></p>
+<p>它在发请求<strong>之前</strong>检查三件事：工具调用 id 不能重复；每个 <code class="inl">tool_result</code> 必须对应一个待答的调用；一条 assistant 消息里的全部调用必须在紧邻的下一轮被答完（"need immediate results"）。顺带把工具结果<strong>挪到消息内容最前面</strong>——这是 Messages 协议对 user 消息内容顺序的要求，也是很多手写适配器会漏的一条。DSH 自己在循环里也维护了同一份不变式（见 <code class="inl">core/session/src/repair.ts</code>），这里是最后一道。</p>
+
+<h3 id="dsh-02-s3-3">回来：把 provider 事件流翻成内部 chunk</h3>
+<p><code class="inl">translate.ts</code> 是一个 async generator，输入是解码后的 SSE 事件，输出是 <code class="inl">StreamChunk</code>。它做四件事，每件都能对上 provider 协议的一个怪癖。</p>
+<p><strong>① 块序号重新编号。</strong> 内部 index 用的是"这是第几个块"（<code class="inl">blocks.size</code>），不是 provider 给的 <code class="inl">event.index</code>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    if (event.type === 'content_block_start') {
+      const wireIndex = indexOf(event)
+      if (blocks.has(wireIndex) || reason !== undefined) return malformed('block starts after settlement or repeats an index')
+      const block = startBlock(event, blocks.size)</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:121" data-expect="    if (event.type === 'content_block_start') {">llm-deepseek/src/translate.ts:121-124</code></p>
+<p>这样上游给什么编号都不影响下游，也让"块按出现顺序排列"成为一份内部保证。</p>
+<p><strong>② 类型翻译。</strong> <code class="inl">text</code>/<code class="inl">thinking</code>/<code class="inl">tool_use</code> 三种 provider 块映射到 <code class="inl">text</code>/<code class="inl">reasoning</code>/<code class="inl">tool-call</code>，别的类型直接抛 <code class="inl">UNSUPPORTED_CONTENT</code>。思考块的 <code class="inl">signature</code> 不进入内容，而是进入回放元数据（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:51" data-expect="    case 'thinking':">llm-deepseek/src/translate.ts:51</code>）。</p>
+<p><strong>③ usage 累加并补一个总数。</strong> <code class="inl">message_start</code> 带来输入侧计数，<code class="inl">message_delta</code> 带来输出侧，翻译器把它们合并成一份 <code class="inl">TokenUsage</code>，并在最后<strong>把互斥的四个桶相加算出 totalTokens</strong>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      usage.totalTokens = usage.inputTokens + usage.outputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+      yield { type: 'usage', usage }
+      yield { type: 'finish', reason, replayState: replayState(model, [...blocks.values()].map(block =&gt; block.replay)) }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:159" data-expect="      usage.totalTokens = usage.inputTokens + usage.outputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)">llm-deepseek/src/translate.ts:159-161</code></p>
+<p><strong>④ 截断的工具 JSON 不在这里判死刑。</strong> 这是全文件最值得注意的五行：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      if (blocks.size === 0 &amp;&amp; reason.kind === 'stop') throw new LlmError('DeepSeek Messages returned no content', 'EMPTY_RESPONSE')
+      // Truncated tool JSON is retained in the stream, then pruned by the shared assembler.
+      if (reason.kind !== 'max-tokens') {
+        for (const { content } of blocks.values()) {
+          if (content.type !== 'tool-call') continue
+          let parsed: unknown
+          try { parsed = JSON.parse(content.arguments) } catch (_invalidProviderToolJson) { return malformed('tool input is invalid JSON') }
+          object(parsed)
+        }
+      }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/translate.ts:149" data-expect="      if (blocks.size === 0 &amp;&amp; reason.kind === 'stop') throw new LlmError('DeepSeek Messages returned no content', 'EMPTY_RESPONSE')">llm-deepseek/src/translate.ts:149-158</code></p>
+<p>读法：<strong>如果结束原因是 <code class="inl">max-tokens</code>，工具参数是不是合法 JSON 根本不检查</strong>——因为这一段 JSON 必然是截断的，检查它只会把一个"可恢复的截断"变成"协议错误"。判断谁来做？下一节的组装器。另外，<code class="inl">blocks.size === 0 &amp;&amp; reason.kind === 'stop'</code> 会被判成 <code class="inl">EMPTY_RESPONSE</code>：正常结束却一个块都没有，被判为<strong>可重试失败</strong>而不是一条空消息（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/error.ts:34" data-expect=" * Canonical provider-neutral code for a response that completed normally but">llm/src/error.ts:34</code>）。</p>
+
+<h3 id="dsh-02-s3-4">SSE 那一层：三种"流没走完"要分开</h3>
+<p>帧解析在 <code class="inl">sse.ts</code>，但结束语义分散在三处，读的时候很容易混。整理一下：</p>
+<div class="table-wrap"><table><thead><tr><th>情况</th><th>产生位置</th><th>错误码</th><th>默认重试？</th></tr></thead><tbody>
+<tr><td>网络上根本连不上</td><td>适配器 <code class="inl">fetch</code> 抛异常，<code class="inl">generate()</code> 的 catch</td><td><code class="inl">TRANSPORT</code></td><td>是</td></tr>
+<tr><td>连上了但一段数据都不来</td><td>空闲看门狗 <code class="inl">idleWatchdog</code> 超时</td><td><code class="inl">TIMEOUT</code></td><td>是</td></tr>
+<tr><td>流干净地断在半路（缺 <code class="inl">message_stop</code>）</td><td><code class="inl">translate.ts</code> 循环自然结束</td><td><code class="inl">STREAM_CLOSED</code></td><td><strong>否</strong></td></tr>
+<tr><td>HTTP 层就失败了</td><td><code class="inl">!response.ok</code> 分支</td><td>按状态码分类，见下</td><td>看码</td></tr>
+</tbody></table></div>
+<p>第二种的判定写得很巧——<strong>超时不是靠自己计时发现的，而是回头检查看门狗的信号上有没有本插件的超时标记</strong>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    } catch (error) {
+      if (timeoutOf(watchdog.signal, 'MESSAGES_IDLE') !== undefined) throw new LlmError('DeepSeek Messages stream idle timeout', 'TIMEOUT', { cause: error })
+      if (options.signal?.aborted) throw new LlmError('DeepSeek Messages request aborted', 'ABORTED', { cause: error })
+      if (error instanceof LlmError) throw error
+      throw new LlmError('DeepSeek Messages transport failed', 'TRANSPORT', { cause: error })
+    } finally {</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/adapter.ts:62" data-expect="    } catch (error) {">llm-deepseek/src/adapter.ts:62-66</code></p>
+<p>四行的顺序就是优先级：<strong>先判是不是我们自己的空闲超时，再判用户取消，再原样透传已经分好类的 LlmError，最后才兜底成 TRANSPORT</strong>。把顺序反过来写（比如先判 <code class="inl">error instanceof LlmError</code>）会让超时被错分类成传输错误——两者默认都可重试，但退避和排障完全不同。看门狗本身在<a href="#/dsh?section=dsh-00">导读</a>提到的超时章节里还会出现。</p>
+
+<h3 id="dsh-02-s3-5">HTTP 状态码 → 稳定错误码</h3>
+<p>分类只在一处发生，<code class="inl">transport.ts:providerError</code>，而且它<strong>不信任响应里任意字段</strong>——只读 <code class="inl">error.type</code> / <code class="inl">error.code</code> / <code class="inl">error.message</code>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  if (status === 401 || status === 403 || ['authentication_error', 'permission_error'].includes(type)) code = 'AUTH'
+  else if (isQuotaExceededError(detail) || status === 402) code = 'QUOTA'
+  else if (status === 429 || type === 'rate_limit_error') code = 'RATE_LIMIT'
+  else if (isContextWindowExceededError(detail)) code = 'CONTEXT_WINDOW_EXCEEDED'
+  else if (status === 400 || status === 413 || type === 'invalid_request_error') code = 'INVALID_REQUEST'
+  else if ((status !== undefined &amp;&amp; status &gt;= 500) || ['api_error', 'overloaded_error'].includes(type)) code = 'SERVER'
+  else code = status === undefined ? 'SERVER' : `HTTP_${status}`</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/transport.ts:29" data-expect="  if (status === 401 || status === 403 || ['authentication_error', 'permission_error'].includes(type)) code = 'AUTH'">llm-deepseek/src/transport.ts:29-35</code></p>
+<p>两个细节：<strong>①</strong> 顺序敏感——<code class="inl">status === 402</code> 是配额耗尽而不是限流，所以排在 429 前面。<strong>②</strong> 上下文超长是靠<strong>正则匹配错误文本</strong>识别的（<code class="inl">isContextWindowExceededError</code> 有五个正则，覆盖 "context length exceeded"、"too large for this model context" 等说法），因为 provider 在这件事上没有稳定的错误码。这是整层里唯一一处"解析 message"，注释里明确说明了理由和边界（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/error.ts:77" data-expect="Recognize the context-overflow wording used by OpenAI-compatible providers">llm/src/error.ts:77-89</code>）。</p>
+<p>同一函数还顺手把两个"等等再试"的输入抽出来：<code class="inl">Retry-After</code> 头（支持秒数和 HTTP 日期两种写法）和 <code class="inl">request-id</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/transport.ts:36" data-expect="  const retry = headers?.get('retry-after')">llm-deepseek/src/transport.ts:36</code>）。它们进 <code class="inl">LlmFailure</code> 的两个可选字段，下一节的重试执行器直接读。</p>
+
+<h2 id="dsh-02-s4">流式组装：从 chunk 到块，以及截断怎么办</h2>
+<p>组装全部在一个 207 行的类里：<code class="inl">BlockAssembler</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:38" data-expect="export class BlockAssembler {">llm/src/assembler.ts:38</code>）。模块注释称它为"<strong>唯一一份规范组装算法</strong>"，循环用它、token 计量也用它（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:2" data-expect=" * Incremental chunk-to-message assembler. This is the single canonical assembly">llm/src/assembler.ts:2</code>）。这一点很重要：<strong>组装只有一份实现</strong>，所以"显示出来的内容"和"落盘的内容"不可能不一致。</p>
+
+<h3 id="dsh-02-s4-1">状态：按 index 攒一个 partial</h3>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">interface PartialBlock {
+  blockType: string
+  text: string
+  toolCallId?: ToolCallId
+  toolCallName?: string
+  toolCallArguments: string
+  /** Set by `block-end` — authoritative, and freezes the partial. */
+  block?: ContentBlock
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:16" data-expect="interface PartialBlock {">llm/src/assembler.ts:16-24</code></p>
+<p>每个 index 一个 partial，<code class="inl">order</code> 数组记住出现顺序。<code class="inl">push()</code> 是一个七分支的 switch，每个分支都很短。几条不成文的规则藏在里面：</p>
+<ul>
+<li><strong>只有 <code class="inl">block-start</code> 会创建 partial 吗？不是。</strong> <code class="inl">text-delta</code> 之类到达时如果还没有 partial，<code class="inl">ensure()</code> 会顺手建一个——这是为了容忍<strong>只发 delta 的协议</strong>（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:98" data-expect="  private ensure(index: number, blockType: string): PartialBlock {">llm/src/assembler.ts:98</code>）。</li>
+<li><strong>已被 <code class="inl">block-end</code> 关掉的块，再来的 delta 直接丢掉</strong>，注释写的是"一个不守规矩的适配器不能靠这种方式把内存撑大或改坏一个已完成的块"（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:65" data-expect="        if (partial.block) return // closed by block-end; ignore stragglers">llm/src/assembler.ts:65</code>）。</li>
+<li><strong>重复的 <code class="inl">block-end</code> 以第一次为准</strong>，理由是"让已流出的输出和最终组装的块保持一致"（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:79" data-expect="        // First close wins; ignoring re-close stragglers keeps streamed output">llm/src/assembler.ts:79</code>）。</li>
+</ul>
+<p>如果一直没有 <code class="inl">block-end</code>，<code class="inl">assemble()</code> 就用攒下来的 delta 现造一个块；只有在"块类型未知且没被关闭"时才抛 <code class="inl">cannot assemble incomplete block of type</code>。工具调用块缺 id 时补一个 <code class="inl">call-${index}</code>，缺 name 时用空串（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:113" data-expect="      case 'tool-call': return {">llm/src/assembler.ts:113</code>）——宁可造一个能渲染的残块，也不让整条流失败。</p>
+
+<h3 id="dsh-02-s4-2">截断：一个决定，两个消费者</h3>
+<p>截断处理是整个组装器里唯一的"业务判断"，而且刻意只写了一处：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  /**
+   * The one shared keep/drop decision over all seen blocks: max-token
+   * truncation drops tool calls that cannot be executed safely. Emitted blocks
+   * and replay metadata both derive from this result, so they cannot disagree.
+   */
+  private assembled(): { blocks: ContentBlock[]; replay: ReplayEnvelope | undefined } {
+    const all = this.order.map(index =&gt; this.assemble(this.mustGet(index), index))
+    const kept = this.finish.kind === 'max-tokens'
+      ? all.map(block =&gt; block.type !== 'tool-call')
+      : undefined
+    const blocks = kept === undefined ? all : all.filter((_, position) =&gt; kept[position])
+    const envelope = this._replayState
+    if (envelope?.blocks === undefined) return { blocks, replay: envelope }
+    if (envelope.blocks.length !== all.length) return { blocks, replay: undefined }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:130" data-expect="  /**">llm/src/assembler.ts:130-143</code></p>
+<p>三句话读懂：<strong>①</strong> 结束原因是 <code class="inl">max-tokens</code> 时，<strong>所有 tool-call 块被丢掉</strong>，文本和思考留下（截断的文本是有意义的半截回复；截断的工具调用则会拼出一个错的参数）。<strong>②</strong> 块和回放元数据用<strong>同一个 <code class="inl">kept</code> 掩码</strong>过滤，所以两边不可能对不上——回放元数据是按块的顺序存的，丢块却不丢元数据会让下次请求带上错位的 signature。<strong>③</strong> 如果元数据条数和块数本来就对不上，整份元数据作废（返回 <code class="inl">undefined</code>），宁可退化也不要错位。</p>
+<p>截断往上传播的路径也很干净：循环看到 <code class="inl">finish.kind === 'max-tokens'</code> 就直接结束 step、不执行任何工具（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:547" data-expect="    if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }">agent-loop/src/agent.ts:547</code>），而且这个原因在整个 turn 里<strong>粘滞</strong>——后一步正常完成也不会把它覆盖掉（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:343" data-expect="      if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd">agent-loop/src/agent.ts:343</code>）。测试把这两条都钉死了，还有一条专门验证"截断的工具调用既不被执行、也不写 <code class="inl">tool/call</code>"（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1530" data-expect="it('does not dispatch tool calls from a max-tokens-truncated step'">agent-loop/tests/loop.spec.ts:1530</code>）。</p>
+
+<h3 id="dsh-02-s4-3">中断：另一条更保守的取块路径</h3>
+<p>用户取消走的是另一个读取口，而不是 <code class="inl">blocks()</code>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  interruptedBlocks(): ContentBlock[] {
+    return this.order
+      .map((index) =&gt; {
+        const partial = this.mustGet(index)
+        const type = partial.block?.type ?? partial.blockType
+        if (type !== 'text' &amp;&amp; type !== 'reasoning') return undefined
+        return this.assemble(partial, index)
+      })
+      .filter((block): block is ContentBlock =&gt;
+        (block?.type === 'text' || block?.type === 'reasoning') &amp;&amp; block.text.trim() !== '')</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:169" data-expect="  interruptedBlocks(): ContentBlock[] {">llm/src/assembler.ts:169-179</code></p>
+<p>注释给出的理由是本章最值得记的一句设计原则：<strong>"工具调用被省略，因为中断发生在分发之前；保留一个就得伪造一条结果"</strong>（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:165" data-expect="   * Tool calls are omitted because interruption precedes dispatch; retaining">llm/src/assembler.ts:165</code>）。同时<strong>只有非空白内容才留</strong>——用户按下取消时刚流出的一个换行不值得成为一条历史消息。循环拿到这批块后写成一条带 <code class="inl">interrupted: true</code> 的 assistant 消息，批不出来就不写（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:466" data-expect="            const content = live.interruptedBlocks()">agent-loop/src/agent.ts:466</code>）。</p>
+<blockquote><p><strong>和 <a href="#/harness?section=hx-01">Harness · 循环</a>的关系</strong>：hx-01 从循环的角度讲了"截断为什么即停"和"中断后为什么要补结果"。这里补的是另一半——<strong>块级别的取舍发生在组装器里，循环只消费结论</strong>。循环那一侧的 <code class="inl">ToolCallRecovery</code> 处理的是"已经记了 <code class="inl">tool/call</code> 但没结果"的情况，和组装器丢的是两类不同的东西，别混。</p></blockquote>
+
+<h2 id="dsh-02-s5">重试：策略归 provider，执行归插件</h2>
+<p>这是本章信息量最大的一节，因为它把一个通常混在一处的功能拆成了三块：<strong>策略的定义</strong>（<code class="inl">llm/llm/src/retry-policy.ts</code>）、<strong>决策的挂点</strong>（<code class="inl">agent/request-error</code>）、<strong>执行</strong>（<code class="inl">llm/llm-retry</code>）。先看这三块怎么接起来。</p>
+
+<h3 id="dsh-02-s5-1">第一块：策略长什么样</h3>
+<p>策略有两种模式，配置和"解析后"是两套类型（后者全是 <code class="inl">readonly</code>、已填默认值、只读冻结）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** Current bounded transient retry behavior for one provider route. */
+export interface NormalRetryPolicyConfig {
+  /** Retry only configured transient failure codes. */
+  mode: 'normal'
+  /** Maximum eligible retries after the first request (default 5). */
+  maxRetries?: number
+  /** Stable failure codes eligible for this policy. */
+  retryableCodes?: string[]
+  /** Local exponential-backoff and jitter configuration. */
+  backoff?: BackoffConfig
+}
+
+/** Unbounded retry behavior for every model-request failure on one provider route. */
+export interface AlwaysRetryPolicyConfig {
+  /** Retry every model-request failure until success, cancellation, or disposal. */
+  mode: 'always'
+  /** Local exponential-backoff and jitter configuration. */
+  backoff?: BackoffConfig
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/retry-policy.ts:36" data-expect="/** Current bounded transient retry behavior for one provider route. */">llm/src/retry-policy.ts:36-54</code></p>
+<p>默认值就五个常量，一起看：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">const DEFAULT_MAX_RETRIES = 5
+const DEFAULT_INITIAL_DELAY_MS = 500
+const DEFAULT_MAX_DELAY_MS = 10_000
+const DEFAULT_JITTER_RATIO = 0.1
+const DEFAULT_RETRYABLE_CODES = Object.freeze([
+  EMPTY_RESPONSE_CODE,
+  'RATE_LIMIT',
+  'SERVER',
+  'TIMEOUT',
+  'TRANSPORT',
+])</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/retry-policy.ts:14" data-expect="const DEFAULT_MAX_RETRIES = 5">llm/src/retry-policy.ts:14-24</code></p>
+<p>核对结果（notes-dsh 里说"默认最多重试 5 次"，是对的，指的是<strong>首次请求之后的 5 次重试</strong>，即最多 6 次请求）：最大次数默认 <strong>5</strong>、初始退避 <strong>500 ms</strong>、退避上限 <strong>10 s</strong>、抖动比例 <strong>0.1</strong>。可重试错误码是五个：空响应、限流、服务端错误、超时、传输错误。注意<strong>不在这个集合里的</strong>：<code class="inl">AUTH</code>、<code class="inl">QUOTA</code>、<code class="inl">INVALID_REQUEST</code>、<code class="inl">CONTEXT_WINDOW_EXCEEDED</code>、<code class="inl">INVALID_CREDENTIAL</code>。空响应被认为"没有产生任何持久结果，所以重复它是安全的"（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/error.ts:38" data-expect=" * message silently ends the turn with nothing for the user or the loop to act">llm/src/error.ts:38</code>）；畸形凭据被明确排除，因为它每次都会一模一样地失败（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/error.ts:48" data-expect="Deliberately outside the default retryable set">llm/src/error.ts:48</code>）。</p>
+<p>策略的模式用 schemastery 的 union 定义，而且<strong>装配时会把 <code class="inl">retryPolicy</code> 声明成 volatile</strong>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export const RetryPolicySchema: z&lt;RetryPolicyConfig&gt; = z.union([
+  normalPolicySchema,
+  alwaysPolicySchema,
+])</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/retry-policy.ts:100" data-expect="export const RetryPolicySchema: z&lt;RetryPolicyConfig&gt; = z.union([">llm/src/retry-policy.ts:100-103</code>，DeepSeek 配置里的用法是 <code class="inl">retryPolicy: RetryPolicySchema.volatile()</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/config.ts:100" data-expect="  retryPolicy: RetryPolicySchema.volatile(),">llm-deepseek/src/config.ts:100</code>）。</p>
+<p>解析函数 <code class="inl">resolveRetryPolicy</code> 会做键白名单校验、数值范围校验、去重校验，全都不通过就抛错（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/retry-policy.ts:149" data-expect="export function resolveRetryPolicy(">llm/src/retry-policy.ts:149</code>）。有一处注释专门解释为什么 <code class="inl">always</code> 模式也接受 <code class="inl">maxRetries</code> / <code class="inl">retryableCodes</code> 键：分层配置在切换模式后会留下这些字段，所以<strong>接受但忽略</strong>，而不是报错（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/retry-policy.ts:108" data-expect="// Layered configuration can retain normal-only fields after switching modes;">llm/src/retry-policy.ts:108</code>）。这是配置文件可以有多个来源（bundle 层 / 用户层 / 命令行 patch）带来的真实问题。</p>
+
+<h3 id="dsh-02-s5-2">第二块：挂点为什么是 request-error 而不是 llm/stream</h3>
+<p>循环在一段回复以 <code class="inl">error</code> 或 <code class="inl">aborted</code> 结束时，不去自己重试，而是问一次扩展点：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">          const action = await this.dispatch.waterfall(
+            'agent/request-error', {
+              turn,
+              step,
+              provider: request.provider,
+              failure: finish.failure,
+              retryPolicy: preparedCall?.retryPolicy,
+              signal,
+            },
+            () =&gt; Promise.resolve&lt;RequestErrorAction&gt;(undefined),
+          )
+          signal.throwIfAborted()
+          if (action?.kind !== 'retry') {
+            throw new LlmError(finish.failure.message, finish.failure.code, finish.failure)
+          }
+          continue</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:511" data-expect="          const action = await this.dispatch.waterfall(">agent-loop/src/agent.ts:511-526</code></p>
+<p>三个设计点：<strong>① 默认行为是"不重试"</strong>——waterfall 最里层返回 <code class="inl">undefined</code>，所以没装 llm-retry 时错误照常结束 turn。<strong>② payload 里带着 provider 和它注册时冻结的策略</strong>，所以执行者不需要自己去问注册表（这一点在 5.4 会显示它的价值：重试必须按"失败的那个 provider"选策略）。<strong>③ <code class="inl">continue</code> 回到的是 step 的内层 <code class="inl">while (true)</code></strong>，也就是重新组装请求、重新决策——这一步可以换模型、可以重新压缩上下文，不只是把同一个请求再发一遍。</p>
+<p>为什么不用 <code class="inl">llm/stream</code>？因为挂在 <code class="inl">llm/stream</code> 上只能看到 chunk 流，看不到 turn/step 编号、看不到会话日志、也没有地方写重试事件；而重试的计数<strong>必须落到会话日志里</strong>（下一节说明原因）。这是"设计时留的扩展点"和"实现时用的扩展点"不一致的一个实际例子。</p>
+
+<h3 id="dsh-02-s5-3">第三块：执行器</h3>
+<p><code class="inl">llm-retry</code> 本身没有配置——它甚至会在你以为可以把策略写在这里时报错：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">function validateConfig(config: Config): void {
+  const [key] = Object.keys(config)
+  if (key === undefined) return
+  if (key === 'retryPolicy') {
+    throw new Error('llm-retry: retryPolicy belongs under each provider configuration')
+  }
+  throw new Error(`llm-retry: unknown key "${key}"`)
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:30" data-expect="function validateConfig(config: Config): void {">llm-retry/src/index.ts:30-37</code></p>
+<p>这是"一个执行器，N 份策略"的配置形态：<code class="inl">base</code> 里 llm-retry 是一行无配置的插件（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:94" data-expect="- id: llm-retry">bundle/base/cordis.patch.yml:94</code>），策略写在每个 provider 那一行下面。</p>
+<p><strong>退避怎么算。</strong> 三行纯函数：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">function localDelay(config: ResolvedRetryPolicy, retry: number, random: () =&gt; number): number {
+  const exponent = Math.min(retry - 1, 1024)
+  const exponential = Math.min(config.initialDelayMs * 2 ** exponent, config.maxDelayMs)
+  const jitter = 1 - config.jitterRatio + 2 * config.jitterRatio * random()
+  return Math.min(exponential * jitter, config.maxDelayMs)
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:59" data-expect="function localDelay(config: ResolvedRetryPolicy, retry: number, random: () => number): number {">llm-retry/src/index.ts:59-64</code></p>
+<p>逐项：指数是 <code class="inl">2 ** (retry - 1)</code>，<strong>第一次重试就是初始值</strong>（500 ms）而不是它的两倍；指数本身夹到 1024，防止 <code class="inl">2 ** n</code> 变成 Infinity；先夹一次上限，再乘抖动系数 <code class="inl">[1 - r, 1 + r]</code>（r=0.1 时是 0.9–1.1 倍的对称抖动），<strong>乘完再夹一次上限</strong>。第二次夹的意义是：抖动不能把延迟推出上限。测试里用固定随机数把这个算式钉死了——<code class="inl">random()</code> 依次返回 0 和 1 时，第一次退避是 <strong>450 ms</strong>（500 × 0.9），第二次是 <strong>1100 ms</strong>（1000 × 1.1）（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/tests/retry.spec.ts:353" data-expect="    expect((await first).data.delayMs).toBe(450)">llm-retry/tests/retry.spec.ts:353</code>、<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/tests/retry.spec.ts:357" data-expect="    expect((await second).data.delayMs).toBe(1_100)">retry.spec.ts:357</code>）。自己验算一遍比读文档可靠：<code class="inl">500 * 2**0 * 0.9 = 450</code>、<code class="inl">500 * 2**1 * 1.1 = 1100</code>。</p>
+<p><strong>Retry-After 优先，但有上限。</strong></p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    if (failure.providerRetryAfterMs !== undefined
+      &amp;&amp; Number.isFinite(failure.providerRetryAfterMs)
+      &amp;&amp; failure.providerRetryAfterMs &gt; 0) {
+      if (failure.providerRetryAfterMs &gt; policy.maxDelayMs) {
+        if (policy.mode === 'normal') return next()
+        delayMs = localDelay(policy, retry, random)
+      } else {
+        delayMs = failure.providerRetryAfterMs
+      }
+    } else {
+      delayMs = localDelay(policy, retry, random)
+    }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:227" data-expect="    if (failure.providerRetryAfterMs !== undefined">llm-retry/src/index.ts:227-238</code></p>
+<p>三种去向：服务端要求的等待<strong>在 <code class="inl">maxDelayMs</code> 以内就原样采信</strong>（不加抖动、不按指数算）；<strong>超上限时 <code class="inl">normal</code> 模式干脆放弃重试</strong>（把决定交回链上的下一个监听者，最终由循环抛错）——理由是一个要求你等 30 秒的 429，多半不是一个能靠退避解决的问题；<strong><code class="inl">always</code> 模式则改用本地退避继续等</strong>。测试覆盖了这三种分支（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/tests/retry.spec.ts:392" data-expect="  it('uses a bounded provider Retry-After verbatim and delegates an over-cap instruction', async () =&gt; {">llm-retry/tests/retry.spec.ts:392</code>）。</p>
+<p><strong>哪些错误可重试：一个键空间。</strong> 执行器先按错误码筛，再按模式决定：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    if (policy === undefined) return next()
+    if (policy.mode === 'always') {
+      if (signal.aborted || lifetime.signal.aborted) return
+      const fusedSignal = AbortSignal.any([signal, lifetime.signal])
+      // The loop and plugin lifetime stay open until delegated recovery settles.
+      // An abort then wins before the decision or fallback can mutate later state.
+      const downstream = await settleDownstream(next)
+      if (fusedSignal.aborted) return
+      if (downstream.type === 'error') {
+        ctx.logger.warn(
+          `llm-retry: provider "${provider}" always policy ignored a downstream recovery failure: %o`,
+          downstream.error,
+        )
+      }
+      if (downstream.type === 'decision' &amp;&amp; downstream.decision?.kind === 'retry') {
+        return downstream.decision
+      }
+    } else if (!policy.retryableCodes.includes(failure.code)) {
+      return next()
+    }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:198" data-expect="    if (policy === undefined) return next()">llm-retry/src/index.ts:198-217</code></p>
+<p>读法：<strong><code class="inl">normal</code> 模式看错误码，不在集合里就交给下一个监听者</strong>（这一行 <code class="inl">return next()</code> 和 <code class="inl">agent/request</code> 那种"显式返回才生效"是同一套写法）。<strong><code class="inl">always</code> 模式则先给下游机会</strong>——它把 <code class="inl">next()</code> 跑完，只有下游明确说 <code class="inl">retry</code> 才算下游赢，否则自己无限重试。这是把"无限重试"设计成一个<strong>兜底</strong>而不是"覆盖"，所以压缩插件的上下文超长恢复能排在它前面生效（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/tests/retry.spec.ts:752" data-expect="  it('lets downstream specialized recovery run before always fallback', async () =&gt; {">retry.spec.ts:752</code>）。</p>
+<p><strong>计数为什么记在日志里。</strong> 这是本节最核心的一条：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    agent.session.append('llm/retry', eventData)
+    if (!await cancellableDelay(delayMs, fusedSignal)) return
+    agent.session.append('llm/retry-started', { retryId, turn, step, retry })
+    return { kind: 'retry' }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:188" data-expect="    agent.session.append('llm/retry', eventData)">llm-retry/src/index.ts:188-191</code></p>
+<p>模块注释里的说法是"<strong>每次安排重试都要在可取消的等待之前落成持久事实</strong>"（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:3" data-expect=" * recovery extension point. Each scheduled retry is durable before its cancellable wait.">llm-retry/src/index.ts:3</code>）。顺序是<strong>先写 <code class="inl">llm/retry</code>，再等，等到了再写 <code class="inl">llm/retry-started</code></strong>——所以日志能区分"打算重试"和"真的又发了"。计数不是存在插件的内存变量里，而是从日志投影读出来的：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const policyKey = retryPolicyKey(policy)
+  const retryState = ctx.sessionProjections.stateOf(agent.session, 'llmRetry') as LlmRetryState
+  const previous = retryState[retryStateKey(provider, policyKey)]
+  const previousRetry = previous?.retry ?? 0
+  if (policy.mode === 'normal' &amp;&amp; previousRetry &gt;= policy.maxRetries) return next()</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:219" data-expect="    const policyKey = retryPolicyKey(policy)">llm-retry/src/index.ts:219-223</code></p>
+<p>投影的键是<strong><code class="inl">provider + 策略指纹</code></strong>（策略指纹里包含模式、最大次数、排序后的可重试码、三个退避参数），值是一对 <code class="inl">{ retry, retryId }</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:66" data-expect="function retryPolicyKey(policy: ResolvedRetryPolicy): string {">llm-retry/src/index.ts:66</code>）。投影的 <code class="inl">apply</code> 只有三行，但每一行都有理由：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    apply: (state, event) =&gt; {
+      if (event.type === 'step/start' || event.type === 'turn/end') return {}
+      if (event.type !== 'llm/retry') return state
+      const key = retryStateKey(event.data.provider, event.data.policyKey)
+      const entry = state[key]
+      if (entry?.retry === event.data.retry &amp;&amp; entry.retryId === event.data.retryId) return state
+      return { ...state, [key]: { retry: event.data.retry, retryId: event.data.retryId } }
+    },</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:130" data-expect="    apply: (state, event) =&gt; {">llm-retry/src/index.ts:130-137</code></p>
+<p><strong>① <code class="inl">step/start</code> 和 <code class="inl">turn/end</code> 把整份计数清空</strong>——重试预算的粒度是"一步"，不是"一个会话"。这一点很关键：一个跑了两百步的会话不会因为历史上重试过 5 次就再也无法重试。<strong>② 同一条事件重复应用（回放）不改变状态</strong>，靠 <code class="inl">retryId</code> 认出来。<strong>③ 计数随日志持久化</strong>，所以进程崩溃重启、或者把一个会话续跑（resume）之后，重试次数不会归零——同一份日志投影出同一个数字。这就是"记在日志里"的全部价值：<strong>重试预算是一份可以回放的持久事实，不是一份内存状态。</strong></p>
+<p>还有两条与"一次尝试"相关的细节：<strong>失败的尝试不会污染下一次请求的上下文</strong>。循环把失败的流写进 <code class="inl">assistant/attempt</code> 而不是 <code class="inl">assistant/message</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:486" data-expect="                () =&gt; this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq,">agent-loop/src/agent.ts:486</code>），而 <code class="inl">deriveMessages()</code> 只认后者，所以重试后的请求里没有半截输出、也没有 provider 的错误原文。有一条测试专门守这个：断言第二次请求的 messages 与第一次<strong>逐字相同</strong>，且都<strong>不含</strong>错误诊断文本和"discarded partial output"（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/tests/retry.spec.ts:719" data-expect="  it('keeps failed error text and partial output out of every retried model context', async () =&gt; {">llm-retry/tests/retry.spec.ts:719</code>）。诊断信息仍然留在日志里（重试事件带 <code class="inl">failure</code>），只是不进模型上下文——这个区分非常值得学。</p>
+
+<h3 id="dsh-02-s5-4">热更新与卸载</h3>
+<p>策略冻结在注册里，所以改配置必须重注册（5.1 里引的 host.ts 那一段）。执行器一侧还有一个容易漏的动作：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  ctx.effect(() =&gt; async () =&gt; {
+    disposeListener()
+    lifetime.abort(new Error('llm-retry plugin disposed'))
+    await Promise.allSettled([...active])
+  }, 'llm-retry: abort and drain active recovery')</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:254" data-expect="  ctx.effect(() =&gt; async () =&gt; {">llm-retry/src/index.ts:254-258</code></p>
+<p>卸载时做三件事：摘掉监听者、<strong>中止所有正在等待的退避</strong>、然后等它们全部结束。第二件不做的话，一个正在等 10 秒的定时器会活过热重载并在新插件上再触发一次请求；第三件不做的话，dispose 会先于等待完成。这个模式对 Python 读者也不陌生——相当于在 <code class="inl">__del__</code> / context manager 退出时 <code class="inl">cancel()</code> 掉所有 <code class="inl">asyncio.Task</code> 并 <code class="inl">await asyncio.gather(..., return_exceptions=True)</code>。</p>
+
+<h2 id="dsh-02-s6">token-meter：统计这件事为什么要回放</h2>
+<p><code class="inl">TokenMeter</code> 是一份"<strong>会回放的</strong>计量服务"，管两件事：请求压力和会话表面（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:2" data-expect=" * Single replay-aware token-meter service for request and surface pressure.">token-meter/src/index.ts:2</code>，类定义见 <code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:101" data-expect="export class TokenMeter extends Service {">token-meter/src/index.ts:101</code>）。它有两个数据来源，混合方式是整个设计的关键。</p>
+
+<h3 id="dsh-02-s6-1">来源一：provider 报的真实用量（准，但滞后）</h3>
+<p>真实用量随 assistant 消息落进日志，计量器把它记成一个 <code class="inl">anchor</code>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      if (event.data.usage !== undefined &amp;&amp; nextHeader !== undefined) {
+        nextAnchor = {
+          header: nextHeader,
+          nodes: [...state.surface],
+          assistantTokens: this._estimateProviderAssistant(event),
+          usage: event.data.usage,
+        }
+      } else {</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:306" data-expect="      if (event.data.usage !== undefined &amp;&amp; nextHeader !== undefined) {">token-meter/src/index.ts:306-312</code>，注释解释了为什么两个分支都要估一份 assistant 侧的 token：provider 的输出和持久化后被改写的输出是两件事，不能混（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:303" data-expect="      // The loop admits prompts and user messages after step/start; retries may">token-meter/src/index.ts:303</code>）。</p>
+
+<h3 id="dsh-02-s6-2">来源二：固定密度的启发式（不滞后，会偏）</h3>
+<p>没有真实用量时，一切都靠一个常数：<strong>4 个字符算 1 个 token</strong>（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/estimate.ts:13" data-expect="const CHARS_PER_TOKEN = 4">estimate.ts:13</code>），外加每个块 4 个 token 的结构开销、每条消息 4 个 token 的角色开销（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/estimate.ts:16" data-expect="const BLOCK_OVERHEAD = 4">estimate.ts:16</code>）。图像不按这个方法算——它的价格由路由声明（适配器的 <code class="inl">imageRequestPricing</code>），没有声明的路由退回结构 JSON 价格（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/estimate.ts:29" data-expect="export function estimateStructuralBlock(block: ContentBlock): number {">estimate.ts:29</code>）。</p>
+<p>注意这里的 <code class="inl">4 字符 = 1 token</code> 是<strong>源码里的固定启发式</strong>，不是我编的教学示意数——它写在常量注释里（"固定文本密度估计，直到需要精确分词为止"）。对中文内容这个估算会明显偏低，这也是它只用来触发压缩、不用来计费的原因。</p>
+
+<h3 id="dsh-02-s6-3">怎么混：同一次测量里两条来源按"只会更保守"的原则拼起来</h3>
+<p>核心在 <code class="inl">measure()</code> 里那一段决策：<strong>只有当锚点的请求头与当前请求头一致、并且 provider 报的总量不小于整份启发式估计时，才采信 provider 的数字</strong>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      const usage = anchor.usage
+      // Signed heuristic deltas remain conservative only from an anchor
+      // that is at least as large as the matching full heuristic price.
+      baseline = usage !== undefined &amp;&amp; usageTokens(usage) &gt;= estimatedAnchorTokens
+        ? { kind: 'usage', tokens: usageTokens(usage), usage }
+        : { kind: 'estimated', tokens: estimatedAnchorTokens }
+      surfaceDeltaTokens = surface.surfaceTokens - anchorSurfaceTokens</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:165" data-expect="      const usage = anchor.usage">token-meter/src/index.ts:165-171</code></p>
+<p>然后在基线之上加一个<strong>增量</strong>：锚点之后新增的表面内容按启发式计价，正负都算，所以测量结果 <code class="inl">totalTokens</code> 是"上一份准确基线 + 之后的全部变化"（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:187" data-expect="      totalTokens: Math.max(0, baseline.tokens + surfaceDeltaTokens),">token-meter/src/index.ts:187</code>）。这条设计的收益很实在：<strong>每一步不必重新 token 化整段历史</strong>，一次测量是 O(surface)；而且测量结果在各处复现同一个数——测试里可以直接比较"同一个会话，路由过的模型"和"中性估计"两个结果（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/tests/compaction-basic.spec.ts:2251" data-expect="    const routed = pricedContext().tokenMeter.measure(session)">compaction-basic/tests/compaction-basic.spec.ts:2251</code>）。</p>
+<p>代价是这条不变量：<strong>启发式估计必须是"不小于"真实值的那一侧</strong>，否则"准确基线 + 启发式增量"会低估。所以代码里宁可退回估计也不采信一个偏小的真实数（判断条件写的是 <code class="inl">&gt;=</code>）。这也是为什么中文字符按 4:1 估会出问题——它对中文是低估，而对 DSH 的英文场景基本是保守的。</p>
+
+<h3 id="dsh-02-s6-4">结果给谁用</h3>
+<div class="table-wrap"><table><thead><tr><th>消费者</th><th>用哪部分</th><th>拿来做什么</th></tr></thead><tbody>
+<tr><td><code class="inl">compaction-basic</code></td><td><code class="inl">measure().totalTokens</code></td><td>和路由模型的能力比较，判断要不要压缩（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:277" data-expect="    const meter = this.ctx.tokenMeter">compaction-basic/index.ts:277</code>）</td></tr>
+<tr><td><code class="inl">compaction-tool-result-pruner</code></td><td><code class="inl">estimateMessage()</code></td><td>算一个工具结果"省下了多少 token"，记进事件（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-tool-result-pruner/src/index.ts:163" data-expect="        shadowedTokenCount: this.ctx.tokenMeter.estimateMessage(original),">compaction-tool-result-pruner/index.ts:163</code>）</td></tr>
+<tr><td>ACP 界面</td><td>投影出的用量分桶</td><td>把 uncached input / output / cache read / cache write 四个桶报给客户端</td></tr>
+<tr><td>会话日志投影</td><td><code class="inl">tokenUsage</code> / <code class="inl">contextPressure</code></td><td>和读日志的人共享同一份统计，不必各自重算</td></tr>
+</tbody></table></div>
+<p>用 <code class="inl">inject</code> 声明依赖的三处：<code class="inl">compaction-basic</code> 要 <code class="inl">['llm', 'tokenMeter', 'sessions']</code>（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:114" data-expect="  static inject = ['llm', 'tokenMeter', 'sessions']">compaction-basic/index.ts:114</code>）、pruner 只要 <code class="inl">tokenMeter</code>（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-tool-result-pruner/src/index.ts:47" data-expect="  static inject = ['tokenMeter']">compaction-tool-result-pruner/index.ts:47</code>）、计量器自己只要 <code class="inl">sessionProjections</code>（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:106" data-expect="  static inject = ['sessionProjections']">token-meter/src/index.ts:106</code>）。<strong>注意计量器不依赖 <code class="inl">llm</code></strong>——它只在需要图像价格和文件投影时才用 <code class="inl">ctx.get('llm')</code> 可选地取一次（<code class="inl src-ref" data-src="dsh:packages/llm/token-meter/src/index.ts:197" data-expect="    return this.ctx.get('llm')?.imageRequestPricing(config.provider, config.model)">token-meter/src/index.ts:197</code>）。这样计量服务可以在没有 LLM 适配器的装配里独立工作，压缩仍然能跑。</p>
+<blockquote><p><strong>和 <a href="#/harness?section=hx-05">Harness · token 预算</a>的关系</strong>：hx-05 讲的是"预算怎么分配"。这里补的是"数字从哪来"：<strong>一份真实用量做锚，一份固定启发式做增量</strong>。两章一起读，能回答"为什么预算写 80% 阈值是安全的"——因为测量本身刻意保持保守。</p></blockquote>
+
+<h2 id="dsh-02-s7">凭据：只引用值，不搬运值</h2>
+<p>凭据子系统只要知道三件事就能读懂接口（<code class="inl">packages/credentials/</code>），细节留给专门章节。</p>
+<p><strong>① 配置里存的是引用，不是密钥。</strong> 引用就是一个 POSIX 环境变量名（<code class="inl">DEEPSEEK_API_KEY</code>），有严格的命名文法校验（<code class="inl src-ref" data-src="dsh:packages/credentials/credentials/src/index.ts:19" data-expect="const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/">credentials/src/index.ts:19</code>）。模块注释说明了动机：<strong>消费者每次操作重新解析一次引用，所以换了密钥下一个操作就生效，不用重启插件</strong>，而配置界面描述一个引用时永远看不到它的值（<code class="inl src-ref" data-src="dsh:packages/credentials/credentials/src/index.ts:6" data-expect="configuration surfaces describe a reference without">credentials/src/index.ts:5-7</code>）。</p>
+<p><strong>② 存下来的记录用 <code class="inl">scope/id</code> 寻址，scope 是属主插件名。</strong> 注释里解释了为什么不按厂商分：记录内容是按属主的格式写的，两个插件服务同一个 provider 名会互相读错对方的载荷（<code class="inl src-ref" data-src="dsh:packages/credentials/credentials/src/types.ts:25" data-expect=" * uninstalled plugin could not be told apart from a live one. The `/` also">credentials/src/types.ts:25</code>）。</p>
+<p><strong>③ 适配器侧的解析只有五行</strong>，而且<strong>有</strong>凭据服务就用凭据服务，<strong>没有</strong>才回落到启动环境：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  const resolveApiKey = async (connection: ResolvedDeepSeekOptions): Promise&lt;string&gt; =&gt; {
+    const ref = connection.apiKeyEnv
+    const credentials = ctx.get('credentials')
+    if (credentials !== undefined) {
+      const hit = await credentials.resolve(ref)
+      if (hit !== undefined) return assertUsableApiKey(hit.value, 'llm-deepseek', ref)
+    } else {
+      const ambient = launchEnvironmentOf(ctx).get(ref)
+      if (ambient !== undefined &amp;&amp; ambient.value.length &gt; 0) return assertUsableApiKey(ambient.value, 'llm-deepseek', ref)
+    }
+    throw new LlmError(
+      `llm-deepseek: no API key for provider route "${PROVIDER}"; store ${ref} through the credentials`
+      + ` service (the web Models page writes it), or export ${ref} in the launching environment`,
+      'MISSING_CREDENTIAL',
+    )
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek-api-key/src/index.ts:20" data-expect="  const resolveApiKey = async (connection: ResolvedDeepSeekOptions): Promise&lt;string&gt; =&gt; {">llm-deepseek-api-key/src/index.ts:20-35</code></p>
+<p>三条可抄的做法：<strong>解析失败时抛的不是普通异常而是带 <code class="inl">MISSING_CREDENTIAL</code> 码的 <code class="inl">LlmError</code></strong>（这个码不在默认可重试集合里，正确——重试一百次也不会有密钥）；<strong>环境变量读的是启动时冻结的那份快照</strong>（<code class="inl">launchEnvironmentOf</code>），不是 <code class="inl">process.env</code>，所以运行中改环境不会造成半个进程看到新值；<strong>密钥在发出去之前还要过一次可用性检查</strong>（<code class="inl">assertUsableApiKey</code> 会拒绝空白和带非法字符的值，并给出"去哪个界面填"的提示，<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/index.ts:151" data-expect="export function assertUsableApiKey(raw: string, pkg: string, ref: string): string {">llm/src/index.ts:151</code>）。</p>
+<p>顺带回答一个读配置时会产生的疑问：<code class="inl">base</code> 里同时装了两个 DeepSeek 适配器行（API key 方式和账号方式，<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:514" data-expect="      name: '@deepseek-ai/dsh-llm-deepseek-api-key'">bundle/base/cordis.patch.yml:514</code>），它们注册的是<strong>不同的 provider 路由名</strong>，所以不冲突。第三方 provider 走 pi-ai 那一行，默认不注册任何路由（零 profile 时是休眠的），profile 由用户在设置里提供。</p>
+
+<h2 id="dsh-02-s8">取舍与坑</h2>
+
+<h3 id="dsh-02-s8-1">四条路线的对比</h3>
+<div class="table-wrap"><table><thead><tr><th>做法</th><th>退避与重试次数归谁</th><th>代价</th><th>适用场景</th></tr></thead><tbody>
+<tr><td><strong>DSH：provider 插件出策略 + 独立重试插件执行</strong></td><td>策略随 provider 注册冻结；执行器只有一个（<code class="inl">llm-retry</code>）</td><td>多两个包、一次注册；改策略要重注册；<code class="inl">agent/request-error</code> 这个扩展点必须存在</td><td>provider 多、且各家对"什么算可重试"和"该怎么等"意见不同；需要把重试计数当持久事实</td></tr>
+<tr><td>重试写进客户端 SDK（<code class="inl">max_retries=5</code>）</td><td>SDK 内部，调用方看不到</td><td>重试对上层不可见——超长上下文、换模型、压缩这些都接不进来；重试次数重启即失忆；日志里只有一条结果，排障时看不到"它试了几次"</td><td>脚本、一次性任务；不要求把过程落进日志的系统</td></tr>
+<tr><td>客户端完全不重试，错误直接抛</td><td>没人管</td><td>一次 429 或一条断流就毁掉整个 turn；长任务失败率随步数线性上升</td><td>调用方自己包一层重试，或者本来就是交互式、失败会被用户看到</td></tr>
+<tr><td><code class="inl">always</code> 模式（无限重试到成功/取消/卸载）</td><td>本地退避，没有次数上限</td><td>真正终局的错误（配额耗尽、账号被禁）会一直转；必须有取消信号和卸载清理兜底</td><td>无人值守的长任务，且取消路径可靠</td></tr>
+</tbody></table></div>
+<p>这四条里最容易被低估的是第二条的隐性成本。SDK 里重试有一个安静的问题：<strong>它把"一次尝试"和"一次调用"合并成了一个概念</strong>。一旦上层需要区分它们——要在重试时重新压缩上下文、要换模型、要把失败计数写进日志、要在界面上显示"正在重试第 2 次"——那道缝就没了。DSH 那条看起来啰嗦的链路（策略定义 → 注册冻结 → 循环派发 → 事件日志 → 投影计数）换来的正是这道缝的存在。</p>
+
+<h3 id="dsh-02-s8-2">坑 1：错误码没分类清楚，重试策略就永远不起作用</h3>
+<p><strong>触发条件</strong>：写一个新适配器时，把所有异常都兜底成同一个码，或者把 <code class="inl">failures</code> 里的错误码随手写成了 <code class="inl">'UNKNOWN'</code>。</p>
+<p><strong>后果</strong>：默认可重试集合是五个具体的码（<code class="inl">EMPTY_RESPONSE</code> / <code class="inl">RATE_LIMIT</code> / <code class="inl">SERVER</code> / <code class="inl">TIMEOUT</code> / <code class="inl">TRANSPORT</code>）。一个码没落在集合里，<code class="inl">normal</code> 策略就直接 <code class="inl">return next()</code>，一次都不会重试，而且<strong>不报错、不警告</strong>——现象只是"偶发失败率偏高"。</p>
+<p><strong>源码里怎么防的</strong>：分类集中在 <code class="inl">providerError()</code> 一处，且保证<strong>一定返回一个具体码</strong>——最后那个 else 分支即使 status 是 undefined 也返回 <code class="inl">'SERVER'</code>，而不是留空（5.4 引的那一段）。也就是说"没识别出来"被归到可重试的一侧而不是不可重试的一侧，这是对的默认方向。<strong>反面例子在别处</strong>：agent-loop 里非 <code class="inl">LlmError</code> 的意外错误会被压平成 <code class="inl">UNKNOWN</code> 写进 <code class="inl">turn/end</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:381" data-expect=": { message: errorChain(error), code: 'UNKNOWN' },">agent-loop/src/agent.ts:381</code>）——那种错误确实不该重试，所以这个压平是有意的。</p>
+
+<h3 id="dsh-02-s8-3">坑 2：流"干净地断在半路"和"超时"是两种错，只重试其中一种</h3>
+<p><strong>触发条件</strong>：代理或网关把连接正常关掉，但没发 <code class="inl">message_stop</code>。</p>
+<p><strong>后果</strong>：<code class="inl">translate.ts</code> 的事件循环自然结束，抛出 <code class="inl">STREAM_CLOSED</code>。这个码<strong>不在默认可重试集合里</strong>，所以默认配置下整个 turn 直接以 error 结束，一次重试都不做。</p>
+<p><strong>为什么这么设计</strong>：HTTP 层完全正常（状态 200、SSE 头也在），"断在半路"在协议上无法与"服务端有意提前结束"区分。把它默认算作可重试，会让一类真实的协议错误被无限重试。测试把这个行为固定下来了：断言请求数<strong>恰好为 1</strong>、日志里<strong>没有</strong> <code class="inl">llm/retry</code>、<code class="inl">turn/end</code> 的原因是 <code class="inl">STREAM_CLOSED</code>，而且那份残缺的流仍然被完整存进了 <code class="inl">assistant/attempt</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/tests/transport-recovery.spec.ts:192" data-expect="  it('exposes a clean partial EOF as non-default-retryable STREAM_CLOSED', async () =&gt; {">llm-retry/tests/transport-recovery.spec.ts:192</code>）。</p>
+<p><strong>想让它可重试</strong>：在 provider 的 <code class="inl">retryPolicy</code> 里把 <code class="inl">STREAM_CLOSED</code> 加进 <code class="inl">retryableCodes</code>，或者切到 <code class="inl">always</code>。这就是"策略归 provider"的实用之处——这是一个纯配置决定，不用改代码。</p>
+<p>对照一下真正的<strong>停滞</strong>：连上了但一段数据都不来，由空闲看门狗判成 <code class="inl">TIMEOUT</code>（默认 300 秒，<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/defaults.ts:4" data-expect="export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000">llm-deepseek/src/defaults.ts:4</code>），<strong>这个默认可重试</strong>，测试描述的就是"停住的响应体变成 TIMEOUT 并在下一次请求成功"（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/tests/transport-recovery.spec.ts:217" data-expect="  it('turns a stalled body into TIMEOUT and succeeds on the next request', async () =&gt; {">transport-recovery.spec.ts:217</code>）。两种"没走完"的默认待遇完全相反，值得记。</p>
+
+<h3 id="dsh-02-s8-4">坑 3：截断的 tool-call 有两个"看起来都合理"的处理，只有一个是对的</h3>
+<p><strong>触发条件</strong>：模型输出被 <code class="inl">max_tokens</code> 截断，恰好停在工具参数中间。</p>
+<p><strong>两种直觉做法</strong>：① 解析参数时失败就报错——结果把一次可恢复的截断变成协议错误，用户看到的是"provider 返回了非法 JSON"；② 报错前先按"尽力解析"把半个 JSON 补成合法的——结果是模型拿到了工具名正确、参数错误的调用，工具照常执行，副作用已经产生且不可撤销。</p>
+<p><strong>源码里的做法</strong>：都不做。翻译层<strong>看见 <code class="inl">max-tokens</code> 就跳过 JSON 校验</strong>（5.3 引的第 151 行），组装层<strong>只丢工具调用、保留文本</strong>（5.2 引的 <code class="inl">assembled()</code>），循环层<strong>看到 max-tokens 就不执行工具</strong>并让这个结束原因在本 turn 内粘滞。三层各做一件小事，合起来的效果是：截断的工具调用<strong>根本没到过工具运行时</strong>，同时它前面那段文本仍然被保存下来给用户看。</p>
+<p><strong>代价</strong>：默认行为是"截断即停"，用户得再说一句话才能继续。想自动续写需要在 <code class="inl">agent/turn-stopping</code> 上挂一个插件把 turn 拖住（测试 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1459" data-expect="a max-tokens step earlier in a turn still surfaces as max-tokens after a later completed step">agent-loop/tests/loop.spec.ts:1459</code> 描述的就是这个场景：续写过了，结局仍然是 max-tokens）。这个设计把"要不要续写"外置成了插件。</p>
+
+<h3 id="dsh-02-s8-5">坑 4：失败的尝试会留在日志里，但绝不能进上下文</h3>
+<p><strong>触发条件</strong>：一次请求失败后重试成功。</p>
+<p><strong>后果（如果不处理）</strong>：失败那次已经吐出了一部分文本、也可能吐出了半截工具调用。如果它被当成 assistant 消息写进历史，下一次请求的上下文里就有了一段"作者不明"的文本，而那条半截工具调用还会触发配对校验失败（<code class="inl">tool calls need immediate results</code>）——整个会话从此发不出请求。</p>
+<p><strong>源码里怎么防的</strong>：三重。① <strong>失败写 <code class="inl">assistant/attempt</code>，成功才写 <code class="inl">assistant/message</code></strong>，而 <code class="inl">deriveMessages()</code> 只读后者。② 序列化前的配对校验会拦住悬空调用（5.2）。③ 循环在 step 异常时给未答的调用补一对 call/result，理由写在注释里——provider 拒绝悬空的 assistant 调用（<code class="inl src-ref" data-src="dsh:packages/core/session/src/repair.ts:164" data-expect="// Close calls before their step: providers reject dangling assistant calls,">core/session/src/repair.ts:164</code>）。</p>
+<p>测试同时验证了三件事：失败尝试有 7 条 chunk 被完整留存、<code class="inl">assistant/message</code> 只有一条、工具执行次数为 0（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/tests/retry.spec.ts:287" data-expect="  it('leaves partial failed chunks on their step without committing a message or tool side effect', async () =&gt; {">llm-retry/tests/retry.spec.ts:287</code>）。这里有一处 API 细节值得注意：<code class="inl">preparedCall.stream()</code> 只能发一次（<code class="inl">INVALID_PREPARED_CALL</code>），所以重试走的是 <code class="inl">continue</code> 回到 step 循环开头、<strong>重新 prepareCall</strong>，而不是复用同一个 prepared call 再发一次。<strong>重试之所以能顺带换模型、重新压缩上下文，根子就在这条"只能发一次"的约束上。</strong></p>
+
+<h2 id="dsh-02-s9">读源码路线</h2>
+<p>按这个顺序读，每一步都不依赖别的模块：</p>
+<ol>
+<li><strong>先建立词汇表（约 15 分钟）</strong>：<code class="inl">llm/llm/src/types.ts</code> 的三个联合——<code class="inl">ContentBlockMap</code>（137 行）、<code class="inl">FinishReasonMap</code>（156 行）、<code class="inl">StreamChunk</code>（452 行），加上 <code class="inl">TokenUsage</code>（175 行）的"互斥桶"约定。读完这四个，后面所有代码都能对上号。</li>
+<li><strong>适配器契约</strong>：<code class="inl">llm/llm/src/index.ts:208</code> 的 <code class="inl">LlmAdapter</code>（七个方法，只有一个 abstract）→ <code class="inl">index.ts:389</code> 的 <code class="inl">registerAdapter</code>（注意 438 行把重试策略一起冻结）→ <code class="inl">index.ts:1160</code> 的 <code class="inl">adapterFailureChunk</code>（异常变 finish 的边界）。</li>
+<li><strong>一个真实适配器（挑短的读）</strong>：<code class="inl">llm-deepseek/src/transport.ts:22</code>（错误分类，45 行）→ <code class="inl">sse.ts:13</code>（帧解析，28 行）→ <code class="inl">translate.ts:104</code>（事件流翻译，其中 149–158 行是截断处理）→ <code class="inl">serialize.ts:123</code> 与 <code class="inl">serialize.ts:130</code>（角色映射与配对校验）→ 最后 <code class="inl">adapter.ts:51</code> 的 <code class="inl">generate()</code> 看这几块怎么串起来。这条线读完，你就能自己写一个适配器。</li>
+<li><strong>组装</strong>：<code class="inl">llm/llm/src/assembler.ts</code> 全文 207 行，重点是 <code class="inl">assembled()</code>（130 行）和 <code class="inl">interruptedBlocks()</code>（169 行）。中间可以跳过 <code class="inl">ensure()</code> 之类的管道代码。</li>
+<li><strong>重试</strong>：<code class="inl">llm/llm/src/retry-policy.ts</code>（策略与默认值，195 行）→ <code class="inl">agent-loop/src/agent.ts:504</code> 起那段（挂点，看默认返回值是 <code class="inl">undefined</code>）→ <code class="inl">llm-retry/src/index.ts</code> 全文 258 行（执行器：<code class="inl">localDelay</code> 59 行、<code class="inl">recover</code> 194 行、投影 130 行、卸载 254 行）。</li>
+<li><strong>计量</strong>：<code class="inl">token-meter/src/index.ts</code> 的 <code class="inl">measure()</code>（146 行）和 <code class="inl">_foldEvent()</code>（247 行）+ <code class="inl">estimate.ts</code>（固定启发式）。这三段读完，你能回答"这个总数到底是怎么算出来的"。</li>
+<li><strong>动手验证</strong>：<code class="inl">pnpm mock:llm</code> 起一个可编排故障的模拟服务（<code class="inl src-ref" data-src="dsh:package.json:207" data-expect="packages/test-support/llm-mock-server/src/bin.ts">package.json:207</code>），配合 <code class="inl">packages/llm/llm-retry/tests/transport-recovery.spec.ts</code> 里那几种故障（<code class="inl">refused</code> / <code class="inl">empty</code> / <code class="inl">partial_eof</code> / <code class="inl">stall</code>）自己跑一遍，比读文档快得多。</li>
+<li><strong>看另一家 provider 怎么处理同一份接口</strong>：<code class="inl">llm-pi-ai</code>（12 个文件、约 3200 行）不是自己写 HTTP，而是在 pi-ai 之上做映射。它最值得看的是那个"快照"约定——<strong>一次操作在第一个 await 之前捕获整份配置快照</strong>，所以配置变更不会让一个已经在飞的请求换掉 endpoint（<code class="inl src-ref" data-src="dsh:packages/llm/llm-pi-ai/src/adapter.ts:10" data-expect="mutated collection would let a request that started under one configuration">llm-pi-ai/src/adapter.ts:11</code>）。同一个 <code class="inl">prepareCall</code> 契约，两种实现风格，对照读很有收获。</li>
+</ol>
+<blockquote><p><strong>本章没覆盖到的</strong>：<code class="inl">llm-deepseek</code> 的图片与 Files API 那一条线（<code class="inl">images.ts</code>、<code class="inl">request-files.ts</code>、<code class="inl">file-store.ts</code>、<code class="inl">image-tokens.ts</code>，约 8 个文件）——它和 <code class="inl">IMAGE_OFFLOAD_REQUIRED</code> 的"再卸掉几张图"协商机制绑在一起，值得单独成节；<code class="inl">replay.ts</code> / <code class="inl">request-extensions.ts</code> / <code class="inl">model-info.ts</code> 的细节；<code class="inl">llm-pi-ai</code> 除适配器外的部分（<code class="inl">catalog.ts</code> 986 行、<code class="inl">config.ts</code> 510 行、登录与 token 刷新）；<code class="inl">assistant-stream.ts</code> 的紧凑记录格式（把 delta 打包成 <code class="inl">time0 + dt[] + texts[]</code>，为的是把原始流无损存进日志又不膨胀）；<code class="inl">token-meter</code> 的 <code class="inl">surface-fold.ts</code> 与三个投影的具体 fold 逻辑；以及 <code class="inl">credentials</code> 的存储实现（<code class="inl">credentials-local</code>）与 OAuth 授权流（<code class="inl">authorization</code>）。</p>
+<p><strong>两处我核过但没有展开的不确定项</strong>：<code class="inl">reasoningTokens</code> 这个字段在 <code class="inl">TokenUsage</code> 里声明了，但 DeepSeek 的 <code class="inl">updateUsage</code> 只映射四个键，没写它；<code class="inl">FinishReasonMap</code> 声明为可扩展，我没在仓库里找到实际往表里加值的插件。两处都可能是"留给未来的口子"，不作为事实陈述。</p></blockquote>
+</section>
+</div>
