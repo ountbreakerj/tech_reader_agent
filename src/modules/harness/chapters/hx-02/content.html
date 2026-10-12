@@ -1,0 +1,416 @@
+<section class="chapter" id="ch-hx-02" data-slug="hx-02"><div class="ch-head"><span class="ch-num">第 2 章</span></div><h1 id="hx-02">工具定义与注册</h1>
+<p>一个工具在协议层其实只有三个字段：<code class="inl">name</code>、<code class="inl">description</code>、参数 schema。模型看不到你的 Python 函数，只看得到这三件套，然后凭它们猜测你的系统能做什么、该传什么参数。于是“工具定义与注册”这一层要解决的问题不是“怎么调函数”，而是三件容易搞砸的事：<strong>定义怎么变成模型看得懂的东西</strong>、<strong>名字怎么保证唯一</strong>、<strong>模型写的参数谁来查、查出来错了怎么告诉它</strong>。</p>
+<p>本章先给出 labs 里的完整实现（<code class="inl">labs/harness/tools.py</code>），再逐段对照 DSH 的 <code class="inl">ctx.tools</code>、OpenHarness 的 <code class="inl">ToolRegistry</code> 和 learn-claude-code 的 <code class="inl">TOOLS</code> / <code class="inl">TOOL_HANDLERS</code> 两张表，最后列出这一层最常见的失败方式。</p>
+<blockquote><p><strong>前置</strong>：本章假定你已经知道 agent loop 长什么样（工具结果是怎样回填进历史的），如果还没有，先看 <a href="#hx-01">第 01 章 Agent Loop 与停止条件</a>；工具执行里的并发调度细节属于 <a href="#hx-00">第 00 章全景图</a> 划出的范围，本章只讲到“只读标记怎样影响调度决策”为止。</p></blockquote>
+
+<h2 id="hx-02-s1">1. 协议层的三件套：模型到底看到什么</h2>
+<p>先看 DSH 的协议定义。真正发给模型的那个形状不叫 <code class="inl">ToolDefinition</code>，而是一个只有四个字段的小接口，而且它被刻意声明在 LLM 适配层而不是工具包里：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/**
+ * JSON-schema description of a tool, as sent to the model.
+ *
+ * Declared here (not in dsh-tools) because it is part of {@link GenerateOptions};
+ * dsh-tools' ToolDefinition and dsh-system-prompt's PromptAssembly both import
+ * it from this package.
+ */
+export interface ToolSchema {
+  /**
+   * Requests deferred loading of the tool definition into model context,
+   * independently of whether a tool-addition block records the tool.
+   * Uses Anthropic's defer_loading terminology.
+   */
+  deferLoading?: true
+  name: string
+  description: string
+  /** JSON Schema object for the arguments. */
+  parameters: Record&lt;string, unknown&gt;
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:467-484" data-expect="JSON-schema description of a tool, as sent to the model.">types.ts:467-484</code></p>
+<p>四点值得注意。第一，注释直说这是 <em>as sent to the model</em>，而 <code class="inl">ToolSchema</code> 声明在 <code class="inl">llm</code> 包里（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:469" data-expect="Declared here (not in dsh-tools) because it is part of">types.ts:469</code>），因为模型请求的入参类型要用它，工具包和系统提示包都 import 它——协议形状归协议层，不归实现层。第二，字段名是 <code class="inl">parameters</code> 而不是 <code class="inl">input_schema</code>，<code class="inl">parameters</code> 的值仍然是一份 JSON Schema 对象（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:482-483" data-expect="/** JSON Schema object for the arguments. */">types.ts:482-483</code>）。第三，这三个字段是普通可写字段，而注册表里的 <code class="inl">ToolDefinition</code> 用 <code class="inl">readonly</code> 修饰（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:334" data-expect="readonly name: string">index.ts:334</code>）——投影出去的是副本，注册表内部的不许改。第四，唯一多出来的模型可见开关是 <code class="inl">deferLoading</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:479" data-expect="deferLoading?: true">types.ts:479</code>），用来请求厂商延迟把这个工具的定义放进上下文；它借用的是 Anthropic 的 <code class="inl">defer_loading</code> 术语。</p>
+<p>OpenHarness 走的是另一条路：它不定义“协议层形状”这个中间类型，而是让每个工具自己吐出一个字典，并且注释里明说目标是 Anthropic Messages API：<code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:52" data-expect="Return the tool schema expected by the Anthropic Messages API.">base.py:52</code>。三键是硬写的（<code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:53-57" data-expect="return {">base.py:53-57</code>），键名用 <code class="inl">input_schema</code>。</p>
+<p>learn-claude-code 更直接：把五份定义写成模块级列表的字面量，<code class="inl src-ref" data-src="lcc:s02_tool_use/code.py:138" data-expect="TOOLS = [">code.py:138</code>，每行一个工具（<code class="inl src-ref" data-src="lcc:s02_tool_use/code.py:139-140" data-expect="{&quot;name&quot;: &quot;bash&quot;, &quot;description&quot;: &quot;Run a shell command.&quot;,">code.py:139-140</code>）。整个约束词汇只有 <code class="inl">type</code>、<code class="inl">properties</code>、<code class="inl">required</code>，没有 <code class="inl">enum</code>，没有嵌套对象，也没有 <code class="inl">additionalProperties</code>。</p>
+<blockquote><p><strong>取舍</strong>：三件套的内容越丰富，模型第一次就写对参数的概率越高，但每一轮请求都要把这些 schema 重新发一遍，token 成本随工具数线性上升。DSH 的做法是两头发力——向上提供 <code class="inl">deferLoading</code> 让厂商按需加载，向下用 <code class="inl">enum</code>/<code class="inl">const</code> 把取值收紧（见 <a href="#hx-02-s3">第 3 节</a>）。教学示意：工具数量在 10～20 个之间时，schema 本身通常占系统提示的 20%～40%，超过这个数量就该考虑分组或延迟加载了（这个比例是本教程的经验估计，不是任何仓库里的常量）。</p></blockquote>
+
+<h2 id="hx-02-s2">2. 从一个 ToolSpec 出发</h2>
+<p>labs 的起点是一个冻结的 dataclass。它把“模型可见的部分”和“执行侧的部分”放在同一个类型里，但只让前者出圈：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tools.py::ToolSpec"><span class="dec">@dataclass</span>(frozen<span class="op">=</span><span class="kw">True</span>)
+<span class="kw">class</span> <span class="cls">ToolSpec</span><span class="op">:</span>
+    <span class="str">"""一个工具的全部定义。模型只看得到前三个字段，handler 永远不出圈。"""</span>
+
+    name<span class="op">:</span> str
+    description<span class="op">:</span> str
+    input_schema<span class="op">:</span> dict[str, <span class="cls">Any</span>]
+    handler<span class="op">:</span> <span class="cls">Callable</span>[[dict[str, <span class="cls">Any</span>]], str]
+    <span class="cmt"># 只读工具可以并发；写工具是屏障。默认发 false 是 fail-safe：</span>
+    <span class="cmt"># 忘了标就退化成串行，不会把两个写操作并到一起。</span>
+    read_only<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>
+    <span class="cmt"># 与 read_only 分开：只读也可能不可并发（例如共享一个游标）。</span>
+    parallel_safe<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>
+    <span class="cmt"># 秒。None 表示不设时限，交给上层钩子处理。</span>
+    timeout<span class="op">:</span> float <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>
+
+    <span class="kw">def</span> <span class="fn">schema</span>(self) <span class="op">-&gt;</span> dict[str, <span class="cls">Any</span>]<span class="op">:</span>
+        <span class="str">"""投影成模型可见的定义。执行相关字段一律不进这个字典。"""</span>
+        <span class="kw">return</span> {
+            <span class="str">"name"</span><span class="op">:</span> self.name,
+            <span class="str">"description"</span><span class="op">:</span> self.description,
+            <span class="str">"input_schema"</span><span class="op">:</span> self.input_schema,
+        }</code></pre></div>
+<p>注意 <code class="inl">schema()</code> 是白名单而不是黑名单：它新建一个字典逐个写入三个键，所以以后往 <code class="inl">ToolSpec</code> 上加任何执行侧字段（比如重试次数、审计标签），都不会意外漏给模型。DSH 在同一个位置用同样的手法，而且把这件事写进了注释——<code class="inl">timeoutMs</code> 那段明说 <em>it is NEVER sent to the model</em>，理由是 <code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:263" data-expect="is NEVER sent to the model">index.ts:263</code>。它的投影函数确实只解构四个字段：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    const { name, description, parameters, deferLoading } = definition</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1289" data-expect="const { name, description, parameters, deferLoading } = definition">index.ts:1289</code></p>
+<p>整个方法的契约写在 docstring 里：<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1261" data-expect="Project visible definitions onto the allowlisted model-facing schema fields,">index.ts:1261</code>，返回值是 <code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1264" data-expect="@returns one deep-cloned schema per visible tool.">每个工具一份深拷贝</code>。深拷贝这一条容易被忽略：如果导出的是同一个对象引用，某个调用方为了给特定 agent 加一句提示而就地改 <code class="inl">description</code>，就会污染所有 agent 看到的定义。</p>
+<p>入口本身带一个可选的 scope 参数，因为 DSH 允许每个 agent 看到不同的工具子集（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1266" data-expect="schemas(scope?: ScopeKey): ToolSchema[] {">index.ts:1266</code>）。OH 的对应方法不接受参数，直接遍历注册顺序（<code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:80" data-expect="return [tool.to_api_schema() for tool in self._tools.values()]">base.py:80</code>）。顺序这件事在 OH 里是隐式的——Python 的 dict 保序，所以工具在提示里的排列就等于注册顺序，而注册顺序取决于插件初始化顺序，没有显式排序。</p>
+
+<h3 id="hx-02-s2-1">2.1 重名注册：为什么不能静默覆盖</h3>
+<p>labs 的选择是直接报错：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tools.py::ToolRegistry.register">    <span class="kw">def</span> <span class="fn">register</span>(self, tool<span class="op">:</span> <span class="cls">ToolSpec</span>) <span class="op">-&gt;</span> <span class="cls">ToolSpec</span><span class="op">:</span>
+        <span class="str">"""注册一个工具。重名直接报错，不覆盖。"""</span>
+        <span class="kw">if</span> tool.name <span class="kw">in</span> self._tools<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ToolError</span>(
+                <span class="str">f"工具 {tool.name!r} 已经注册过了。"</span>
+                <span class="str">f"不能静默覆盖：覆盖会让运行时行为取决于插件的安装顺序，"</span>
+                <span class="str">f"而排错时看到的日志和实际生效的实现对不上。"</span>
+                <span class="str">f"要换实现请先 unregister，或者换一个名字。"</span>
+            )
+        problems <span class="op">=</span> check_schema(tool.input_schema)
+        <span class="kw">if</span> problems<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ToolError</span>(<span class="str">f"工具 {tool.name!r} 的 input_schema 不合法：{'；'.join(problems)}"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> callable(tool.handler)<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ToolError</span>(<span class="str">f"工具 {tool.name!r} 的 handler 不可调用"</span>)
+        self._tools[tool.name] <span class="op">=</span> tool
+        <span class="kw">return</span> tool</code></pre></div>
+<p>理由在错误信息里写全了：静默覆盖会让<strong>行为取决于安装顺序</strong>。插件 A 注册 <code class="inl">read_file</code>，插件 B 也注册 <code class="inl">read_file</code>，最后谁生效完全看谁后初始化；而出问题时你看到的日志里写着 A 的实现，实际跑的是 B 的。这类 bug 排查成本极高，报错成本几乎为零。</p>
+<p>但“报错”这个选择有一个必须同时决定的细节：<strong>报错的范围是什么</strong>。OH 的做法是最宽松的一种，注册就是一次纯赋值：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    def register(self, tool: BaseTool) -> None:
+        """Register a tool instance."""
+        self._tools[tool.name] = tool</code></pre></div>
+<p><code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:66-68" data-expect="def register(self, tool: BaseTool) -&gt; None:">base.py:66-68</code></p>
+<p>没有检查、没有日志，同名后注册的赢。这是有意的权衡：OH 的注册表由 <code class="inl">tools/__init__.py</code> 集中装配，作者假定装配表本身是可信的，多一道检查只是浪费。代价是任何一次插件式扩展都可能踩到它。</p>
+<p>DSH 把这个问题拆得更细，因为它的注册天生就是“可撤销的 effect”（每个包在挂载时注册、卸载时自动撤销），所以它必须区分两种情况：同层重名要失败，跨层同门是<em>遮蔽</em>。这条规则写在 <code class="inl">register</code> 的 docstring 里：<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1064-1065" data-expect="Register globally or in the calling agent scope. Scoped tools shadow">index.ts:1064-1065</code>。具体的报错文案分了两句，一句给全局：</p>
+<pre><code class="inl">? `tool "${name}" is already registered (for a per-agent variant, register through that agent&#39;s `agent.ctx` instead)`</code></pre>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:748" data-expect="is already registered (for a per-agent variant, register through that agent's">index.ts:748</code></p>
+<p>另一句给作用域内：<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:749" data-expect="is already registered in this scope">index.ts:749</code>。第一句的括号里顺手给了替代方案——想给某个 agent 换实现，就注册到那个 agent 的 <code class="inl">agent.ctx</code> 上，让它去遮蔽全局的版本。</p>
+<p>还有一件事值得抄：<strong>注册时就把定义本身验一遍</strong>。DSH 在 <code class="inl">register</code> 开头检查 <code class="inl">output</code> 的形状（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1075" data-expect="must declare output { schema, render, presentationMeta? }">index.ts:1075</code>）、检查 <code class="inl">timeoutMs</code> 是正有限数（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1080-1081" data-expect="&amp;&amp; (!Number.isFinite(timeoutMs) || timeoutMs &lt;= 0)) {">index.ts:1080-1081</code>）、并且调用 <code class="inl">assertSupportedJsonSchema</code> 把超集的 schema 关键字当场拒掉（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1077" data-expect="assertSupportedJsonSchema(output.schema)">index.ts:1077</code>）。labs 对应的是 <code class="inl">check_schema()</code>：它在注册时递归走一遍 <code class="inl">input_schema</code>，遇到不认识的 keyword（比如 <code class="inl">minLength</code>、<code class="inl">anyOf</code>）直接失败，而不是留到运行期静默忽略。DSH 的报错文案把这个子集列全了（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/json-schema.ts:267" data-expect="is not a supported keyword (subset: type/oneOf/properties/required/additionalProperties/items/enum/const + annotations)">json-schema.ts:267</code>），失败信息里带着子集清单，作者看一眼就知道该改写什么。</p>
+<p>保留名是最后一道。DSH 禁止任何人注册或遮蔽 <code class="inl">run_code</code>，理由是注释里写的：任何 agent 都可能给自己选 code 模式，如果部署默认配置下这个名字是空着的，一旦某个 preset 挂上来就会碰撞（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1083-1087" data-expect="// Reserved unconditionally: any agent may select a code mode for itself,">index.ts:1083-1087</code>）。“当前没人用”不等于“可以随便用”，因为工具集是运行时可变的——这一点在你自己写 harness 时同样成立：凡是名字会被运行时机制保留的，注册期就要挡。</p>
+
+<h2 id="hx-02-s3">3. 参数校验：由 harness 做，还是由模型做</h2>
+<p>先回答一个问题：既然 schema 已经发给模型了，为什么还要校验？因为 schema 是<em>提示</em>，不是<em>约束</em>。模型可以少给一个必填字段、把一个数组塞进字符串字段、多带一个没声明的字段——这些都不是异常行为，是正常行为。所以校验必须在 harness 侧做，而且失败的产物必须是<strong>一条喂回模型的错误信息</strong>，不能是一个抛到循环外层的异常。</p>
+<p>DSH 的注释把这件事说得很直白：<code class="inl src-ref" data-src="dsh:packages/core/tools/README.md:34" data-expect="Model arguments are validated before execution; invalid input becomes a normal error result.">README.md:34</code>（参数在执行前校验，非法输入变成一条普通错误结果）。它的错误类型也专门为“模型写错了参数”开了一个：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** Invalid model-generated arguments for a typed tool. */
+export class ToolArgsError extends HarnessError {
+  /** Individual violations in schema-walk order. */
+  readonly violations: string[]
+
+  constructor(violations: string[]) {
+    super(`invalid arguments: ${violations.join('; ')}`, 'INVALID_ARGS')
+    this.name = 'ToolArgsError'
+    this.violations = violations
+  }
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/schema.ts:460-470" data-expect="/** Invalid model-generated arguments for a typed tool. */">schema.ts:460-470</code></p>
+<p>两个细节：<code class="inl">violations</code> 是一个<strong>数组</strong>而不是一个字符串，且拼进 message 时用 <code class="inl">'; '</code> 连接——一次把所有问题都给模型，而不是遇到第一个就返回；错误带的 <code class="inl">code</code> 是 <code class="inl">'INVALID_ARGS'</code>，让上层的策略代码能把“参数错”和“工具自己抛的错”区分开。</p>
+<p>校验发生在哪里？DSH 把它塞进了 <code class="inl">defineTool</code> 产出的 <code class="inl">execute</code> 里，也就是说：调用方拿到的是一个<strong>永远不会因为参数错而返回垃圾</strong>的函数。</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    async execute(args: unknown, exec: ToolRunContext): Promise&lt;JsonValue&gt; {
+      const violations = validate(args)
+      if (violations.length &gt; 0) throw new ToolArgsError(violations)
+      return userExecute(args as InferArgs&lt;S&gt;, exec) as Promise&lt;JsonValue&gt;
+    },</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/schema.ts:597-601" data-expect="async execute(args: unknown, exec: ToolRunContext): Promise&lt;JsonValue&gt; {">schema.ts:597-601</code>，其中 <code class="inl">validate</code> 在定义时就闭包捕获了编译好的 schema（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/schema.ts:579" data-expect="const validate = (args: unknown): string[] =&gt; validateJsonSchemaValue(parameters, args, '')">schema.ts:579</code>），所以每个工具只在注册时编译一次。</p>
+<p>抛出的这个 <code class="inl">ToolArgsError</code> 最终会到哪里去？到 <code class="inl">dispatchToolBody</code> 的 catch 里，被统一转成错误结果：<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1592-1593" data-expect="} catch (error: unknown) {">index.ts:1592-1593</code>。循环不会因为一次参数写错而中断，模型会在下一轮看到 <code class="inl">invalid arguments: ...</code> 然后自己纠正。</p>
+<p>OH 的校验点在<strong>循环里</strong>而不是工具类里，这是两者最大的结构差异：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    try:
+        parsed_input = tool.input_model.model_validate(tool_input)
+    except Exception as exc:
+        log.warning("invalid input for %s: %s", tool_name, exc)
+        return ToolResultBlock(
+            tool_use_id=tool_use_id,
+            content=f"Invalid input for {tool_name}: {exc}",
+            is_error=True,
+        )</code></pre></div>
+<p><code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:917-923" data-expect="parsed_input = tool.input_model.model_validate(tool_input)">query.py:917-923</code></p>
+<p>它校验的是“原始 dict”，校验器由 <code class="inl">tool.input_model</code>（一个 pydantic 模型）提供。回给模型的是 <code class="inl">str(exc)</code>，也就是 pydantic 自己生成的错误报告，带字段路径。这有个实际好处：你不需要自己写错误文案；坏处是文案是 pydantic 的措辞，可能很长（一个嵌套模型会打印好几十行），而且换了 pydantic 大版本措辞会变，靠文字匹配做断言/回放会脆。labs 的取舍是自己写一个短校验器，错误文案完全可控，代价是只支持 JSON Schema 的一个很小的子集。</p>
+<p>子集校验器的核心在处理对象类型时就能看清。下面这段是 DSH 手写的、不依赖任何 JSON Schema 库的递归下降实现，用显式栈而不是递归调用（避免深层 schema 爆栈）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">          const required = Object.hasOwn(frame.node, 'required') ? frame.node.required ?? [] : []
+          for (const key of required) {
+            if (!Object.hasOwn(frame.value, key) || frame.value[key] === undefined) {
+              violations.push(`missing required property "${propertyPath(frame.path, key)}"`)
+            }
+          }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/json-schema.ts:561-566" data-expect="const required = Object.hasOwn(frame.node, 'required') ? frame.node.required ?? [] : []">json-schema.ts:561-566</code>，接着是多余字段：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">          if (Object.hasOwn(frame.node, 'additionalProperties') &amp;&amp; frame.node.additionalProperties === false) {
+            for (const key of Object.keys(frame.value)) {
+              if (!Object.hasOwn(properties, key)) {
+                tailViolations.push(`"${propertyPath(frame.path, key)}" is not a declared property (additionalProperties: false)`)
+              }
+            }
+          }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/json-schema.ts:573-579" data-expect="if (Object.hasOwn(frame.node, 'additionalProperties') &amp;&amp; frame.node.additionalProperties === false) {">json-schema.ts:573-579</code></p>
+<p>三处值得抄的细节：</p>
+<ul>
+<li>用 <code class="inl">Object.hasOwn</code> 而不是 <code class="inl">in</code> 或 <code class="inl">node.required</code> 直接取值。模型可能传一个 <code class="inl">{"__proto__": ...}</code> 或者 <code class="inl">{"constructor": ...}</code>，用 <code class="inl">in</code> 会把原型链上的东西也当字段。labs 在 Python 侧对应的是“只遍历 <code class="inl">properties</code> 里显式列出的键”，不做任何动态属性查找。</li>
+<li><code class="inl">required</code> 同时检查 <code class="inl">!Object.hasOwn(...)</code> 和 <code class="inl">=== undefined</code>：JSON 里没有 <code class="inl">undefined</code>，但反序列化中间产物里可能有，显式写键值为 <code class="inl">undefined</code> 和完全没写这个键在语义上都是“缺”</li>
+<li>多余字段单独收进 <code class="inl">tailViolations</code>，最后才合并——这个技巧的作用是让错误列表的顺序稳定（先必填、后多余），方便测试断言</li>
+</ul>
+<p>labs 的校验器把同样的规则写成了 Python，核心是“积累问题而不是首错返回”：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tools.py::validate_value"><span class="kw">def</span> <span class="fn">validate_value</span>(schema<span class="op">:</span> <span class="cls">Mapping</span>[str, <span class="cls">Any</span>], value<span class="op">:</span> <span class="cls">Any</span>, path<span class="op">:</span> str <span class="op">=</span> <span class="str">"arguments"</span>) <span class="op">-&gt;</span> list[str]<span class="op">:</span>
+    <span class="str">"""按 schema 校验一个值，返回全部问题（不是遇到第一个就返回）。
+
+    一次报全，模型一次就能改对；只报第一个问题往往要来回好几轮。
+    """</span>
+    problems<span class="op">:</span> list[str] <span class="op">=</span> []
+
+    <span class="kw">if</span> <span class="str">"enum"</span> <span class="kw">in</span> schema<span class="op">:</span>
+        allowed <span class="op">=</span> schema[<span class="str">"enum"</span>]
+        <span class="kw">if</span> value <span class="kw">not</span> <span class="kw">in</span> allowed<span class="op">:</span>
+            problems.append(<span class="str">f"{path}: 取值 {value!r} 不在 enum {allowed!r} 中"</span>)
+        <span class="cmt"># enum 已经限定了取值，不再叠加类型检查，避免同一处报两条。</span>
+        <span class="kw">return</span> problems
+
+    expected <span class="op">=</span> schema.get(<span class="str">"type"</span>)
+    <span class="kw">if</span> expected <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="cmt"># 没写 type 就只做结构性检查，不做类型约束（JSON Schema 的宽松语义）。</span>
+        <span class="kw">if</span> isinstance(value, dict) <span class="kw">and</span> <span class="str">"properties"</span> <span class="kw">in</span> schema<span class="op">:</span>
+            expected <span class="op">=</span> <span class="str">"object"</span>
+        <span class="kw">else</span><span class="op">:</span>
+            <span class="kw">return</span> problems
+
+    <span class="kw">if</span> expected <span class="op">==</span> <span class="str">"object"</span><span class="op">:</span>
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(value, dict)<span class="op">:</span>
+            <span class="kw">return</span> _check_scalar_type(value, <span class="str">"object"</span>, path)
+        properties<span class="op">:</span> dict[str, <span class="cls">Any</span>] <span class="op">=</span> schema.get(<span class="str">"properties"</span>) <span class="kw">or</span> {}
+        <span class="kw">for</span> key <span class="kw">in</span> schema.get(<span class="str">"required"</span>) <span class="kw">or</span> []<span class="op">:</span>
+            <span class="kw">if</span> key <span class="kw">not</span> <span class="kw">in</span> value<span class="op">:</span>
+                problems.append(<span class="str">f"{path}.{key}: 缺少必填字段"</span>)
+        <span class="kw">for</span> key, sub <span class="kw">in</span> properties.items()<span class="op">:</span>
+            <span class="kw">if</span> key <span class="kw">in</span> value<span class="op">:</span>
+                problems.extend(validate_value(sub, value[key], <span class="str">f"{path}.{key}"</span>))
+        <span class="kw">if</span> schema.get(<span class="str">"additionalProperties"</span>) <span class="kw">is</span> <span class="kw">False</span><span class="op">:</span>
+            <span class="kw">for</span> key <span class="kw">in</span> value<span class="op">:</span>
+                <span class="kw">if</span> key <span class="kw">not</span> <span class="kw">in</span> properties<span class="op">:</span>
+                    problems.append(<span class="str">f"{path}.{key}: 不是已声明的字段（additionalProperties 为 false）"</span>)
+        <span class="kw">return</span> problems
+
+    <span class="kw">if</span> expected <span class="op">==</span> <span class="str">"array"</span><span class="op">:</span>
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(value, list)<span class="op">:</span>
+            <span class="kw">return</span> _check_scalar_type(value, <span class="str">"array"</span>, path)
+        items <span class="op">=</span> schema.get(<span class="str">"items"</span>)
+        <span class="kw">if</span> isinstance(items, dict)<span class="op">:</span>
+            <span class="kw">for</span> index, entry <span class="kw">in</span> enumerate(value)<span class="op">:</span>
+                problems.extend(validate_value(items, entry, <span class="str">f"{path}[{index}]"</span>))
+        <span class="kw">return</span> problems
+
+    <span class="kw">return</span> _check_scalar_type(value, expected, path)</code></pre></div>
+<p>整数与数字的区分是这一层最容易写错的地方，需要单独一段：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tools.py::_check_scalar_type"><span class="kw">def</span> <span class="fn">_check_scalar_type</span>(value<span class="op">:</span> <span class="cls">Any</span>, expected<span class="op">:</span> str, path<span class="op">:</span> str) <span class="op">-&gt;</span> list[str]<span class="op">:</span>
+    <span class="str">"""单值类型检查。返回问题列表，空列表表示通过。"""</span>
+    <span class="kw">if</span> expected <span class="op">==</span> <span class="str">"integer"</span><span class="op">:</span>
+        <span class="cmt"># bool 是 int 的子类，得先排掉；3.0 在 JSON 里等价于 3，按整数收下。</span>
+        <span class="kw">if</span> isinstance(value, bool)<span class="op">:</span>
+            <span class="kw">return</span> [<span class="str">f"{path}: 期望 integer，收到 boolean"</span>]
+        <span class="kw">if</span> isinstance(value, float) <span class="kw">and</span> <span class="kw">not</span> value.is_integer()<span class="op">:</span>
+            <span class="kw">return</span> [<span class="str">f"{path}: 期望 integer，收到带小数的 {value!r}"</span>]
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(value, (int, float))<span class="op">:</span>
+            <span class="kw">return</span> [<span class="str">f"{path}: 期望 integer，收到 {type(value).__name__}"</span>]
+        <span class="kw">return</span> []
+    checker <span class="op">=</span> _TYPE_CHECKS.get(expected)
+    <span class="kw">if</span> checker <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">return</span> [<span class="str">f"{path}: 不支持的 type {expected!r}"</span>]
+    <span class="kw">if</span> expected <span class="kw">in</span> (<span class="str">"number"</span>,) <span class="kw">and</span> isinstance(value, bool)<span class="op">:</span>
+        <span class="kw">return</span> [<span class="str">f"{path}: 期望 number，收到 boolean"</span>]
+    <span class="kw">if</span> <span class="kw">not</span> isinstance(value, checker)<span class="op">:</span>
+        <span class="kw">return</span> [<span class="str">f"{path}: 期望 {expected}，收到 {type(value).__name__}"</span>]
+    <span class="kw">return</span> []</code></pre></div>
+<p>这里有两个语言级别的坑。第一，Python 里 <code class="inl">True</code> 是 <code class="inl">int</code> 的实例（<code class="inl">isinstance(True, int)</code> 为真），如果直接 <code class="inl">isinstance(value, int)</code>，模型传 <code class="inl">{"limit": true}</code> 会被当成 <code class="inl">1</code> 收下，然后在 <code class="inl">file[:limit]</code> 这种地方产生一个没人想得到的结果。第二，JSON 只有一种数字类型，<code class="inl">3.0</code> 和 <code class="inl">3</code> 在网络上完全无法区分（很多序列化器会把 <code class="inl">3.0</code> 写成 <code class="inl">3</code>），所以 <code class="inl">integer</code> 的正确语义是“值是整数”，而不是“Python 类型是 int”：<code class="inl">3.0</code> 应该通过，<code class="inl">3.5</code> 应该被拒。labs 的测试把这两条都钉住了。</p>
+<blockquote><p><strong>校验顺序也很重要</strong>：labs 的 <code class="inl">call()</code> 先校验参数、后跑钩子。反过来的话，钩子里的路径判断会拿到一份畸形参数——一个检查 <code class="inl">args["path"].startswith(...)</code> 的钩子会因为 <code class="inl">path</code> 类型不对而抛 <code class="inl">AttributeError</code>，而钩子抛异常的后果通常比参数错严重得多。OH 的顺序是相反的：<code class="inl">pre_tool_use</code> 钩子在 <code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:893" data-expect="if context.hook_executor is not None:">query.py:893</code> 就先跑了，载荷是未校验的原始参数（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:896" data-expect="&quot;tool_name&quot;: tool_name, &quot;tool_input&quot;: tool_input, &quot;event&quot;: HookEvent.PRE_TOOL_USE.value">query.py:896</code>），到 <code class="inl">917</code> 行才校验。这个顺序有它的道理（钩子要能拦截畸形调用，甚至要在校验前就把调用挡掉），但写钩子的人必须知道自己拿到的是不可信数据。</p></blockquote>
+
+<h2 id="hx-02-s4">4. 执行前钩子：allow / deny / reason</h2>
+<p>校验解决“参数写得对不对”，钩子解决“这次调用该不该发生”。labs 把钩子建模成一个返回决策对象的函数列表：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tools.py::ToolRegistry.run_hooks">    <span class="kw">def</span> <span class="fn">run_hooks</span>(self, name<span class="op">:</span> str, args<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> <span class="cls">HookDecision</span><span class="op">:</span>
+        <span class="kw">for</span> hook <span class="kw">in</span> self._hooks<span class="op">:</span>
+            decision <span class="op">=</span> hook(name, args)
+            <span class="kw">if</span> <span class="kw">not</span> decision.allowed<span class="op">:</span>
+                <span class="kw">return</span> decision
+        <span class="kw">return</span> <span class="cls">HookDecision</span>.allow()</code></pre></div>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tools.py::HookDecision"><span class="dec">@dataclass</span>(frozen<span class="op">=</span><span class="kw">True</span>)
+<span class="kw">class</span> <span class="cls">HookDecision</span><span class="op">:</span>
+    <span class="str">"""执行前钩子的返回值。allowed=False 时必须给 reason：拒绝理由会原样喂回模型。"""</span>
+
+    allowed<span class="op">:</span> bool
+    reason<span class="op">:</span> str <span class="op">=</span> <span class="str">""</span>
+
+<span class="dec">    @staticmethod</span>
+    <span class="kw">def</span> <span class="fn">allow</span>() <span class="op">-&gt;</span> <span class="str">"HookDecision"</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="cls">HookDecision</span>(<span class="kw">True</span>)
+
+<span class="dec">    @staticmethod</span>
+    <span class="kw">def</span> <span class="fn">deny</span>(reason<span class="op">:</span> str) <span class="op">-&gt;</span> <span class="str">"HookDecision"</span><span class="op">:</span>
+        <span class="kw">if</span> <span class="kw">not</span> reason<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ToolError</span>(<span class="str">"拒绝工具调用必须给出理由：模型看不到理由就只会重试同样的调用"</span>)
+        <span class="kw">return</span> <span class="cls">HookDecision</span>(<span class="kw">False</span>, reason)</code></pre></div>
+<p>三个设计决定：</p>
+<ol>
+<li><strong>顺序执行，任一拒绝即终止</strong>。后面的钩子不再跑（测试 <code class="inl">test_hooks_are_ordered_and_first_denial_wins</code> 钉住了这一点）。串行执行意味着钩子必须是廉价的，别在里面做网络请求。</li>
+<li><strong>拒绝必须带理由</strong>，<code class="inl">deny("")</code> 直接抛 <code class="inl">ToolError</code>。这是被真实失败逼出来的约束：模型看不到理由，就只会原样重试同一个调用，然后被反复拒绝，直到轮数耗尽。理由本身是喂给模型的输入，写“被拒绝了”等于没写，写“路径 /etc 在只读区，请改用工作目录下的文件”才是有效信息。</li>
+<li><strong>钩子只能拒绝，不能强制放行</strong>。这是 DSH 明确写进文档的单调性契约：<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1135-1137" data-expect="* `agent.ctx` applies only to that agent. Any matching guard may deny by">index.ts:1135-1137</code>（任何匹配的 guard 都可以拒绝，但没有 guard 能强行放行另一个 guard 已拒绝的调用）。单调性的价值在于策略可以被推理：你要判断“这个调用能不能出去”，只需要看有没有任何一个策略拒绝了它，不需要考虑策略之间的相对顺序或谁先谁后。如果允许强制放行，你就得为每一对策略分别推理，策略数一多就无法维护。</li>
+</ol>
+<p>DSH 把这条规则实现成两层，位置在 <code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1133" data-expect="* Register a monotonic guard after the extensible `tools/pre-execute`">pre-execute 之后</code>。第一层是可扩展的 waterfall 事件，listener 可以返回 <code class="inl">allow</code> / <code class="inl">deny</code> / <code class="inl">cancel</code> / <code class="inl">ask</code> 四种决策，语义写在事件声明上方：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">     * Allow, deny, cancel, or ask before dispatch. `next()` delegates to allow;
+     * `cancel` selects the canonical pre-dispatch cancellation result, and missing
+     * approval support turns `ask` into denial. Async gates must observe
+     * `exec.signal`; the registry rechecks cancellation after they settle but</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:145-148" data-expect="* Allow, deny, cancel, or ask before dispatch.">index.ts:145-148</code>。注意 <em>missing approval support turns <code class="inl">ask</code> into denial</em>：没有审批通道时 <code class="inl">ask</code> 降级为拒绝，也就是 fail-closed——一个需要人确认的调用，在没人能确认的场景下必须失败而不是放行。这个默认值选错方向（fail-open）在很多部署里就是安全事故。</p>
+<p>第二层是 <code class="inl">guard</code>，它单调且同步，返回值就是拒绝理由（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1139" data-expect="@param guard - synchronous check; a returned string denies the execution.">index.ts:1139</code>）。两层的调用点在同一段代码里，顺序写得很清楚：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      const askResolution = gate.kind === 'ask'
+        ? await this.serviceAsk(exec, gate)
+        : { decision: gate, approvalCancelled: false }
+      const { decision } = askResolution
+      if (this.callerCancelled(exec) &amp;&amp; askResolution.approvalCancelled) {
+        return await next({ kind: 'post-result', exec, result: toolAbortedBeforeDispatchResult() })
+      }
+      if (decision.kind === 'cancel') {
+        return await next({ kind: 'post-result', exec, result: toolAbortedBeforeDispatchResult() })
+      }
+      const denialReason = decision.kind === 'allow' ? this.guardReason(exec) : decision.reason</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1515-1525" data-expect="const askResolution = gate.kind === 'ask'">index.ts:1515-1525</code>。这一行是整个钩子层的浓缩：<code class="inl">decision.kind === 'allow' ? this.guardReason(exec) : decision.reason</code>——如果 pre-execute 已经拒绝了，就直接用它的理由；只有它放行时，才去问 guard。guard 永远跑在 pre-execute 之后，永远不能推翻它。</p>
+<p>拒绝最后长什么样？它和工具体自己抛错走同一个出口，都是一条 <code class="inl">isError</code> 的文本结果：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">          result: this.materializeFinalResult({
+            content: [{ type: 'text', text: `Error: ${denialReason}` }],
+            isError: true,</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1531-1533" data-expect="result: this.materializeFinalResult({">index.ts:1531-1533</code>。前缀是 <code class="inl">Error: </code>。这个前缀不是装饰：模型见过的训练数据里，工具结果的 <code class="inl">Error:</code> 前缀和“这条路走不通，换一条”是稳定关联的。labs 用了同样的前缀（<code class="inl">Error: 工具 'x' 被拒绝：...</code>），OH 用的是 <code class="inl">is_error=True</code> 加一句自然语言（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:901" data-expect="content=pre_hooks.reason or f&quot;pre_tool_use hook blocked {tool_name}&quot;,">query.py:901</code>），lcc 什么都没有——它的结果块里根本没有 <code class="inl">is_error</code> 字段（<code class="inl src-ref" data-src="lcc:s02_tool_use/code.py:183" data-expect="results.append({&quot;type&quot;: &quot;tool_result&quot;, &quot;tool_use_id&quot;: block.id, &quot;content&quot;: output})">code.py:183</code>），所以模型只能从文本内容自己猜这次调用成功了没有。</p>
+<p>labs 的钩子接在调用链里的位置是这样：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tools.py::ToolRegistry.call">    <span class="kw">def</span> <span class="fn">call</span>(self, name<span class="op">:</span> str, args<span class="op">:</span> <span class="cls">Any</span>) <span class="op">-&gt;</span> str<span class="op">:</span>
+        <span class="str">"""执行一次模型请求的调用。任何失败都返回字符串错误，不抛异常。"""</span>
+        tool <span class="op">=</span> self._tools.get(name)
+        <span class="kw">if</span> tool <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+            known <span class="op">=</span> <span class="str">", "</span>.join(sorted(self._tools)) <span class="kw">or</span> <span class="str">"（一个都没有）"</span>
+            <span class="kw">return</span> <span class="str">f"Error: 未知工具 {name!r}；可用工具：{known}"</span>
+
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(args, dict)<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">f"Error: 工具 {name!r} 的参数必须是对象，收到 {type(args).__name__}"</span>
+
+        problems <span class="op">=</span> validate_value(tool.input_schema, args)
+        <span class="kw">if</span> problems<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">f"Error: 工具 {name!r} 的参数不合法：\n- "</span> <span class="op">+</span> <span class="str">"\n- "</span>.join(problems)
+
+        decision <span class="op">=</span> self.run_hooks(name, args)
+        <span class="kw">if</span> <span class="kw">not</span> decision.allowed<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">f"Error: 工具 {name!r} 被拒绝：{decision.reason}"</span>
+
+        <span class="kw">try</span><span class="op">:</span>
+            <span class="kw">return</span> str(tool.handler(args))
+        <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> exc<span class="op">:</span>  <span class="cmt"># noqa: BLE001 — 工具是用户代码，什么异常都可能有</span>
+            <span class="cmt"># 异常转成错误文本而不是上抛：一次工具失败不该结束整个循环。</span>
+            <span class="kw">return</span> <span class="str">f"Error: 工具 {name!r} 执行失败：{type(exc).__name__}: {exc}"</span></code></pre></div>
+<p>整个 <code class="inl">call()</code> 的返回类型是 <code class="inl">str</code>，没有 <code class="inl">raise</code> 分支。这是刻意的：这个方法就是“模型调用”和“内部实现”之间的边界，边界上一旦有异常泄漏，循环就多了一条崩溃路径，而循环的调用方（下一章的调度器）通常并不准备处理它。</p>
+<p><strong>未知工具</strong>单独说一下。labs 返回 <code class="inl">Error: 未知工具 'x'；可用工具：a, b</code>——把可用工具列出来。这不是可有可无的礼貌：模型拼错工具名时，看到列表就能自己纠正；看不到列表就只会换一个同样错的名字再试。DSH 在未知工具的报错里做了同类的“给出路”处理：如果一个名字<em>可见但被呈现模式挡住</em>（比如 PTC 模式下只有 <code class="inl">run_code</code> 能直接调），报错会带上路怎么走，注释解释了这个决定的理由——否则模型读到的是一个光秃秃的 unknown tool，而它记得提示里刚声明过这个工具，就会得出“部署坏了”的结论，而不是“我调错了”（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1469-1473" data-expect="// must take instead. Without it the model reads a bare `unknown tool`">index.ts:1469-1473</code>）。OH 的未知工具分支同样给了名字但没给列表（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:912" data-expect="content=f&quot;Unknown tool: {tool_name}&quot;,">query.py:912</code>）。</p>
+
+<h2 id="hx-02-s5">5. 只读标记如何影响后续调度</h2>
+<p>“只读”这个标记之所以必须放在工具定义里，是因为它决定了循环能不能把一批调用并发发出去。OH 让它成为一个方法而不是字段，因为<strong>只读与否可能取决于参数</strong>：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    def is_read_only(self, arguments: BaseModel) -> bool:
+        """Return whether the invocation is read-only."""
+        del arguments
+        return False</code></pre></div>
+<p><code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:46-49" data-expect="def is_read_only(self, arguments: BaseModel) -&gt; bool:">base.py:46-49</code>。基类默认返回 <code class="inl">False</code>，也就是 fail-safe：忘了覆盖就当写操作，宁可串行。具体工具覆盖它，例如文件读取工具恒为真（<code class="inl src-ref" data-src="oh:src/openharness/tools/file_read_tool.py:27-29" data-expect="def is_read_only(self, arguments: FileReadToolInput) -&gt; bool:">file_read_tool.py:27-29</code>）。这个标记在权限层直接被消费：只读调用无条件放行（<code class="inl src-ref" data-src="oh:src/openharness/permissions/checker.py:132-134" data-expect="# Read-only tools always allowed">checker.py:132-134</code>）。</p>
+<p>但要注意，OH 的<strong>执行</strong>调度并不看这个标记：多个调用一律并发（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:853" data-expect="raw_results = await asyncio.gather(">query.py:853</code>），只有单个调用时才走顺序分支，理由是事件要即时发出去（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:821-822" data-expect="if len(tool_calls) == 1:">query.py:821-822</code>）。这意味着两个写文件调用会被同时发出去。它为什么还能用？因为并发写同一个文件在多数场景下不出现，而且它用 <code class="inl">return_exceptions=True</code> 保证一个失败不会把兄弟调用取消掉，理由是保住 tool_use/tool_result 的配对（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:849-852" data-expect="# Use return_exceptions=True so a single failing tool does not abandon">query.py:849-852</code>）。配对这件事是硬约束，后面第 6 节会展开。</p>
+<p>DSH 把“能不能并发”抽成一个独立的、更严格的概念：<code class="inl">isConcurrencySafe</code>。它的三条规则值得背下来：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">   * Pure synchronous classifier for overlap with sibling tool calls. Only
+   * `true` opts in; omission, exceptions, non-`true` returns, and invalid
+   * `defineTool` arguments are exclusive. This metadata is never model-visible.</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:269-271" data-expect="* Pure synchronous classifier for overlap with sibling tool calls. Only">index.ts:269-271</code>。规则是“只有显式返回 <code class="inl">true</code> 才算”，异常、返回非 <code class="inl">true</code>、甚至<em>参数没通过校验</em>都算独占。最后这一条在 <code class="inl">defineTool</code> 里实现：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    tool.isConcurrencySafe = (args: unknown): boolean =&gt; {
+      if (validate(args).length &gt; 0) return false
+      return userIsConcurrencySafe(args as InferArgs&lt;S&gt;)
+    }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/schema.ts:626-629" data-expect="tool.isConcurrencySafe = (args: unknown): boolean =&gt; {">schema.ts:626-629</code>。为什么要先校验参数？因为作者写的分类函数假定参数是合法的（它拿到的是 <code class="inl">InferArgs&lt;S&gt;</code>），你把一份缺字段的参数喂进去，它可能抛也可能返回一个错误的 true。先校验，就保证了分类函数只在合法输入上被调用。</p>
+<p>查询方在同一份源码里，每次调用现查一次，不缓存：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  executionMode(exec: ToolExecutionInput): ToolExecutionMode {
+    const tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined)
+    if (!tool?.isConcurrencySafe) return { kind: 'exclusive' }
+    try {
+      const concurrencySafe: unknown = tool.isConcurrencySafe(exec.arguments)
+      return concurrencySafe === true ? { kind: 'parallel' } : { kind: 'exclusive' }
+    } catch {
+      return { kind: 'exclusive' }
+    }
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1309-1318" data-expect="executionMode(exec: ToolExecutionInput): ToolExecutionMode {">index.ts:1309-1318</code>。三处 fail-safe：<code class="inl">!tool?.isConcurrencySafe</code>（未知工具或未声明 = 独占）、<code class="inl">concurrencySafe === true</code>（严格全等，返回 <code class="inl">1</code> 或 <code class="inl">"yes"</code> 都不算）、<code class="inl">catch { return exclusive }</code>（分类函数抛异常也独占）。模式语义很短：<code class="inl">parallel</code> 可以和兄弟调用重叠，<code class="inl">exclusive</code> 单独跑并形成一个顺序屏障（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:356-357" data-expect="* Scheduling mode for one pending call. `parallel` may overlap with siblings;">index.ts:356-357</code>）。</p>
+<p>labs 把这两个概念拆成了两个字段而不是一个：<code class="inl">read_only</code>（能否只读地访问系统，影响权限判定）和 <code class="inl">parallel_safe</code>（能否与兄弟调用重叠，影响调度）。它们可以不一致：一个只读但需要独占某个共享游标的工具，<code class="inl">read_only=True, parallel_safe=False</code>。DSH 只有 <code class="inl">isConcurrencySafe</code> 一个（权限由 <code class="inl">pre-execute</code> 钩子处理，不需要工具自报只读），OH 只有 <code class="inl">is_read_only</code> 一个（且不参与执行调度）。分组逻辑在 labs 里是一个纯函数：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tools.py::group_calls"><span class="kw">def</span> <span class="fn">group_calls</span>(registry<span class="op">:</span> <span class="cls">ToolRegistry</span>, calls<span class="op">:</span> <span class="cls">Iterable</span>[tuple[str, <span class="cls">Any</span>]]) <span class="op">-&gt;</span> list[list[tuple[str, <span class="cls">Any</span>]]]<span class="op">:</span>
+    <span class="str">"""把一次模型回复里的多个调用切成执行组：连续可并发的合成一组，独占的各自成组。"""</span>
+    groups<span class="op">:</span> list[list[tuple[str, <span class="cls">Any</span>]]] <span class="op">=</span> []
+    current<span class="op">:</span> list[tuple[str, <span class="cls">Any</span>]] <span class="op">=</span> []
+    <span class="kw">for</span> name, args <span class="kw">in</span> calls<span class="op">:</span>
+        <span class="kw">if</span> execution_mode(registry.get(name)) <span class="op">==</span> <span class="str">"parallel"</span><span class="op">:</span>
+            current.append((name, args))
+        <span class="kw">else</span><span class="op">:</span>
+            <span class="kw">if</span> current<span class="op">:</span>
+                groups.append(current)
+                current <span class="op">=</span> []
+            groups.append([(name, args)])
+    <span class="kw">if</span> current<span class="op">:</span>
+        groups.append(current)
+    <span class="kw">return</span> groups</code></pre></div>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tools.py::execution_mode"><span class="kw">def</span> <span class="fn">execution_mode</span>(tool<span class="op">:</span> <span class="cls">ToolSpec</span> <span class="op">|</span> <span class="kw">None</span>) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""按工具的并行标记返回 'parallel' 或 'exclusive'。
+
+    未知工具按 exclusive 处理：宁可让一个坏名字挡住后面的调用，
+    也不要让它混进一批并发调用里。
+    """</span>
+    <span class="kw">return</span> <span class="str">"parallel"</span> <span class="kw">if</span> tool <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> tool.parallel_safe <span class="kw">else</span> <span class="str">"exclusive"</span></code></pre></div>
+<p>结果是一个组列表：<code class="inl">[读, 读, 写, 读]</code> 切成 <code class="inl">[[读, 读], [写], [读]]</code>（三条组，长度 2/1/1）。写工具是屏障——它前面的读必须先跑完，它后面的读不能和它同时跑。这个“屏障”语义和 DSH 的调度器完全一致，那部分的实现细节在第 01 章已经讲过（<code class="inl">tool-calls.ts</code> 里的滚动池与重新分类），这里只强调它<strong>依赖上报的元数据</strong>：分类错一个工具，屏障就是假的。</p>
+<blockquote><p><strong>教学示意</strong>：并发能省多少时间取决于工具本身的耗时结构。教学示意：五个各耗时 1 秒的只读工具，串行是 5 秒，全并发是 1 秒多一点；但如果其中两个工具是 90% 时间在等网络、10% 时间在占 CPU，并发收益会小得多，因为真正的瓶颈不在等待而在本机。别把“并行安全”当成性能保证，它只是“允许重叠”。</p></blockquote>
+
+<h2 id="hx-02-s6">6. 坑与失败案例</h2>
+<p>下面五条是这一层最常见的翻车方式，每条都尽量指到具体行为。</p>
+
+<h3 id="hx-02-s6-1">坑 1：注册与定义分成两张表，忘同步就静默降级</h3>
+<p>lcc 的 s02 是教科书式的反例。它有两张必须手工保持同步的结构：<code class="inl">TOOLS</code>（<code class="inl src-ref" data-src="lcc:s02_tool_use/code.py:138" data-expect="TOOLS = [">code.py:138</code>）让模型知道有什么工具，<code class="inl">TOOL_HANDLERS</code>（<code class="inl src-ref" data-src="lcc:s02_tool_use/code.py:153-156" data-expect="TOOL_HANDLERS = {">code.py:153-156</code>）让 harness 知道怎么执行。README 自己把流程写成两步：定义工具、注册处理函数（<code class="inl src-ref" data-src="lcc:s02_tool_use/README.zh.md:29" data-expect="2. **注册处理函数**：在 `TOOL_HANDLERS` 字典里加一个映射">README.zh.md:29</code>）。</p>
+<p>忘同步的后果分两种。只加在 <code class="inl">TOOLS</code> 里：模型看到工具、调它、拿到 <code class="inl">"Unknown: xxx"</code>（<code class="inl src-ref" data-src="lcc:s02_tool_use/code.py:181" data-expect="output = handler(**block.input) if handler else f&quot;Unknown: {block.name}&quot;">code.py:181</code>）——而且因为结果里没有 <code class="inl">is_error</code>，模型会把这句 <code class="inl">Unknown: xxx</code> 当作一次<strong>成功的</strong>工具输出。只加在 <code class="inl">TOOL_HANDLERS</code> 里：多了个永远不会被调用的函数，无害但也无用。真正的问题是这两种错误都是静默的——循环会一直转下去，直到轮数用完或用户放弃。</p>
+<p>防御方式就是 labs 的做法：让定义和实现在同一个对象里（<code class="inl">ToolSpec</code> 同时持有 <code class="inl">input_schema</code> 和 <code class="inl">handler</code>），注册时一次性收下，两张表在结构上不可能不同步。OH 的 <code class="inl">BaseTool</code> 是同一个思路：<code class="inl">name</code> / <code class="inl">description</code> / <code class="inl">input_model</code> 是类属性，和 <code class="inl">execute</code> 同属一个类（<code class="inl src-ref" data-src="oh:src/openharness/tools/base.py:38-40" data-expect="name: str">base.py:38-40</code>）。</p>
+
+<h3 id="hx-02-s6-2">坑 2：不校验参数，直接把模型的 dict 展开成关键字参数</h3>
+<p>lcc 的 s02 用 <code class="inl">handler(**block.input)</code> 直接展开（<code class="inl src-ref" data-src="lcc:s02_tool_use/code.py:181" data-expect="handler(**block.input)">code.py:181</code>）。这一行有四种坏结局：<strong>字段缺失</strong> → <code class="inl">TypeError: missing required positional argument</code>；<strong>多余字段</strong> → <code class="inl">TypeError: unexpected keyword argument</code>；<strong>类型不对</strong> → 要看具体实现，多数情况变成一个更难懂的错误（比如 <code class="inl">len() of unsized object</code>）；<strong>名字撞上保留参数</strong> → 调用了一个你没打算调用的东西。</p>
+<p>更糟的是这些异常发生在<strong>循环里</strong>而不是工具边界上：s02 的循环体没有 try/except，一个 <code class="inl">TypeError</code> 会直接冲出 <code class="inl">agent_loop</code>，整个会话结束。labs 用 <code class="inl">call()</code> 那一层 try/except 把工具异常转成错误文本（见第 4 节代码），OH 用 <code class="inl">_execute_tool_call</code> 里更早的 <code class="inl">model_validate</code> 把那四类问题在展开之前就拦下来。</p>
+
+<h3 id="hx-02-s6-3">坑 3：错误结果没有标记成错误</h3>
+<p>Anthropic 的 <code class="inl">tool_result</code> 块有一个可选布尔字段 <code class="inl">is_error</code>。漏掉它的后果比看起来严重：模型分不清“工具说没找到文件”和“工具执行失败了”。前者应该换路径重试，后者应该放弃这个方案或修参数——如果两种情况在模型眼里长得一样，它就只好靠猜。lcc 的 s02 全程没有这个字段（<code class="inl src-ref" data-src="lcc:s02_tool_use/code.py:183" data-expect="results.append({&quot;type&quot;: &quot;tool_result&quot;, &quot;tool_use_id&quot;: block.id, &quot;content&quot;: output})">code.py:183</code>），OH 和 DSH 都设了（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:923" data-expect="is_error=True,">query.py:923</code>，<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1533" data-expect="isError: true,">index.ts:1533</code>）。写自己的 harness 时，把“工具失败”和“工具有效地报告了一个否定结果”分开建模，是省下大量调试时间的一件事。</p>
+
+<h3 id="hx-02-s6-4">坑 4：结果截断位置不当，切断了结构化内容</h3>
+<p>工具输出必须截断（否则一次 <code class="inl">cat</code> 大文件就能把上下文塞满），但<strong>在哪里切</strong>很有讲究。lcc 直接切前 50000 字符（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:88" data-expect="return out[:50000] if out else &quot;(no output)&quot;">code.py:88</code>），既不落盘也不加省略标记——模型完全不知道后面还有内容，也不知道自己看到的是一份被裁过的证据。用这份假证据做决策，就是幻觉的来源。</p>
+<p>OH 的处理更完整：超过阈值就把全文落盘，上下文里只留一段说明、文件路径和预览（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:542" data-expect="&quot;[Tool output truncated]\n&quot;">query.py:542</code>）。三个阈值是可配的常量：内联 16000 字符、预览 3000、微压缩准入 4000（<code class="inl src-ref" data-src="oh:src/openharness/services/tool_outputs.py:10-12" data-expect="DEFAULT_TOOL_OUTPUT_INLINE_CHARS = 16_000">tool_outputs.py:10-12</code>）。DSH 把这件事交给插件而不是工具：<code class="inl">tools/post-execute</code> 之后的 spill 策略决定什么时候把超长结果换成定位符（相关包在第 08 章展开），工具体只要保证自己的返回值是合法的 JSON 值就行。</p>
+<p>教训：截断策略要有<strong>可逆性</strong>。宁可给模型一个能取回全文的句柄，也不要给它一段被悄悄裁过的文本。</p>
+
+<h3 id="hx-02-s6-5">坑 5：schema 里写了子集外的关键字，以为它会生效</h3>
+<p>很多人第一反应是在 <code class="inl">input_schema</code> 里写 <code class="inl">minimum</code>、<code class="inl">minLength</code>、<code class="inl">pattern</code>、<code class="inl">anyOf</code>。这些<strong>模型看得懂</strong>（它们会照着提示尽量遵守），但你的校验器如果不支持，就等于没写——模型偶发的违规会一路走到工具函数里。DSH 的做法是双向封死：作者向的 DSL 只允许一个很窄的子集，而且<em>不认识的 keyword 直接拒绝</em>，而不是忽略（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/json-schema.ts:267" data-expect="is not a supported keyword (subset: type/oneOf/properties/required/additionalProperties/items/enum/const + annotations)">json-schema.ts:267</code>）。报错里带子集清单，作者一眼就能看出该用什么替代。</p>
+<p>labs 抄了这一条：<code class="inl">check_schema()</code> 在注册时递归检查关键字，不认识的当场失败。这样做的额外好处是——模型看到的 schema 和 harness 校验用的 schema 是同一份，两者不可能漂移。lcc 反过来的问题更严重：它的 schema 里只有 <code class="inl">type</code>/<code class="inl">properties</code>/<code class="inl">required</code>，而 harness 侧<strong>一行校验都没有</strong>，所以 schema 完全是给模型看的提示，没有任何强制力。</p>
+
+<h2 id="hx-02-s7">7. 多仓库取舍对比表</h2>
+<div class="table-wrap"><table><thead><tr><th>机制</th><th>DSH（<code class="inl">packages/core/tools</code>）</th><th>OpenHarness（<code class="inl">tools/base.py</code>）</th><th>learn-claude-code（<code class="inl">s02</code>）</th></tr></thead><tbody>
+<tr><td>定义与实现的关系</td><td>同一对象：<code class="inl">ToolDefinition</code> 持有 schema + <code class="inl">execute</code>（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:223-224" data-expect="/** A registered tool: its schema plus the execution function. */">index.ts:223-224</code>）</td><td>同一个类：<code class="inl">BaseTool</code> 子类同时声明类属性与 <code class="inl">execute</code></td><td>两张平行表，靠人工同步</td></tr>
+<tr><td>参数 schema 的来源</td><td>作者写元素级 DSL，编译成 JSON Schema</td><td>pydantic 模型反射生成</td><td>手写字面量</td></tr>
+<tr><td>模型可见的字段</td><td><code class="inl">name</code>/<code class="inl">description</code>/<code class="inl">parameters</code>，外加 <code class="inl">deferLoading</code></td><td><code class="inl">name</code>/<code class="inl">description</code>/<code class="inl">input_schema</code></td><td>同左，手写</td></tr>
+<tr><td>重名注册</td><td>同层报错，跨层遮蔽；保留名 <code class="inl">run_code</code> 不可占</td><td>静默覆盖，无检查无日志</td><td>字典后写覆盖，且与 <code class="inl">TOOLS</code> 不同步时静默降级</td></tr>
+<tr><td>schema 本体的校验</td><td>注册时 <code class="inl">assertSupportedJsonSchema</code>，超集关键字拒绝</td><td>由 pydantic 保证（模型类本身就是约束）</td><td>无</td></tr>
+<tr><td>参数校验位置</td><td>工具执行体内部（<code class="inl">defineTool</code> 包一层）</td><td>循环里，执行工具之前</td><td>无</td></tr>
+<tr><td>多问题一次报全</td><td>是，<code class="inl">violations</code> 数组</td><td>是，pydantic 错误列表</td><td>不适用</td></tr>
+<tr><td>执行前钩子</td><td>两级：可扩展 waterfall（allow/deny/cancel/ask）+ 单调 guard</td><td>一级：<code class="inl">pre_tool_use</code> 钩子可 <code class="inl">blocked</code>，排在参数校验之前</td><td>s02 无（s03 才加，且是子串黑名单）</td></tr>
+<tr><td>钩子能否强制放行</td><td>不能（单调契约写明）</td><td>不能（<code class="inl">blocked</code> 只有真/假）</td><td>不适用</td></tr>
+<tr><td>只读标记</td><td>无独立字段，用 <code class="inl">isConcurrencySafe</code></td><td><code class="inl">is_read_only(args)</code>，默认 False</td><td>无</td></tr>
+<tr><td>并发依据</td><td>严格 <code class="inl">=== true</code>，异常与非法参数都算独占</td><td>不区分读写，多调用一律 <code class="inl">gather</code></td><td>顺序 for 循环</td></tr>
+<tr><td>未知工具</td><td>结构化 <code class="inl">ToolNotFoundError</code>，code 为 <code class="inl">UNKNOWN_TOOL</code>，可见但被挡的会给出路</td><td><code class="inl">is_error=True</code> 的文本，列出名字</td><td>文本 <code class="inl">Unknown: name</code>，且不带 <code class="inl">is_error</code></td></tr>
+<tr><td>注册的撤销</td><td>返回精确 disposer，卸载自动注销</td><td>无（进程生命周期内一直有效）</td><td>无</td></tr>
+<tr><td>适合场景</td><td>插件化部署、多 agent 工具子集不同、需要审计与策略单调性</td><td>单体 harness，工具集在启动时装配好</td><td>教学，目标是让人看懂“加工具只加一行”</td></tr>
+</tbody></table></div>
+<p>一句话取舍：<strong>工具数少、装配静态</strong>时，OH 那种“注册就是赋值、校验交给 pydantic”最省事；<strong>工具集动态、一个进程里跑多个 agent</strong>时，DSH 那套作用域 + 单调 guard + 可撤销注册是必需的复杂度；lcc 的写法只有在目标是讲清楚原理时才划算——它的每一处简化在真实系统里都会变成一个坑（见第 6 节）。</p>
+
+<h2 id="hx-02-s8">8. 小结</h2>
+<ul>
+<li>模型的全部认知来自三件套；执行侧的字段要主动用<strong>白名单</strong>挡住，别靠“记得不要传出去”。</li>
+<li>重名注册必须报错，并且要想清楚报错的<strong>范围</strong>（同层 vs 跨层）；保留名在“当前没人用”的时候就要挡。</li>
+<li>参数校验由 harness 做，位置在工具执行体之外；一次报全所有问题；失败以错误<strong>结果</strong>回给模型，不以异常打断循环。</li>
+<li>钩子只能拒绝，不能强制放行。拒绝必须带理由，否则模型只会重试。没有审批通道时，<code class="inl">ask</code> 要降级为拒绝（fail-closed）。</li>
+<li>只读 / 并行标记的默认值必须是“不安全的那一边”；分类函数抛异常要兜底成独占。</li>
+<li>结果截断要可逆：给句柄和说明，不要给一段没有痕迹的裁剪文本。</li>
+</ul>
+<p>下一章把这一层接到调度器上：一次模型回复里的多个调用怎么排序、中断时怎么给未执行的调用补结果、并发上限怎么算。</p>
+</section>

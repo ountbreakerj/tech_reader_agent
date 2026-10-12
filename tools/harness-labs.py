@@ -44,18 +44,34 @@ def chapter_files() -> list[Path]:
 
 
 def lab_source(ref: str) -> str:
-    """按 `文件::名字` 取出定义的完整源码（含装饰器），或整个文件。"""
+    """按 `文件::名字` 取出定义的完整源码（含装饰器），或整个文件。
+
+    名字可以是 `类.方法` 这样的点号路径；方法摘录保留它在类里的原缩进。
+    """
     file, _, name = ref.partition("::")
     text = (ROOT / file).read_text(encoding="utf-8")
     if not name:
         return text.rstrip("\n")
-    tree = ast.parse(text)
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
-            start = min([node.lineno] + [d.lineno for d in node.decorator_list])
-            lines = text.splitlines()[start - 1 : node.end_lineno]
-            return "\n".join(lines)
-    raise KeyError(f"{file} 里没有 {name}")
+    defs = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    module_body: list[ast.stmt] = ast.parse(text).body
+    scope = module_body
+    node = None
+    for part in name.split("."):
+        node = next((n for n in scope if isinstance(n, defs) and n.name == part), None)
+        if node is None:
+            break
+        scope = node.body
+    if node is None and "." not in name:
+        # 没写类名的方法：在所有顶层类里找，必须唯一，避免摘错同名方法
+        hits = [m for c in module_body if isinstance(c, ast.ClassDef)
+                for m in c.body if isinstance(m, defs) and m.name == name]
+        node = hits[0] if len(hits) == 1 else None
+        if len(hits) > 1:
+            raise KeyError(f"{file} 里有 {len(hits)} 个 {name}，请写成 类名.{name}")
+    if node is None:
+        raise KeyError(f"{file} 里没有 {name}")
+    start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+    return "\n".join(text.splitlines()[start - 1 : node.end_lineno])
 
 
 def repo_lines(key: str, path: str) -> list[str] | None:
@@ -171,6 +187,19 @@ def highlight_python(code: str) -> str:
 
 TITLE = re.compile(r"<!--\s*title:\s*(.*?)\s*-->")
 HEADING = re.compile(r'<h([23]) id="([^"]+)"[^>]*>(.*?)</h\1>', re.S)
+# 非 Python 的源码摘录（TS 等）由作者手写；正文里的 `Promise<S>` 一类泛型如果没转义，
+# 浏览器会把 <S> 当成删除线标签，后面整段都被划掉
+SOURCE_BLOCK = re.compile(r'(<code class="lang-(?!python)[\w-]+"[^>]*>)(.*?)(</code>)', re.S)
+ALLOWED_TAGS = {
+    "a", "b", "blockquote", "br", "code", "div", "em", "figcaption", "figure", "h2", "h3", "h4",
+    "hr", "i", "img", "kbd", "li", "ol", "p", "pre", "small", "span", "strong", "sub", "sup",
+    "table", "tbody", "td", "th", "thead", "tr", "ul", "details", "summary",
+}
+
+
+def escape_source_block(match: re.Match[str]) -> str:
+    # 先还原已有实体再整体转义，已经转义过的内容不会被二次转义
+    return match.group(1) + html.escape(html.unescape(match.group(2)), quote=False) + match.group(3)
 
 
 def render_chapter(draft: str, chapter_id: str, label: str) -> tuple[str, str, list[dict]]:
@@ -186,6 +215,17 @@ def render_chapter(draft: str, chapter_id: str, label: str) -> tuple[str, str, l
         return f'<code class="lang-python" data-lab="{ref}">{highlight_python(lab_source(ref))}</code>'
 
     body = LAB_BLOCK.sub(lab_repl, body)
+    body = SOURCE_BLOCK.sub(escape_source_block, body)
+    # 属性值里的尖括号（如 data-expect 引用的泛型）浏览器不会当标签，扫描前先去掉属性值
+    tag_text = re.sub(r'="[^"]*"', '=""', body)
+    stray = [t for t in re.findall(r"</?([A-Za-z][\w-]*)", tag_text) if t not in ALLOWED_TAGS]
+    if stray:
+        raise ValueError(f"{chapter_id} 有未转义的尖括号（会被浏览器当成标签）：{sorted(set(stray))}")
+    # 草稿必须是 HTML：正文文本里残留的 **粗体** 或 `代码` 会原样显示给读者
+    prose = re.sub(r"<pre\b.*?</pre>|<code\b.*?</code>|<[^>]+>", " ", body, flags=re.S)
+    leaked = re.findall(r"\*\*[^*\n]{1,30}|`[^`\n]{1,30}", html.unescape(prose))
+    if leaked:
+        raise ValueError(f"{chapter_id} 正文里有 Markdown 残留（改成 <strong> / <code class=\"inl\">）：{leaked[:5]}")
     toc = []
     for h in HEADING.finditer(body):
         text = html.unescape(TAG.sub("", h.group(3))).strip()
@@ -207,6 +247,7 @@ def integrate(draft_dir: Path, module_key: str, prefix: str) -> None:
         raise SystemExit(f"{draft_dir} 里没有 {prefix}-NN.html")
     by_id = {item["id"]: item for item in config["content"]}
     toc_by_id = {entry.get("id"): entry for entry in config["toc"] if not entry.get("g")}
+    present = {i for i in by_id if _is_chapter(i, prefix)} | {d.stem for d in drafts}
     for draft in drafts:
         chapter_id = draft.stem
         number = int(chapter_id.split("-")[1])
@@ -214,6 +255,10 @@ def integrate(draft_dir: Path, module_key: str, prefix: str) -> None:
         section, title, toc = render_chapter(draft.read_text(encoding="utf-8"), chapter_id, label)
         out = base / sub / chapter_id / "content.html"
         out.parent.mkdir(parents=True, exist_ok=True)
+        # 指向尚未集成章节的链接先降级成带标记的纯文本，章节集成后下一次 integrate 自动恢复
+        section = re.sub(
+            rf'<a href="#({prefix}-\d\d)(-[\w-]+)?">(.*?)</a>|<span class="xref-pending" data-href="#({prefix}-\d\d)(-[\w-]+)?">(.*?)</span>',
+            lambda m: _xref(m, present), section)
         if wrap:
             section = f'<div class="book-scope">\n{section}</div>\n'
         out.write_text(section, encoding="utf-8", newline="\n")
@@ -228,6 +273,15 @@ def integrate(draft_dir: Path, module_key: str, prefix: str) -> None:
         [toc_by_id[k] for k in toc_by_id if _is_chapter(k, prefix)], prefix)
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     link_home(base, prefix, {c["id"] for c in config["content"]})
+
+
+def _xref(m: re.Match[str], present: set[str]) -> str:
+    """站内链接：目标章已集成就是 <a>，否则是带 data-href 的 span，二者可来回转换。"""
+    chapter, anchor, label = (m.group(1), m.group(2), m.group(3)) if m.group(1) else (m.group(4), m.group(5), m.group(6))
+    href = f"#{chapter}{anchor or ''}"
+    if chapter in present:
+        return f'<a href="{href}">{label}</a>'
+    return f'<span class="xref-pending" data-href="{href}">{label}</span>'
 
 
 def link_home(base: Path, prefix: str, present: set[str]) -> None:

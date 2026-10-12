@@ -34,7 +34,9 @@
 可用标签与写法（与 book 模块一致）：
 
 - 节标题：`<h2 id="hx-NN-s1">…</h2>`，小节：`<h3 id="hx-NN-s1-1">…</h3>`。id 必须唯一，按顺序编号。
-- 段落 `<p>`、列表 `<ul>/<ol>`、强调 `<strong>`、行内代码 `<code class="inl">`。
+- 段落 `<p>`、列表 `<ul>/<ol>`、强调 `<strong>`、行内代码 `<code class="inl">`。草稿是纯 HTML，**不要写 Markdown**：正文里的 `**粗体**` 或反引号代码会原样显示给读者，集成时会直接报错。
+- 代码块与行内代码里的 `<`、`>`、`&` 必须转义成 `&lt;` `&gt;` `&amp;`（TypeScript 泛型 `Promise<T>` 不转义会被浏览器当成标签，后面整段变成删除线）。非 Python 代码块集成时会自动转义，正文其他位置仍要自己转义。
+- 同一章里引用的后续章节如果还没写，照常写 `<a href="#hx-NN">`，集成时会自动降级成纯文本，那一章集成后再自动恢复成链接。
 - 提示框：`<blockquote><p><strong>标签</strong>：…</p></blockquote>`。不用自定义卡片或彩色框。
 - 表格：`<div class="table-wrap"><table><thead><tr>…</tr></thead><tbody><tr>…</tr></tbody></table></div>`，每个单元格都必须在 `<tr>` 内。
 - 源码引用（会被逐条机器核对）：
@@ -50,7 +52,7 @@
   <div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/loop.py::run_agent">…原样代码，&lt; &gt; &amp; 转义…</code></pre></div>
   ```
 
-  `data-lab` 取 `文件::函数或类名`（摘录该定义的完整源码，含装饰器），或只写文件路径（摘录整个文件）。不要手工加高亮 span，集成时自动加。
+  `data-lab` 取 `文件::函数或类名`（摘录该定义的完整源码，含装饰器）、`文件::类名.方法名`（方法摘录保留原缩进），或只写文件路径（摘录整个文件）。不要手工加高亮 span，集成时自动加。
 - 其他语言的源码摘录（TS 等）用 `data-lang="typescript"`，并且紧跟一个 src-ref 标明出处；摘录要逐字，可以用 `// …` 省略中间行。
 - 站内链接：本模块用 `#hx-NN-s1`，跨模块用 `#/dsh?section=…`、`#/codex-harness?section=…`、`#/book?section=…`。
 

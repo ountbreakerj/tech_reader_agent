@@ -1,0 +1,308 @@
+<section class="chapter" id="ch-hx-03" data-slug="hx-03"><div class="ch-head"><span class="ch-num">第 3 章</span></div><h1 id="hx-03">执行管线与并发</h1>
+<p>模型的一条回复里可以带多个 <code class="inl">tool_use</code> 块。第 2 章讲了单个工具怎么注册、怎么被调用、失败怎么变成错误结果；这一章处理的是它们<b>同时出现</b>时的问题：谁可以一起跑，谁必须单独跑，结果按什么顺序交回给模型。</p>
+
+<p>问题本身不复杂，但很容易做错。天真的实现是「多个就 <code class="inl">gather</code> 一把并发」，代码只有几行，代价是：两个都写同一个文件的调用会互相覆盖；一条慢命令会占满全部并发额度；先完成的调用先入历史，于是 <code class="inl">tool_result</code> 的顺序和模型请求的顺序对不上。这些都不是理论风险——OpenHarness 就选了这条路，本章会把它的注释和后果一起读一遍。</p>
+
+<h2 id="hx-03-s1">一次回复里多个 tool_use：先分批，再执行</h2>
+
+<p>DSH 把这一步的调度逻辑单独放在一个文件里，模块注释开头就是那句判据（<code class="inl">tool-calls.ts:2</code>）：</p>
+
+<blockquote><p><strong>原文</strong>：<code class="inl">Exclusive calls form barriers;</code> 独占调用形成屏障；并行调用进有界滚动池，启动前重新分类。</p></blockquote>
+
+<p>用一句话概括整个算法：<b>按模型给出的顺序扫一遍调用，连续的「可并行」调用合成一批，每个「独占」调用单独成一批；批与批之间顺序执行，批内并发。</b> 于是三批的结构自然地把屏障表达了出来——独占调用开始之前，前面批的结果必须全部提交完，它天然就是一道墙。</p>
+
+<p>真正决定「可并行还是独占」的是一个由工具自己声明的分类器。DSH 的类型契约在 <code class="inl">ToolExecutionMode</code>：</p>
+
+<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:359" data-expect="export type ToolExecutionMode =">index.ts:359</code>
+
+<p>它的两条注释写明了语义：<code class="inl">parallel</code> 可以与兄弟调用重叠，<code class="inl">exclusive</code> 单独运行并形成排序屏障。分类本身在同一个文件的 <code class="inl">executionMode()</code> 里，只有 9 行，但这 9 行是整个并发策略的判据源：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">executionMode(exec: ToolExecutionInput): ToolExecutionMode {
+  const tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined)
+  if (!tool?.isConcurrencySafe) return { kind: 'exclusive' }
+  try {
+    const concurrencySafe: unknown = tool.isConcurrencySafe(exec.arguments)
+    return concurrencySafe === true ? { kind: 'parallel' } : { kind: 'exclusive' }
+  } catch {
+    return { kind: 'exclusive' }
+  }
+}</code></pre></div>
+
+<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1309" data-expect="executionMode(exec: ToolExecutionInput): ToolExecutionMode {">index.ts:1309-1318</code>
+
+<p>逐条读它的判据，全是"不满足就独占"：工具解析不出来（未知工具）→ 独占；没有声明 <code class="inl">isConcurrencySafe</code> → 独占；分类器返回的不是<b>严格</b> <code class="inl">true</code>（返回 <code class="inl">'yes'</code>、返回真值对象都不算）→ 独占；分类器抛异常 → 独占；参数校验不过 → 独占。也就是说，<b>并发是需要显式申请的特权，不是默认值</b>。测试把这个契约钉得很细，<code class="inl">execution-mode.spec.ts</code> 里五条用例分别覆盖了显式 true、缺声明、未知工具、按参数返回 false、参数非法五种情形（第 28、40、51、56、69 行）。</p>
+
+<p>还有两点值得注意：</p>
+
+<ul>
+<li><b>分类器是一元的</b>（设计笔记 <code class="inl">2026-07-10-parallel-tool-call-execution.md:19</code>）：返回 <code class="inl">true</code> 是工具在承诺「我能和任何同样返回 true 的兄弟重叠」，调度器不会去比较两个调用、也不会证明它们的资源访问不冲突。所以「两个写同一个路径才冲突、写不同路径就安全」这类关系型规则表达不出来——这种调用的安全性取决于兄弟，就必须保持独占（同文件第 21 行）。</li>
+<li><b>分类是按调用参数做的</b>，不是工具的静态属性。<code class="inl">rw</code> 这个工具在 <code class="inl">mode: 'read'</code> 时返回 parallel、在 <code class="inl">mode: 'write'</code> 时返回 exclusive（<code class="inl">execution-mode.spec.ts:62</code> 的分类器，第 65-66 行的断言）。</li>
+</ul>
+
+<p>分批的循环在 <code class="inl">executeToolCalls()</code> 里。它的主体只有十几行，值得逐行看：</p>
+
+<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:85" data-expect="while (next < planned.length) {">tool-calls.ts:85-100</code>
+
+<p>两个关键点：</p>
+
+<ol>
+<li><code class="inl">const group = mode === 'parallel' ? planned.slice(next) : [first]</code>（第 90 行）——分类结果是 parallel 时，<b>把剩下的全部调用都交给这一批</b>，而不是只取一段。真正的上限不靠切分实现，靠批内的滚动池（后文讲）。分类结果是独占时，只有这一个调用成批。</li>
+<li>第 86 行的注释 <code class="inl">Commit before classifying again so registry changes affect unstarted calls.</code> 解释了为什么分类是<b>惰性</b>的：每一批提交完才去分类下一批。这不只是省一次调用——工具注册表可能被插件在运行中改动（第 2 章讲过注册是 effect、卸载即撤销），所以在「前面的批」执行期间新注册的独占工具，会影响尚未开始的调用。设计笔记把这条列为明确的后果（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/feature/2026-07-10-parallel-tool-call-execution.md:105" data-expect="Tool registration is a scheduling boundary.">笔记:105</code>）：<b>工具注册是一次调度边界</b>，注册表变更只影响还没启动的调用，已经进入池子的调用保留它进入时的调度决定。</li>
+</ol>
+
+<p>把这两条合起来，就是本章要动手实现的东西。Python 版把 batch 切分单独抽成一个纯函数 <code class="inl">plan_batches()</code>，因为它最该被单独测试、也最容易被单独讲清楚：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tool_runtime.py::plan_batches"><span class="kw">def</span> <span class="fn">plan_batches</span>(
+    calls<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">ToolCall</span>],
+    specs<span class="op">:</span> dict[str, <span class="cls">ToolSpec</span>],
+    max_parallel<span class="op">:</span> int <span class="op">=</span> <span class="cls">DEFAULT_MAX_PARALLEL</span>,
+) <span class="op">-&gt;</span> list[list[str]]<span class="op">:</span>
+    <span class="str">"""把一批调用切成按顺序执行的批次。纯函数，不做任何 I/O。
+
+    规则（与 DSH tool-calls.ts 的 runGroup 分组一致）：
+    - 连续的可并行调用合成一批，批内同时最多 max_parallel 个在跑；
+    - 每个独占调用单独成一批，构成屏障：它开始前，前面的批必须全部提交完；
+    - 未声明的工具按 fail-closed 归为独占（它仍会拿到一条 unknown tool 错误结果）。
+    """</span>
+    batches<span class="op">:</span> list[list[str]] <span class="op">=</span> []
+    current<span class="op">:</span> list[str] <span class="op">=</span> []
+    <span class="kw">for</span> call <span class="kw">in</span> calls<span class="op">:</span>
+        spec <span class="op">=</span> specs.get(call.name)
+        parallel <span class="op">=</span> spec.is_parallel <span class="kw">if</span> spec <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">else</span> <span class="kw">False</span>
+        <span class="kw">if</span> parallel<span class="op">:</span>
+            current.append(call.call_id)
+            <span class="kw">continue</span>
+        <span class="kw">if</span> current<span class="op">:</span>
+            batches.append(current)
+            current <span class="op">=</span> []
+        batches.append([call.call_id])
+    <span class="kw">if</span> current<span class="op">:</span>
+        batches.append(current)
+    <span class="kw">return</span> batches</code></pre></div>
+
+<p>注意 <code class="inl">specs.get()</code> 返回 <code class="inl">None</code> 时（未知工具）<code class="inl">parallel</code> 是 <code class="inl">False</code>——这就是 fail-closed，和 DSH 的 <code class="inl">if (!tool?.isConcurrencySafe) return { kind: 'exclusive' }</code> 一个意思。测试里 <code class="inl">test_undeclared_tool_fails_closed_to_exclusive</code> 钉住了这条。</p>
+
+<p>这个纯函数最有价值的性质是<b>可以离线断言</b>。模型给 <code class="inl">[读, 写, 读]</code>，答案就是三批 <code class="inl">[[读], [写], [读]]</code>；<code class="inl">[写, 读, 读, 写, 读]</code> 是 <code class="inl">[[写], [读, 读], [写], [读]]</code>——首尾的写在批的两端各自独立，不会和相邻的读混批。DSH 的测试 <code class="inl">tool-calls.spec.ts:126</code> 取了中间那个例子，断言恰好三组。</p>
+
+<h2 id="hx-03-s2">批内：有界滚动池与并发上限</h2>
+
+<p>分批只决定了「哪些能一起跑」，还没决定「同时最多跑几个」。DSH 的做法是有界滚动池：按模型顺序启动调用直到上限，每当一个调用结算就立刻补位。上限来自一条真实配置，不是示意值：</p>
+
+<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/constants.ts:6" data-expect="export const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 10">constants.ts:6</code>
+
+<p>它被接进 agent-loop 插件的唯一一条循环相关配置里（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/index.ts:346" data-expect="maxParallelToolCalls: z.number().step(1).min(1).default(DEFAULT_MAX_PARALLEL_TOOL_CALLS).volatile(),">index.ts:346</code>，<code class="inl">min(1)</code>、默认 10）。设计笔记说明了它的边界语义（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/feature/2026-07-10-parallel-tool-call-execution.md:43" data-expect="An exclusive group is a pool of one. A cap of `1` preserves serial execution.">笔记:43</code>）：独占批就是上限为 1 的池子，上限设成 1 就完全退化为串行。这条给了运维一个零风险的开关。</p>
+
+<p>滚动池的循环条件本身就是注解（<code class="inl">tool-calls.ts:200</code>）：</p>
+
+<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:200" data-expect="while (!aborted && nextToStart < group.length && inFlight.size < maxParallelToolCalls) {">tool-calls.ts:200</code>
+
+<p>三个条件分别是：没有中止、还有没启动的、在跑的数量没到上限。补位之前还要再做一次分类（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:205" data-expect="&amp;&amp; ctx.tools.executionMode(nextCall.exec).kind !== 'parallel') break">tool-calls.ts:205</code>）：如果下一个调用已经变成非 parallel，就停止补位——它属于下一个独占批，得等当前池子排空。这正是设计笔记里的「惰性分类」（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/feature/2026-07-10-parallel-tool-call-execution.md:29" data-expect="Classification is lazy: the scheduler resolves the next call after each barrier and reclassifies every later call before replenishing a parallel pool.">笔记:29</code>）：每道屏障之后重新解析下一个调用，每次补充池子之前重新分类之后的所有调用。</p>
+
+<p>Python 版把上限交给 <code class="inl">ThreadPoolExecutor(max_workers=limit)</code>——池子本身就是有界滚动池，提交多于上限的调用会排队等 worker 空出来，语义与 DSH 的 <code class="inl">inFlight.size &lt; maxParallelToolCalls</code> 等价：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tool_runtime.py::execute_batch"><span class="kw">def</span> <span class="fn">execute_batch</span>(
+    call_ids<span class="op">:</span> <span class="cls">Sequence</span>[str],
+    calls<span class="op">:</span> dict[str, <span class="cls">ToolCall</span>],
+    specs<span class="op">:</span> dict[str, <span class="cls">ToolSpec</span>],
+    <span class="op">*</span>,
+    max_parallel<span class="op">:</span> int <span class="op">=</span> <span class="cls">DEFAULT_MAX_PARALLEL</span>,
+    timeout<span class="op">:</span> float <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+    cancelled<span class="op">:</span> <span class="cls">Callable</span>[[], bool] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+) <span class="op">-&gt;</span> list[<span class="cls">CallResult</span>]<span class="op">:</span>
+    <span class="str">"""执行一批调用，按传入顺序返回结果（完成顺序不影响返回顺序）。
+
+    并发上限就是线程池的 worker 数：同一时刻真在跑的工具体不超过 max_parallel，
+    无论这一批有多少个调用（多出来的提交排队等额度）。每个工具自己的 timeout
+    优先于本批的 timeout；超时、异常、未知工具都只是这一条调用变成 is_error，
+    同批其他调用照常跑完、各自归因。
+    """</span>
+    limit <span class="op">=</span> max(<span class="num">1</span>, min(int(max_parallel), len(call_ids)))
+    is_cancelled <span class="op">=</span> cancelled <span class="kw">or</span> (<span class="kw">lambda</span><span class="op">:</span> <span class="kw">False</span>)
+    results<span class="op">:</span> dict[str, <span class="cls">CallResult</span>] <span class="op">=</span> {}
+
+    <span class="kw">def</span> <span class="fn">run</span>(call<span class="op">:</span> <span class="cls">ToolCall</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">if</span> is_cancelled()<span class="op">:</span>
+            <span class="cmt"># 取消之后不再启动新的工具体；已经启动的会跑完，结果照样按序提交</span>
+            results[call.call_id] <span class="op">=</span> cancelled_result(call)
+            <span class="kw">return</span>
+        spec <span class="op">=</span> specs.get(call.name)
+        <span class="cmt"># 计时从拿到 worker 额度、真正开始调工具体算起：排队不该算进工具自己的预算</span>
+        started <span class="op">=</span> time.monotonic()
+        <span class="kw">try</span><span class="op">:</span>
+            <span class="kw">if</span> spec <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+                <span class="kw">raise</span> <span class="cls">LookupError</span>(<span class="cls">UNKNOWN_TOOL_RESULT</span>.format(name<span class="op">=</span>call.name))
+            budget <span class="op">=</span> timeout <span class="kw">if</span> spec.timeout <span class="kw">is</span> <span class="kw">None</span> <span class="kw">else</span> spec.timeout
+            outcome <span class="op">=</span> spec.fn(dict(call.args))
+            <span class="kw">if</span> budget <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> time.monotonic() <span class="op">-</span> started <span class="op">&gt;</span> budget<span class="op">:</span>
+                <span class="kw">raise</span> <span class="cls">ToolCallTimeout</span>(<span class="str">f"tool {call.name!r} exceeded its {budget}s budget"</span>)
+            results[call.call_id] <span class="op">=</span> <span class="cls">CallResult</span>(
+                call.call_id, call.name, str(outcome), <span class="kw">False</span>, started, time.monotonic(),
+            )
+        <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> exc<span class="op">:</span>
+            failed <span class="op">=</span> error_result(call, exc)
+            failed.started_at, failed.finished_at <span class="op">=</span> started, time.monotonic()
+            failed.timed_out <span class="op">=</span> isinstance(exc, <span class="cls">ToolCallTimeout</span>)
+            results[call.call_id] <span class="op">=</span> failed
+
+    <span class="kw">with</span> <span class="cls">ThreadPoolExecutor</span>(max_workers<span class="op">=</span>limit) <span class="kw">as</span> pool<span class="op">:</span>
+        <span class="kw">for</span> call <span class="kw">in</span> (calls[cid] <span class="kw">for</span> cid <span class="kw">in</span> call_ids)<span class="op">:</span>
+            pool.submit(run, call)
+    <span class="cmt"># 结果按输入顺序取，不是按完成顺序</span>
+    <span class="kw">return</span> [results[cid] <span class="kw">for</span> cid <span class="kw">in</span> call_ids]</code></pre></div>
+
+<p>测试用<b>高水位</b>而不是「总耗时」来断言上限被遵守，因为耗时断言在负载机器上会抖：每个工具体进出时对计数器加减，<code class="inl">test_peak_concurrency_never_exceeds_the_cap</code> 提交 6 个各睡 30ms 的调用、上限 3，断言观察到的峰值恰好是 3，并且总耗时不少于两波（≥55ms）。上限设成 1 时峰值必须是 1——这条对应 DSH 的 <code class="inl">maxParallelToolCalls: 1 is fully serial</code>（<code class="inl">tool-calls.spec.ts:311</code>）。</p>
+
+<h2 id="hx-03-s3">结果按原序提交：提交顺序 ≠ 完成顺序</h2>
+
+<p>这是整章最容易做错、后果也最隐蔽的一条。</p>
+
+<p>模型 API 对消息结构有硬要求：每个 <code class="inl">tool_use</code> 都必须有对应的 <code class="inl">tool_result</code>，而 DSH 的 DeepSeek 适配器在序列化时还额外校验「调用之后必须紧跟结果」，否则直接抛 <code class="inl">INVALID_REQUEST</code>（<code class="inl">serialize.ts:141</code>，第 1 章讲过消息格式）。并发执行会让结果<b>完成顺序</b>和<b>请求顺序</b>不一致，如果按完成顺序往历史里追加，顺序就乱了。</p>
+
+<p>DSH 的解法是一个提交游标。它藏在一行注释里，但读起来是整段设计的核心：</p>
+
+<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:146" data-expect="// `committed` advances only across contiguous model-order slots.">tool-calls.ts:146</code>
+
+<p>配套的是 <code class="inl">commitReady()</code>（第 147-161 行）：只要「按模型顺序的下一个槽位」还没有结果就什么都不做；一旦有了，就提交它、推进游标、再看下一个。于是<b>先完成的快调用会被扣在槽位里，等前面慢的兄弟提交完才轮到它</b>。同一个循环里，<code class="inl">additionalContexts</code>（工具或 post-execute 中间件产生的附加上下文）也在这一刻按模型顺序取出来交给下一步（第 157 行）——顺序一致的范围不止工具结果本身。</p>
+
+<p>设计笔记第 47 行把这条讲得最清楚：已经启动的调用各占一个模型顺序槽位，只有游标所在的下一个槽位准备好了，才追加 <code class="inl">tool/result</code> 并收集 <code class="inl">additionalContexts</code>；<b>实时界面可以显示多个正在进行的调用，但结果和工具后的上下文始终是模型顺序的</b>。代价在后果一节（第 101 行）：有序提交会让快的调用被慢的兄弟挡住。DSH 接受了这个代价，因为回放和模型历史的顺序比 UI 的即时性重要。</p>
+
+<p>DSH 的测试 <code class="inl">tool-calls.spec.ts:230</code> 专门构造了「后一个先结算」的场景：放行 c2，断言此刻 <code class="inl">tool/result</code> 事件数为 0（结果被扣住了），再放行 c1，最后两个结果的顺序是 <code class="inl">[c1, c2]</code>。</p>
+
+<p>Python 版用最朴素的方式达成同一件事：并发跑完之后，<b>按输入顺序从结果字典里取出来</b>。关键在最后两行——<code class="inl">return [results[cid] for cid in call_ids]</code>，而不是 <code class="inl">list(results.values())</code>。字典的插入顺序在这里恰好是完成顺序，用它就会复现那个 bug；测试 <code class="inl">test_reversed_completion_order_still_submits_in_input_order</code> 让 c1/c2/c3 分别睡 60/30/5 毫秒，断言返回顺序仍是 c1、c2、c3，同时断言 <code class="inl">results[2].finished_at &lt; results[0].finished_at</code>——即完成顺序确实反了，如果实现按完成顺序返回，这条断言会挂。</p>
+
+<h2 id="hx-03-s4">子进程型工具与纯计算工具的区别</h2>
+
+<p>到这里为止，把「工具」当成一个黑盒函数是够用的。但真实 harness 里工具分两类，它们对并发和取消的容忍度完全不同：一类是纯计算或纯读（读文件、grep、web fetch、列目录），另一类是要起子进程的（bash、跑测试、调外部命令）。后者有三个纯函数没有的性质：</p>
+
+<ol>
+<li><b>它占用外部资源</b>。并发 10 个 <code class="inl">pytest</code> 不是慢 10 倍，是可能一起 OOM 或一起超时。</li>
+<li><b>它需要被真的杀掉</b>。取消一个纯函数只是不再等它；取消一个子进程必须发信号，而且可能留下孤儿进程。</li>
+<li><b>它的超时是外部强加的</b>，不是自己算出来的。</li>
+</ol>
+
+<p>这三条在源码里都留下了痕迹。先看 DSH 的声明策略——设计笔记第 63 行把哪些工具选择了并行摊开列了出来，读这一行基本就等于读 DSH 对"什么算安全"的完整判断：</p>
+
+<blockquote><p><strong>原文</strong>：<code class="inl">The shipped declarations are conservative.</code> web search、web fetch、filesystem read、session-query 的 trace/read 工具、以及 subagent 委托选择并行；filesystem 的 write/edit、bash 工具、session-query 的 search 工具、workflow、用户交互、todo 变更、PTC 模式、Cordis 变更工具全部保持独占。<b>bash 因为找不到可靠地按参数判断的分类器，保持独占</b>。</p></blockquote>
+
+<p>一句「bash 保持独占」是整段里最重的设计判断：它不是忘了开，是<b>明确承认判不出来而不开</b>。同一个文件第 21 行给了理由的一般形式（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/feature/2026-07-10-parallel-tool-call-execution.md:21" data-expect="The interface cannot express relational rules such as &quot;these writes are safe only when their paths differ,&quot; so a call whose safety depends on a sibling remains exclusive.">笔记:21</code>）：分类器无法表达「这些写只在路径不同时才安全」这类关系型规则，所以安全性取决于兄弟的调用必须保持独占。bash 的命令本身就是不透明的字符串，连一元判断都做不了。</p>
+
+<p>顺带一个颇有意思的例外，第 65 行：<b>filesystem read 依赖一个很窄的记录器例外</b>——它的同步观察更新可能乱序落定，但 write/edit 在真正改文件前会重新检查观察到的版本号，所以过期的状态只会产生一个 <code class="inl">FS_STALE_VERSION</code> 错误，不会静默覆盖。这说明并发安全的（部分）保障可以下沉到工具自己的版本检查里，而不必全靠调度器串行化。</p>
+
+<p>再看超时。DSH 没有把超时写进调度器，而是做成一个挂在 <code class="inl">tools/execute</code> 上的插件 <code class="inl">timeout-policy</code>：工具用 <code class="inl">timeoutMs</code> 声明预算，插件把预算变成对 <code class="inl">exec.signal</code> 的期限，到期后把结果替换成 <code class="inl">TOOL_TIMEOUT</code> 错误。它的模块注释说清了这种协作式超时的边界：</p>
+
+<blockquote><p><strong>原文</strong>：<code class="inl">A tool declares `timeoutMs` and promises to honor `exec.signal`</code>……<code class="inl">a tool that ignores or slowly handles cancellation can keep the caller waiting because the package cannot hard-stop downstream work.</code>（包 README 的 Summary 一节）——工具必须真的理会取消信号，插件<b>没法硬停</b>下游工作。</p></blockquote>
+
+<p>OpenHarness 在这一点上选择了硬停。它的 bash 工具把超时上限直接写进参数模型（<code class="inl src-ref" data-src="oh:src/openharness/tools/bash_tool.py:24" data-expect="timeout_seconds: int = Field(default=600, ge=1, le=600)">bash_tool.py:24</code>），超时用 <code class="inl">asyncio.wait_for</code> 加 <code class="inl">_terminate_process(..., force=True)</code> 强制收尾（<code class="inl src-ref" data-src="oh:src/openharness/tools/bash_tool.py:61" data-expect="await asyncio.wait_for(process.wait(), timeout=arguments.timeout_seconds)">bash_tool.py:61-64</code>）。两种取向各有代价：DSH 的方式不会和工具 promise 赛跑（不会「先返回超时、工具还在后台写文件」），但依赖工具配合；OpenHarness 的方式确定性强，但强杀可能留下半写状态。</p>
+
+<p>至于「多个调用并发时哪个参数错了」这类<b>归因</b>问题，两边的做法都是让每条调用各自产生结果。DSH 里未知工具抛 <code class="inl">ToolNotFoundError</code>、工具本体异常转成错误结果（<code class="inl">tools/src/index.ts:1585</code>、<code class="inl">1593</code>），而且 pre-execute 的拒绝也是一个 <code class="inl">isError</code> 结果而不是中止整批——<code class="inl">tool-calls.spec.ts:411</code> 那条测试同时放了一个拒绝和一个抛异常的 pre-execute 钩子，断言两个都拿到结果、且 pre/post 观察顺序都是模型顺序。</p>
+
+<h2 id="hx-03-s5">取消、超时、以及一个失败时同批怎么办</h2>
+
+<p>三种异常路径要分开处理，混在一起会出系统性 bug。</p>
+
+<h3 id="hx-03-s5-1">一个工具失败：不牵连兄弟</h3>
+
+<p>这条两库的结论一致，但理由不同。DSH 在 pre/post-execute 层面就让失败变成结果：被拒绝的调用拿到 <code class="inl">Error: &lt;原因&gt;</code> 的 isError 结果回给模型（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1532" data-expect="content: [{ type: 'text', text: `Error: ${denialReason}` }],">index.ts:1532</code>），同批其他调用不受影响。OpenHarness 是在 <code class="inl">asyncio.gather</code> 上加了 <code class="inl">return_exceptions=True</code>，而它的注释把原因写得比源码更直白（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:853" data-expect="raw_results = await asyncio.gather(">query.py:853</code>）：</p>
+
+<blockquote><p><strong>原文</strong>：<code class="inl"># Use return_exceptions=True so a single failing tool does not abandon</code> its siblings as cancelled coroutines and leave the conversation with un-replied tool_use blocks (Anthropic's API rejects the next request on the session if any tool_use is missing a matching tool_result).</p></blockquote>
+
+<p>注意这个理由的链条：<b>问题不在"某个工具失败了"，而在"失败会让兄弟协程被取消掉，于是留下没有结果的 tool_use，下一次请求被 API 直接拒绝"。</b> 这是把并发和消息合法性绑在一起的典型例子——一个纯调度层面的选择，最后的表现形式是"整个会话在下一次请求时报错"。</p>
+
+<h3 id="hx-03-s5-2">超时：只是这一条调用失败</h3>
+
+<p>Python 版把超时处理成"这一条结果变成 is_error、且带 <code class="inl">timed_out</code> 标记"。两个细节是刻意的：</p>
+
+<ul>
+<li><b>计时从拿到 worker 额度之后开始</b>，不是从提交开始。否则上限为 3、有 10 个调用时，排在后面的调用会因为"排队时间"被误判成超时。</li>
+<li><b><code class="inl">timed_out</code> 只认本模块自己抛的 <code class="inl">ToolCallTimeout</code></b>，不认 <code class="inl">TimeoutError</code>。工具体自己抛的 socket 超时是它的实现细节，应该原样归因为一次普通失败，不能被算成调度器超时。测试 <code class="inl">test_a_tools_own_timeout_error_is_not_misattributed</code> 钉住了这条区分。</li>
+<li>工具自己的预算优先于整批预算（<code class="inl">budget = timeout if spec.timeout is None else spec.timeout</code>），避免一个声明了长预算的工具被配置里的默认值误杀。</li>
+</ul>
+
+<p>作为对照，OpenHarness 的单工具路径和并发路径的超时行为不一样：单个工具时异常被 try/except 就地接住（<code class="inl">query.py:825-833</code>），多个工具时靠 gather 的 return_exceptions，两条路径都正确、但代码是两份。</p>
+
+<h3 id="hx-03-s5-3">取消：没派发的调用要补结果</h3>
+
+<p>用户按下中断时，DSH 的处理有一处非常克制的地方：<b>它先排空已启动的调用，再把它们的结果按顺序提交，最后才给未派发的调用补上合成结果。</b> 补结果的原因写在文件头注释里（<code class="inl">tool-calls.ts:8</code>）：</p>
+
+<blockquote><p><strong>原文</strong>：<code class="inl">Abort records synthetic error results for skipped calls so replay stays</code> valid.（中断时为跳过的调用记下合成错误结果，让回放仍然合法。）</p></blockquote>
+
+<p>补的内容是一条固定文案的 isError 结果（<code class="inl">tool-calls.ts:253</code>，<code class="inl">Error: tool call aborted before dispatch</code>），错误码是 <code class="inl">ABORTED_BEFORE_DISPATCH</code>。补结果的循环是第 241 行（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:241" data-expect="for (const call of group.slice(started)) appendSkippedToolCall(session, turn, step, call.block)">tool-calls.ts:241</code>），第 97 行是整批都被跳过的路径。DSH 的测试覆盖了两个取消窗口：信号在一批开始前就已经中止（<code class="inl">tool-calls.spec.ts:459</code>），以及中止发生在有序的 pre-execute 期间（第 490 行）——两种情况下都断言 <code class="inl">tool/call</code> 事件有两条、<code class="inl">tool/result</code> 也有两条，各自带 <code class="inl">ABORTED_BEFORE_DISPATCH</code>。</p>
+
+<p>Python 版把这条不变式实现成 <code class="inl">run_pipeline()</code> 的尾部补齐：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/tool_runtime.py::run_pipeline"><span class="kw">def</span> <span class="fn">run_pipeline</span>(
+    calls<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">ToolCall</span>],
+    specs<span class="op">:</span> dict[str, <span class="cls">ToolSpec</span>],
+    <span class="op">*</span>,
+    max_parallel<span class="op">:</span> int <span class="op">=</span> <span class="cls">DEFAULT_MAX_PARALLEL</span>,
+    timeout<span class="op">:</span> float <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+    on_cancel<span class="op">:</span> <span class="cls">Callable</span>[[], bool] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+) <span class="op">-&gt;</span> list[<span class="cls">CallResult</span>]<span class="op">:</span>
+    <span class="str">"""按批次跑完一整步，返回与 calls 等长、且同序的结果列表。
+
+    批次在开跑前一次规划好；发生取消后，当前批的结果照常提交，之后不再启动
+    新批次，剩余未派发的调用各补一条「派发前已中止」的错误结果——这样模型的
+    历史里不会留下没有 tool_result 的 tool_use。
+    """</span>
+    planned <span class="op">=</span> plan_batches(calls, specs, max_parallel)
+    by_id <span class="op">=</span> {call.call_id<span class="op">:</span> call <span class="kw">for</span> call <span class="kw">in</span> calls}
+    results<span class="op">:</span> list[<span class="cls">CallResult</span>] <span class="op">=</span> []
+
+    <span class="kw">for</span> batch <span class="kw">in</span> planned<span class="op">:</span>
+        <span class="kw">if</span> on_cancel <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> on_cancel()<span class="op">:</span>
+            results.extend(cancelled_result(by_id[cid]) <span class="kw">for</span> cid <span class="kw">in</span> batch)
+            <span class="kw">continue</span>
+        results.extend(execute_batch(
+            batch, by_id, specs,
+            max_parallel<span class="op">=</span>max_parallel, timeout<span class="op">=</span>timeout, cancelled<span class="op">=</span>on_cancel,
+        ))
+    <span class="kw">return</span> results</code></pre></div>
+
+<p>返回值的长度恒等于输入长度，是这个函数唯一需要保证的事。测试 <code class="inl">test_cancel_before_dispatch_backfills_every_remaining_call</code> 一开始就返回取消，断言 4 条结果全为 <code class="inl">cancelled</code>；<code class="inl">test_cancel_mid_pipeline_commits_started_and_backfills_the_tail</code> 让第一个（独占）调用执行期间置上取消标记，断言第一条<b>不是</b> cancelled 而是正常内容、后两条是 cancelled——已派发的调用不会被丢弃。</p>
+
+<p>还有一个更细的取消语义值得点出来。DSH 的 <code class="inl">dispatchToolBody()</code> 注释说：<code class="inl">Cancellation never abandons the body:</code> <code class="inl">a started promise reaches quiescence before its outcome becomes `ABORTED`</code>（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1567" data-expect="* into any around-wrapper replacement. Cancellation never abandons the body:">index.ts:1567-1568</code>）。也就是说，"取消"对已经开始的工具体不是一个中断，而是"结果被改写成中止"。而且这里区分了两个错误码：<b>工具体已经跑过</b> → <code class="inl">ABORTED</code>，<b>工具体没跑</b> → <code class="inl">ABORTED_BEFORE_DISPATCH</code>（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1560" data-expect="return state.bodyInvoked">index.ts:1560</code> 就是这个二选一的判断）。这个区分对模型有意义：前者结果未知、可能需要核实，后者可以放心重试。</p>
+
+<p>Python 版只用了后一种（<code class="inl">CallResult.cancelled</code> 表示"派发前已中止"），没有实现工具体跑到一半被改写成中止的分支——这是本章的简化，真实实现里这一支需要工具真的理会取消信号（见上一节 timeout-policy 的说明）。</p>
+
+<h2 id="hx-03-s6">按批次跑一整步</h2>
+
+<p>把三段拼起来需要一个驱动函数。DSH 里它是 <code class="inl">executeToolCalls()</code>（<code class="inl">tool-calls.ts:60</code>），签名里除了调用列表和信号，还有一个 <code class="inl">acceptContext</code> 回调——已经提交的结果里带的附加上下文要交回给循环，排进下一步的收件箱。</p>
+
+<p>DSH 里这个队列叫 next-step：工具执行期间产生的上下文（包括工具自己调 <code class="inl">ctx.inject()</code> 塞的）排在下一步的输入里，而且排在工具结果<b>之后</b>。第 1 章讲过 inbox 的两个队列；这里的顺序约束是它的直接后果：<code class="inl">tool-calls.ts:157</code> 那一行的 <code class="inl">acceptContext(context)</code> 只会在结果已经追加之后被调用，所以模型看到的顺序永远是「工具结果 → 工具产生的上下文」，不会反过来。</p>
+
+<div class="table-wrap"><table><thead><tr><th>关心的事</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th></tr></thead><tbody>
+<tr><td>分批与屏障</td><td>按每次调用的 <code class="inl">executionMode()</code> 惰性分类，连续并行合批、独占单独成批（<code class="inl">tool-calls.ts:89-90</code>）</td><td>无屏障：调用数 &gt; 1 就无条件全部并发，只看个数不看读写</td><td>无并发：<code class="inl">for block in tool_calls</code> 顺序跑（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:115" data-expect="for block in tool_calls:">s01/code.py:115</code>）</td></tr>
+<tr><td>并发上限</td><td>有界滚动池，默认 10（真实值）</td><td>无上限（就是这一批的个数）</td><td>1</td></tr>
+<tr><td>结果顺序</td><td>提交游标，按模型顺序（<code class="inl">tool-calls.ts:146</code>）</td><td>按输入顺序 zip 回来（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:857" data-expect="for tc, result in zip(tool_calls, raw_results):">query.py:857</code>），只是同一批结果一起到手，中间没有可见的顺序问题</td><td>天然按顺序</td></tr>
+<tr><td>一个工具失败</td><td>转成 isError 结果，pre-execute 的拒绝也走同一条路（<code class="inl">index.ts:1532</code>）</td><td>gather 加 return_exceptions，逐个转 isError（<code class="inl">query.py:849</code>）</td><td>不接异常；工具抛错会打断整个循环</td></tr>
+<tr><td>取消</td><td>排空已启动 + 未派发的补合成结果，区分 ABORTED / ABORTED_BEFORE_DISPATCH</td><td>只做悬空 tool_use 的事后清洗（<code class="inl src-ref" data-src="oh:src/openharness/engine/messages.py:119" data-expect="def sanitize_conversation_messages(messages: list[ConversationMessage]) -&gt; list[ConversationMessage]:">messages.py:119</code>）</td><td>无</td></tr>
+<tr><td>超时</td><td>协作式：插件把 timeoutMs 变期限，工具须理会 signal（无法硬停）</td><td>强制：<code class="inl">wait_for</code> + 杀进程，bash 上限 600 秒</td><td>bash 写死 120 秒</td></tr>
+<tr><td>适用场景</td><td>多工具、长会话、要回放与审计</td><td>想要并发但接受"写操作也可能撞在一起"的风险</td><td>教学：把循环讲清楚，调度不是重点</td></tr>
+</tbody></table></div>
+
+<h2 id="hx-03-s7">坑与失败案例</h2>
+
+<p><strong>坑 1：按完成顺序追加结果，<code class="inl">tool_result</code> 与 <code class="inl">tool_use</code> 对不上。</strong> 触发条件是并发段里有快有慢：先完成的写进历史，顺序就和模型请求的顺序不一致。后果分两极——模型可能把结果配错调用（它按位置理解结果），以及某些适配器直接拒绝请求：DSH 的 DeepSeek 序列化在本地就校验「调用之后必须紧跟结果」，不满足时抛 <code class="inl">INVALID_REQUEST</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/serialize.ts:141" data-expect="if (pending.size &gt; 0) throw new LlmError('DeepSeek Messages tool calls need immediate results', 'INVALID_REQUEST')">serialize.ts:141</code>）。DSH 的防法是提交游标（<code class="inl">tool-calls.ts:146</code>）；Python 版的防法是从输入顺序取结果，测试让完成顺序真的反过来验证它。</p>
+
+<p><strong>坑 2：并发写同一个文件。</strong> 两个 <code class="inl">edit</code> 作用在同一个文件上，各自读到旧内容、各自写回，后写的覆盖先写的。DSH 的防法是<b>不让它发生</b>：filesystem 的 write/edit 不声明 <code class="inl">isConcurrencySafe</code>，因此按 fail-closed 成为独占屏障，一个批里只会有一个。相对的，filesystem read 敢开并发，是因为它有版本号复查兜底（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/feature/2026-07-10-parallel-tool-call-execution.md:65" data-expect="write and edit re-check the observed version before mutation, so stale state only produces">笔记:65</code>）——写操作改文件前会重查观察到的版本，过期就报 <code class="inl">FS_STALE_VERSION</code>。这里有个更普遍的教训：即使两个调用都是独占、批内串行，<b>批与批之间也没有文件锁</b>，真正防止竞态的仍是工具自己的版本检查。</p>
+
+<p><strong>坑 3：并发上限不分类型，长命令占满全部额度。</strong> 如果上限是全局的、且 bash 也进了并行池，一个 5 分钟的构建会占住 10 个额度里的 1 个——还算好；但如果有 3 个长命令同时发出，剩下 7 个 fast read 得排队，或者反过来 10 个长命令把机器打满。DSH 的两道闸对此都有回应：上限只限制<b>一个 agent 步骤</b>内发起的调用（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/feature/2026-07-10-parallel-tool-call-execution.md:103" data-expect="Concurrent external calls can compete for quota or process capacity. Providers own their capacity controls; the loop cap only limits calls from one agent step.">笔记:103</code> 明确写了这条边界——provider 自己的配额控制不归它管），以及 bash 干脆不进并发池。<code class="inl">tool-calls.ts:200</code> 的滚动池则是另一层保护：额度一空出来立刻补位，不会出现"等整批完成再开下一批"的空转。</p>
+
+<p><strong>坑 4：取消后留下没有结果的 tool_use。</strong> 用户中断时，模型回复里已经发出的调用有一些永远不会被执行。如果只把整个 turn 标记成 aborted 就返回，历史里就留了没有 <code class="inl">tool_result</code> 的 <code class="inl">tool_use</code>——下一次请求被 API 拒绝。这一条 OpenHarness 的注释讲得最透（<code class="inl">query.py:849-852</code>：发 API 会拒绝带悬空 tool_use 的会话），DSH 的应对是给每个跳过的调用补一对 call/result（<code class="inl">tool-calls.ts:8</code>、<code class="inl">97</code>、<code class="inl">241</code>、<code class="inl">253</code>）。OpenHarness 自己则走另一条路：下一次提交前把悬空的调用整条消息删掉（<code class="inl">messages.py:119</code>、<code class="inl">169</code>）——补结果 vs 删调用，两种都能让请求合法，但前者保留了"这件事尝试过"的信息，模型下一轮知道该重试还是先核实，后者则把痕迹抹掉。</p>
+
+<p><strong>坑 5：把分类器当成纯函数用，但在里面做了 I/O。</strong> DSH 的设计笔记明确要求分类器是同步纯函数，"只检查当前调用的参数，不做 I/O 或任何变更"（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/feature/2026-07-10-parallel-tool-call-execution.md:17" data-expect="It is synchronous and pure: it examines only the current call's parsed arguments and performs no I/O or mutation.">笔记:17</code>）。一旦分类器里读文件或查网络，分类的结果就依赖于"它什么时候被调用"——而调度器是惰性分类、会调很多次的（每次补位前、每道屏障后）。同一份参数在不同时刻可能得到不同的分类，屏障就不确定了。DSH 甚至特意在方案对比里拒绝"有状态分类"（<code class="inl src-ref" data-src="dsh:.agents/notes/implemented/feature/2026-07-10-parallel-tool-call-execution.md:79" data-expect="**Use stateful classification.**">笔记:79</code>），理由是它会在分类和派发之间制造空隙。</p>
+
+<p><strong>坑 6：把并发上限当成果延迟的免费午餐。</strong> 并行段确实会让兄弟调用重叠，但有序提交这条约束意味着<b>整批的可见延迟等于最慢的那个调用</b>。DSH 自己把这条列为明确的代价（第 101 行），Python 版的行为也一样：<code class="inl">test_fast_later_call_does_not_jump_ahead_of_a_slow_earlier_one</code> 里 c2 瞬间返回，但它在结果列表里仍然排在睡 60ms 的 c1 后面。想要 UI 上先看到 c2 的结果，就不能只靠一个有序结果列表，得让调用方订阅完成事件——这是 <code class="inl">onProgress</code> 一类的接口，本章的 labs 没有实现。</p>
+
+<h2 id="hx-03-s8">与前后章的衔接</h2>
+
+<p>本章的三个接口点是后面几章的地基：</p>
+
+<ul>
+<li>结果提交之后发生什么，由 <a href="#hx-01">第 1 章</a>的循环判定接管——一批工具跑完，模型被再叫一次，看它还要不要继续。</li>
+<li>谁来决定一个调用该不该被允许执行（而不是并发与否），是 <a href="#hx-02">第 2 章</a>的工具注册与守卫链；本章的 <code class="inl">is_parallel</code> 只回答"能不能和兄弟重叠"，不回答"该不该跑"。</li>
+<li><code class="inl">CallResult</code> 里那三个时间戳（<code class="inl">started_at</code>/<code class="inl">finished_at</code>）和 <code class="inl">timed_out</code>/<code class="inl">cancelled</code> 两个标记，是本章留给可观测性那一章的原始素材：DSH 把这些信息写进会话事件的每一条 <code class="inl">tool/call</code> 与 <code class="inl">tool/result</code>，本章的实现只把它们留在内存里。</li>
+</ul>
+
+<p>本章的 labs 是 <code class="inl">labs/harness/tool_runtime.py</code>，测试在 <code class="inl">labs/tests/test_tool_runtime.py</code>：<code class="inl">py -m unittest discover -s labs/tests -t labs -p "test_tool_runtime.py"</code>，28 条用例、总计约 0.5 秒。相比 <a href="#hx-01">第 1 章</a>的 <code class="inl">loop.py</code>，这一章只替换了 <code class="inl">execute_tools()</code> 那一个函数——循环的其余部分（停止条件、截断、错误预算）完全不变，这也是把调度单独抽出来的好处。</p>
+</section>

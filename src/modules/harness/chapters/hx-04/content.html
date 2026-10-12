@@ -1,0 +1,700 @@
+<section class="chapter" id="ch-hx-04" data-slug="hx-04"><div class="ch-head"><span class="ch-num">第 4 章</span></div><h1 id="hx-04">会话日志与回放</h1>
+<p>到这里为止，我们一直把 <code class="inl">messages</code> 当成历史本身：循环拿到一个列表，往里追加，再把它整个发给模型。这一章要把这个前提翻过来。历史不是那个列表——历史是一份只追加的日志，列表只是它此刻的一种投影。看起来只是换个数据结构，但它决定了三件事：进程被杀之后能不能接着跑、一次失败的运行能不能被逐字复现、以及「模型当时到底看见了什么」这种问题有没有答案。</p>
+
+<h2 id="hx-04-s1">为什么日志是事实来源，内存里的数组不是</h2>
+
+<p>一个内存里的消息数组只记录结果，不记录过程。它丢掉了这些信息：这次请求是在什么配置下发出的、某条消息是模型一次尝试的产物还是最终产物、工具调用有没有真的发生过、上一次运行到哪一步。这些信息在正常运行时不重要，因为没人回头看；但只要出现下面任何一种情况，它们立刻变成必需：进程崩溃后想接着跑、想复现一次线上失败、想知道「为什么这次模型的行为和昨天不同」。</p>
+
+<p>DSH 把这条原则写成了明确的架构约束，措辞很硬：</p>
+
+<blockquote><p><strong>Model-visible means logged.</strong>每次模型请求都必须能从日志重建；任何新的模型可见输入，都必须有对应的 session 事件。其余的一切——缓存、投影、界面状态——都只能是日志的导数。</p></blockquote>
+
+<p>这条约束的出处是 <code class="inl src-ref" data-src="dsh:docs/architecture.md:124" data-expect="Model-visible means logged.">docs/architecture.md:124</code>。它不是一句口号，因为它后面跟着一条可以机械检查的性质：给定一份日志，任何人都能算出「第 N 次请求时模型看到的消息列表是什么」。这就是回放。</p>
+
+<h3 id="hx-04-s1-1">seq 就是下标</h3>
+
+<p>DSH 的 <code class="inl">Session</code> 首先是一份只追加的日志（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:515" data-expect="An event-sourced session: an append-only log">index.ts:515</code>），内部就是一个数组（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:523" data-expect="private log: SessionEvent[] = []">index.ts:523</code>）。<code class="inl">append</code> 的签名和实现同样朴素：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    const entry = this.publicationEntry()
+    const event = deepFreeze({
+      type,
+      seq: SessionSeq(this.log.length),
+      time: Date.now(),
+      data: dataSnapshot,
+      ...(surfaceMetadataSnapshot as { surfaceOp?: unknown; sourceEventSeqs?: unknown }),
+    } as unknown as SessionEvent&lt;T&gt;)
+    validateSessionEventData(event, `session event "${type}" at seq ${event.seq}`)
+    this.commit(event as SessionEvent, entry)
+    return event</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:816-826" data-expect="const entry = this.publicationEntry()">index.ts:816-826</code>（方法签名在 <code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:798" data-expect="append&lt;T extends SessionEventType&gt;(">index.ts:798</code>）。</p>
+
+<p>注意 <code class="inl">seq: SessionSeq(this.log.length)</code> 这一行：序号不是单独维护的计数器，它就是事件在日志里的下标。这个选择带来两个直接后果。</p>
+
+<p>好的一面是「连续」变成了免费的性质——不需要任何检查，因为写入路径本身不可能造出空洞。坏的一面是同一个会话只能有一个写入者：两个并发写入者会算出同一个下标。DSH 用两处防守把这条约束钉死。一是 <code class="inl">append</code> 会拒绝在发布另一个事件的过程中重入（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:865" data-expect="session append cannot reenter while another append is being published">index.ts:865</code>）；二是从磁盘载入时，每条事件的 <code class="inl">seq</code> 必须严格等于它的下标（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:653" data-expect="seed must be contiguous from 0">index.ts:652</code> 附近的构造函数校验，注释里写明「篡改过的种子事件会表现为后端拒绝或内存日志与磁盘静默分叉」）。</p>
+
+<h3 id="hx-04-s1-2">写入前先拍快照</h3>
+
+<p><code class="inl">append</code> 的第三行做了一件容易被忽略的事：它没有直接把调用方给的 <code class="inl">data</code> 放进日志，而是先过一遍 JSON 快照（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:808" data-expect="const dataSnapshot = snapshotJsonValue(data)">index.ts:808</code>）。快照失败就直接抛错，事件不进日志（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:810" data-expect="carries non-JSON-serializable data">index.ts:810</code>）。</p>
+
+<p>这一步同时解决三个问题。第一，日志里存的是快照，调用方事后改动自己那个对象不会改写已经记下的事实。第二，非 JSON 类型（<code class="inl">BigInt</code>、函数、<code class="inl">undefined</code>、<code class="inl">NaN</code>、循环引用）在写入点就被拒绝，而不是等到某次刷盘时才炸——文档里给的理由是「事件日志是持久的事实来源，所以坏事件必须在 append 处失败，而不是晚些时候在后端刷盘时失败」。第三，也是为回放服务的：日志里的每个字段都保证能无损地读回来，回放器因此不需要处理「这个字段可能是函数」这种情况。</p>
+
+<p>我们的 <code class="inl">labs/harness/session_log.py</code> 用一行 dumps/loads 达到同样的效果：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/session_log.py::_json_snapshot"><span class="kw">def</span> <span class="fn">_json_snapshot</span>(value<span class="op">:</span> <span class="cls">Any</span>) <span class="op">-&gt;</span> <span class="cls">Any</span><span class="op">:</span>
+    <span class="str">"""把值拷成无损 JSON 快照；拷不动就当场报错，而不是等落盘时才失败。
+
+    走一遍 dumps/loads 同时完成三件事：深拷贝、拒绝非 JSON 类型、拒绝 NaN/Infinity
+    （DSH 的 append 也在写入处直接抛错，理由相同：日志是事实来源，坏事件要在写入点暴露）。
+    """</span>
+    <span class="kw">try</span><span class="op">:</span>
+        <span class="kw">return</span> json.loads(json.dumps(value, ensure_ascii<span class="op">=</span><span class="kw">False</span>, allow_nan<span class="op">=</span><span class="kw">False</span>))
+    <span class="kw">except</span> (<span class="cls">TypeError</span>, <span class="cls">ValueError</span>) <span class="kw">as</span> exc<span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">ValueError</span>(<span class="str">f"event payload is not losslessly JSON-serializable: {exc}"</span>) <span class="kw">from</span> exc</code></pre></div>
+
+<p>Python 这边的 <code class="inl">allow_nan=False</code> 是关键：默认的 <code class="inl">json.dumps</code> 会把 <code class="inl">float('nan')</code> 写成裸的 <code class="inl">NaN</code>，那不是合法 JSON，载入方（甚至是 Python 之外的工具）读不了。</p>
+
+<h3 id="hx-04-s1-3">日志之外不许有第二份状态</h3>
+
+<p>只要承认日志是事实来源，就要接受随之而来的纪律：任何「当前状态」都必须能从日志折出来，不能另存一份。DSH 连「当前的请求头」都是这么处理的——它有一个专门的纯函数负责从日志里折出当前生效的请求头，注释写明这是「纯离线重建路径」：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export function foldRequestHeader(events: readonly SessionEvent[], from?: EpochHeader): EpochHeader | undefined {
+  let state = from
+  for (const event of events) {
+    if (event.type === 'request/header') state = canonicalHeader(event.data.header)
+  }
+  return state
+}</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/session/src/request-header.ts:63" data-expect="export function foldRequestHeader">request-header.ts:63</code>。折的方式是「最后一条 <code class="inl">request/header</code> 胜出」，其余事件全部跳过。注意它接受一个 <code class="inl">from</code> 参数（接着上次折过的状态继续折），这是纯函数版本的增量优化；我们的实现干脆每次从头折一遍，代价是 O(n)，换来「绝不可能分叉」。</p>
+
+<h2 id="hx-04-s2">事件类型：日志里的词表</h2>
+
+<p>一份日志要能被别的程序理解，事件类型就不能是随手起的字符串。DSH 的做法是把词表写进类型系统：每种事件在 <code class="inl">SessionEventMap</code> 里声明自己的载荷形状（<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:281" data-expect="export interface SessionEventMap {">types.ts:281</code>），然后由脚本生成一份「这个构建认识的全部事件名」的集合（<code class="inl src-ref" data-src="dsh:packages/core/session/src/known-event-types.ts:22" data-expect="export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet&lt;string&gt; = new Set([">known-event-types.ts:22</code>）。生成的文件里写明了这份集合的用途：读取路径遇到集合之外的（且没有 <code class="inl">ignorable</code> 标记的）事件类型时<strong>拒绝</strong>解释这份日志，因为「静默跳过一个必需事件会重建出一个错误的会话」。</p>
+
+<p>核心事件的声明位置（同一份 <code class="inl">types.ts</code>）：</p>
+
+<div class="table-wrap"><table><thead><tr><th>事件</th><th>声明处</th><th>载荷要点</th></tr></thead><tbody>
+<tr><td><code class="inl">turn/start</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:288" data-expect="'turn/start': { turn: number }">types.ts:288</code></td><td>只是打开一轮；这一轮里模型欠不欠回答由后续事件决定</td></tr>
+<tr><td><code class="inl">turn/end</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:297" data-expect="'turn/end': { turn: number; reason: TurnEndReason }">types.ts:297</code></td><td>带一个结构化结束原因，不是字符串</td></tr>
+<tr><td><code class="inl">step/start</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:299" data-expect="'step/start': { turn: number; step: number }">types.ts:299</code></td><td>一步 = 一次模型调用 + 它要求的工具执行</td></tr>
+<tr><td><code class="inl">step/end</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:301" data-expect="'step/end': { turn: number; step: number }">types.ts:301</code></td><td></td></tr>
+<tr><td><code class="inl">user/message</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:309" data-expect="'user/message': UserMessage">types.ts:309</code></td><td>模型可见</td></tr>
+<tr><td><code class="inl">system/message</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:330" data-expect="'system/message': { turn: number; step: number; message: SystemMessage }">types.ts:330</code></td><td>系统提示词也是日志事件，不是另一个旁路</td></tr>
+<tr><td><code class="inl">assistant/message</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:341" data-expect="'assistant/message': {">types.ts:341</code></td><td>最终确定的回复</td></tr>
+<tr><td><code class="inl">assistant/attempt</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:355" data-expect="'assistant/attempt': { turn: number; step: number; stream: AssistantStreamRecord[] }">types.ts:355</code></td><td>失败的尝试也留下原始流；这是「记录过程」的典型</td></tr>
+<tr><td><code class="inl">tool/call</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:361" data-expect="'tool/call': { turn: number; step: number; callId: ToolCallId; name: string; arguments: string }">types.ts:361</code></td><td>参数存原始字符串，不存解析后的对象</td></tr>
+<tr><td><code class="inl">tool/result</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:375" data-expect="'tool/result': {">types.ts:375</code></td><td></td></tr>
+<tr><td><code class="inl">request/header</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:390" data-expect="'request/header': {">types.ts:390</code></td><td>见下一节</td></tr>
+<tr><td><code class="inl">developer/message</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:311" data-expect="'developer/message': {">types.ts:311</code></td><td>工具增删等「系统对模型的说明」，不是用户说的话</td></tr>
+</tbody></table></div>
+
+<p>同一份 <code class="inl">types.ts</code> 里，事件信封的注释把设计意图说得很清楚（<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:496" data-expect="Monotonic sequence number within the session.">types.ts:496</code>）：每个事件有 <code class="inl">type</code> / <code class="inl">seq</code> / <code class="inl">time</code> / <code class="inl">data</code>。信封上还有一个值得单独说的字段 <code class="inl">ignorable?: true</code>（<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:511" data-expect="ignorable?: true">types.ts:511</code>），它的语义是：</p>
+
+<blockquote><p><strong>缺省即必需</strong>：读取方遇到一个自己不认识、又没带 <code class="inl">ignorable</code> 标记的事件类型时，必须拒绝重建这份会话，而不是静默跳过它——因为一个不认识的必需事件可能改变整份日志的解释方式。写方只对「丢了也不影响重建」的信息记录打这个标记。默认必需，意味着忘记打标记的后果是「过度拒绝」（麻烦），而不是「静默恢复出一个被掏空的会话」（灾难）。</p></blockquote>
+
+<p>这是一个值得照抄的默认值选择：在不确定的时候，选那个「出错时更吵闹」的一侧。</p>
+
+<h3 id="hx-04-s2-1">这些事件由谁写</h3>
+
+<p>日志的写入者是 agent loop，不是日志库。DSH 的 <code class="inl">Session</code> 只提供 <code class="inl">append</code>，具体什么时候写什么由循环决定：</p>
+
+<ul>
+<li>turn 开始与结束：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:307" data-expect="this.session.append('turn/start', { turn })">agent.ts:307</code>、<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:387" data-expect="this.session.append('turn/end', { turn, reason: turnEnds! })">agent.ts:387</code>。注意 <code class="inl">turn/end</code> 写在 <code class="inl">finally</code> 里，所以无论正常结束、被取消还是抛异常，这条事件都会落地——日志的「平衡性」（每个 <code class="inl">turn/start</code> 都有对应的 <code class="inl">turn/end</code>）就是靠这一点维持的。</li>
+<li>step 开始与结束：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:331" data-expect="this.session.append('step/start', { turn, step })">agent.ts:331</code>、<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:358" data-expect="this.session.append('step/end', { turn, step })">agent.ts:358</code>（同样在 <code class="inl">finally</code> 里）。</li>
+<li>模型回复：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:539" data-expect="this.session.append('assistant/message', {">agent.ts:539</code>。失败的尝试另记一条（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:486" data-expect="this.session.append('assistant/attempt', { turn, step, stream: live.stream }).seq">agent.ts:486</code>）。</li>
+<li>工具调用与结果：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:264" data-expect="session.append('tool/call', {">tool-calls.ts:264</code>、<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:282" data-expect="session.append('tool/result', {">tool-calls.ts:282</code>。结果事件里还带 <code class="inl">sourceEventSeqs: [callSeq]</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:289" data-expect="sourceEventSeqs: [callSeq]">tool-calls.ts:289</code>），显式指回它的调用——这样「两个并行调用，哪个结果对应哪个调用」不需要靠顺序猜。</li>
+<li>系统提示词：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:423" data-expect="this.session.append('system/message', { turn, step, message }, intent)">agent.ts:423</code>。每次请求前重新组装的提示词都作为一条 <code class="inl">system/message</code> 进日志，所以「提示词变了」也是可查的。</li>
+</ul>
+
+<p>我们的 <code class="inl">SessionLog.append</code> 只做一件额外的事：把 seq 的分配和追加放进同一把锁，这样并发调用也不会撞号。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/session_log.py::append">    <span class="kw">def</span> <span class="fn">append</span>(self, kind<span class="op">:</span> str, payload<span class="op">:</span> dict[str, <span class="cls">Any</span>] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>, <span class="op">*</span>, turn<span class="op">:</span> int <span class="op">=</span> <span class="num">0</span>, step<span class="op">:</span> int <span class="op">=</span> <span class="num">0</span>) <span class="op">-&gt;</span> int<span class="op">:</span>
+        <span class="str">"""追加一条事件并返回它的 seq。
+
+        先做 JSON 快照再入日志：调用方之后改动传入的 dict，不会改变已经写进去的事实。
+        seq 的分配和 append 在同一个锁里，所以并发调用拿到的 seq 不会撞车也不会跳号
+        （DSH 用的是「seq = 日志下标」这条更简单的路子，代价是同一会话只能有一个写入者）。
+        """</span>
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(kind, str) <span class="kw">or</span> <span class="kw">not</span> kind<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ValueError</span>(<span class="str">"event kind must be a non-empty string"</span>)
+        snapshot <span class="op">=</span> _json_snapshot(payload <span class="kw">if</span> payload <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">else</span> {})
+        <span class="kw">with</span> self._lock<span class="op">:</span>
+            event <span class="op">=</span> <span class="cls">Event</span>(seq<span class="op">=</span>len(self._events), kind<span class="op">=</span>kind, payload<span class="op">=</span>snapshot, ts<span class="op">=</span>time.time(), turn<span class="op">=</span>turn, step<span class="op">=</span>step)
+            self._events.append(event)
+        <span class="kw">return</span> event.seq</code></pre></div>
+
+<p><code class="inl">seq</code> 依然等于 <code class="inl">len(self._events)</code>，只是取长度和追加这两步不再可能被别的线程插进来。这是教学版能付得起的代价：真实实现要么像 DSH 一样把「单写者」当成硬约束，要么像我们的 JSONL 后端一样用一个句柄 API 把它固化下来。</p>
+
+<h2 id="hx-04-s3">请求头：为什么要把配置的指纹写进日志</h2>
+
+<p>消息历史只记录「模型看见了什么」，不记录「模型是在什么条件下被问的」。而同一个问题在不同条件下答案不同：换了模型、换了 provider、上下文窗口变了、工具列表变了、采样参数变了——任何一项变化都足以让两次运行不可比。所以 DSH 把这些条件也记进日志，事件叫 <code class="inl">request/header</code>，载荷是 <code class="inl">EpochHeader</code>（<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:240" data-expect="export interface EpochHeader {">types.ts:240</code>），里面有三样东西：调用配置（provider、model、推理强度、采样标量）、适配器实际materialize 出来的默认值、以及<strong>组装好的工具 schema 列表</strong>。</p>
+
+<p>写入策略在 agent loop 里（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:643" data-expect="else if (baseline === undefined || !headerEquals(baseline, header)) {">agent.ts:643</code>），三种原因分得很细：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      headerSeq = this.session.append('request/header', {
+        header,
+        reason: baseline === undefined ? 'initial' : 'resume',
+        ...startsSeries ? { startsSeries: true } : {},
+      }).seq
+      this.requestHeaderLogged = true
+    } else if (baseline === undefined || !headerEquals(baseline, header)) {
+      headerSeq = this.session.append('request/header', {
+        header,
+        reason: 'change',
+        ...startsSeries ? { startsSeries: true } : {},
+      }).seq
+    } else if (startsSeries) {
+      this.session.append('request/header', { header, reason: 'series' })
+    }</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:637-651" data-expect="headerSeq = this.session.append('request/header', {">agent.ts:637-651</code>；四种原因的语义（<code class="inl">initial</code> / <code class="inl">resume</code> / <code class="inl">change</code> / <code class="inl">series</code>）定义在 <code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:273" data-expect="export type RequestHeaderReason = 'initial' | 'resume' | 'change' | 'series'">types.ts:273</code>。</p>
+
+<p>两个设计点值得单独拎出来。</p>
+
+<p><strong>第一，不变就不写。</strong><code class="inl">headerEquals</code> 逐字段比较（工具 schema 按位置逐个比 JSON），相同就一条都不写。否则每一轮都写一条 header，日志立刻被自己的元数据淹没。同一张表里还有一份更细的记录：当工具列表发生增删时，循环会额外写一条 <code class="inl">developer/message</code> 把增删<strong>告诉模型</strong>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:658" data-expect=".map(tool =&gt; ({ type: 'tool-removal' as const, toolName: tool.name }))">agent.ts:658</code>）。这解决了一个真实的痛点：工具集变了但模型不知道，它会继续调用已经不存在的工具。</p>
+
+<p><strong>第二，「工具集变了」必须能被事后检测出来。</strong>这是把指纹写进日志的核心收益。DSH 的做法是存完整的工具 schema 列表，所以差异可以精确到某个 schema 的某个字段；教学版存名字列表加一个指纹就够了，因为差异报告只需要回答「哪些工具增删了」。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/session_log.py::tool_set_changes">    <span class="kw">def</span> <span class="fn">tool_set_changes</span>(self) <span class="op">-&gt;</span> list[str]<span class="op">:</span>
+        <span class="str">"""相邻两条 request/header 之间的工具集差异，形如 ``['+read', '-bash']``。
+
+        日志里存了工具指纹，所以「这次运行的工具集和上次不一样」是可以事后检测出来的；
+        没有指纹的话，只能看到消息历史莫名其妙变了。
+        """</span>
+        names <span class="op">=</span> [header.get(<span class="str">"toolNames"</span>, []) <span class="kw">for</span> header <span class="kw">in</span> self.request_headers()]
+        <span class="kw">if</span> len(names) <span class="op">&lt;</span> <span class="num">2</span><span class="op">:</span>
+            <span class="kw">return</span> []
+        previous, current <span class="op">=</span> set(names[<span class="op">-</span><span class="num">2</span>]), set(names[<span class="op">-</span><span class="num">1</span>])
+        added <span class="op">=</span> [<span class="str">f"+{name}"</span> <span class="kw">for</span> name <span class="kw">in</span> names[<span class="op">-</span><span class="num">1</span>] <span class="kw">if</span> name <span class="kw">not</span> <span class="kw">in</span> previous]
+        removed <span class="op">=</span> [<span class="str">f"-{name}"</span> <span class="kw">for</span> name <span class="kw">in</span> names[<span class="op">-</span><span class="num">2</span>] <span class="kw">if</span> name <span class="kw">not</span> <span class="kw">in</span> current]
+        <span class="kw">return</span> added <span class="op">+</span> removed</code></pre></div>
+
+<p>指纹本身的算法有个细节：工具名<strong>按顺序</strong>参与哈希。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/session_log.py::tools_fingerprint"><span class="kw">def</span> <span class="fn">tools_fingerprint</span>(tools<span class="op">:</span> <span class="cls">Sequence</span>[str]) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""工具名列表的指纹。按顺序参与哈希：与 DSH 的 headerEquals 一致，
+    工具的增删和改序都算变化——工具列表是提示前缀的一部分，改序一样会打断缓存。"""</span>
+    joined <span class="op">=</span> <span class="str">"\n"</span>.join(str(name) <span class="kw">for</span> name <span class="kw">in</span> tools)
+    <span class="kw">return</span> hashlib.sha256(joined.encode(<span class="str">"utf-8"</span>)).hexdigest()[<span class="op">:</span><span class="num">16</span>]</code></pre></div>
+
+<p>如果指纹对工具名排序后再哈希，那么「工具顺序变了」就不会被记为变化，而工具列表是提示前缀的一部分——改序一样会让 KV 缓存失效、一样会改变模型的判断。DSH 的 <code class="inl">headerEquals</code> 也是按位置比较的，两边一致。</p>
+
+<p>请求头落进日志之后，还有一个顺带的好处：它是一条已知的「系列边界」。DSH 的 <code class="inl">request/header</code> 事件带 <code class="inl">startsSeries</code> 标记，压缩把历史替换掉之后需要靠它区分「新的一段对话」和「同一段对话的续写」。没有这个标记，裁剪之后就无法判断这段历史和之前的是不是一件事。</p>
+
+<h2 id="hx-04-s4">格式版本：读不认识的日志要说出来</h2>
+
+<p>日志一旦落盘，格式就冻结了。旧版本的代码要能读新版本的文件吗？通常不能。那就必须把「读不懂」变成一个明确的、能指导操作的错误，而不是猜着读或者崩在读一半。</p>
+
+<p>DSH 把这件事做成了一套可以单独发布、单独测试的机制。当前格式版本是 4，写在类型里（<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:89" data-expect="export const SESSION_FORMAT_VERSION = 4">types.ts:89</code>）。每个历史版本各有一个「编解码器 + 相邻迁移」包，命名方式就是 <code class="inl">session-format-v0-to-v1</code> 到 <code class="inl">session-format-v3-to-v4</code>（v3→v4 的说明是「Tool-role V3-to-V4 migration with native V4 framing and delivery validation」，<code class="inl">session-format-v3-to-v4/src/index.ts:1</code>）。我们看到的版本一共 5 个（v0 到 v4），迁移边 4 条。</p>
+
+<p>这套机制里有两条硬规则，是它的可靠性来源。</p>
+
+<p><strong>规则一：迁移只能相邻，链条必须完整。</strong>声明一条迁移时就会检查它是不是 <code class="inl">vN → v(N+1)</code>（<code class="inl src-ref" data-src="dsh:packages/session/session-format/src/chain.ts:31" data-expect="must declare adjacent v">chain.ts:31</code>），编译链条时从 0 到当前版本逐条找，缺一条就直接报错（<code class="inl src-ref" data-src="dsh:packages/session/session-format/src/chain.ts:68" data-expect="-&gt;v${version + 1} is missing">chain.ts:68</code>）。这样「迁移能不能做」在启动时就确定了，不会在读到一份老日志时才失败。</p>
+
+<p><strong>规则二：比当前新的版本一律拒绝。</strong>读到 <code class="inl">storedVersion &gt; currentVersion</code> 时，返回的不是「尽力而为」，而是一句给操作者看的话：<code class="inl">stored Session uses newer format vN; this build writes vM</code>（<code class="inl src-ref" data-src="dsh:packages/session/session-format/src/catalog.ts:57" data-expect="newer format v${storedVersion}; this build writes v${chain.currentVersion}">catalog.ts:57</code>）。README 里专门写了这个措辞要求：用户看到的应该是「升级 harness」，永远不会是「会话日志损坏」。</p>
+
+<p>还有一处细节值得学：历史版本的恢复用的是一个<strong>独立的、版本钉死的目录</strong>（<code class="inl src-ref" data-src="dsh:packages/session/session-format-catalog/src/historical.ts:11" data-expect="currentVersion: 3,">historical.ts:11</code>，它把 <code class="inl">currentVersion</code> 固定成 3，专门用来收集迁移的前置信息，而不去递归打开当前版本的会话）。理由是：如果历史恢复路径调用当前的恢复逻辑，那它自己就依赖于「当前逻辑是什么」——重构一次当前格式就可能把老文件的读取能力弄坏。把老版本的读取代码冻在一个不再改的目录里，这个耦合就断了。</p>
+
+<p>我们的 labs 版本把同样的原则压成了三条检查：头记录必须有；<code class="inl">version</code> 必须恰好等于这个构建认识的版本；事件的 <code class="inl">seq</code> 必须严格等于它的下标。任何一条不满足都带行号抛 <code class="inl">LogCorrupt</code>。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/session_log.py::LogCorrupt"><span class="kw">class</span> <span class="cls">LogCorrupt</span>(<span class="cls">ValueError</span>)<span class="op">:</span>
+    <span class="str">"""日志在提交前缀里损坏。带上第几行，因为「第几行坏了」是唯一能拿去修的信息。"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, line<span class="op">:</span> int, reason<span class="op">:</span> str) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        super().__init__(<span class="str">f"session log line {line}: {reason}"</span>)
+        self.line <span class="op">=</span> line
+        self.reason <span class="op">=</span> reason</code></pre></div>
+
+<p>把行号放进异常对象（而不只是塞进消息字符串）看起来是小事，实际差别很大：调用方可以程序化地处理「第 N 行坏了」，比如把坏行摘出来、把前后两段拼起来。DSH 的读取器报的是字节偏移（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/format.ts:484" data-expect="unparsable committed event at line">format.ts:484</code> 里 <code class="inl">line ${this.eventLine}</code>），原理相同——定位信息必须结构化地传出来。</p>
+
+<h2 id="hx-04-s5">崩溃恢复：怎么从半截日志回到一致状态</h2>
+
+<p>日志解决了「数据还在不在」，但没解决「数据是否一致」。崩溃几乎总是发生在最坏的位置：一次工具调用已经记进日志、结果还没写；或者模型回了一半。恢复的目标是让日志重新变成一份合法的请求前缀——也就是<strong>每个 <code class="inl">turn/start</code> 有对应的 <code class="inl">turn/end</code>，每次工具调用有对应的结果</strong>。</p>
+
+<p>DSH 把这件事做成一个纯函数：给定一份可能停在开口 turn 中间的日志，返回需要补写的事件列表。它先扫一遍日志，跟踪「当前有没有打开的 turn / step」以及「哪些工具调用还没答复」：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      case 'turn/start':
+        openTurn = event.data.turn
+        openStep = null
+        break
+      case 'turn/end':
+        openTurn = null
+        openStep = null
+        break
+      case 'step/start':
+        openStep = event.data.step
+        break
+      case 'step/end':
+        openStep = null
+        break
+      // Other event types do not move the turn/step boundary cursor.</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/session/src/repair.ts:60-73" data-expect="case 'turn/start':">repair.ts:60-73</code>，所在函数是 <code class="inl src-ref" data-src="dsh:packages/core/session/src/repair.ts:53" data-expect="export function openTurnClosers">repair.ts:53</code>。</p>
+
+<p>扫描完之后，如果没有开口的 turn 就返回空列表（日志本来就平衡，什么都不用做）。否则生成三条东西：给每个没答复的调用补一条错误结果、补一个 <code class="inl">step/end</code>（如果 step 也悬着）、补一个 <code class="inl">turn/end</code>。补出来的事件是<strong>确定性的</strong>：seq 从最后一条真实事件往后连续编号，时间戳直接复用最后一条真实事件的时间——不发明「未来」的时间，这样同一份日志跑两次恢复得到的补写事件逐字节相同，回放测试才能对得上。</p>
+
+<p>补出来的错误结果分两种，措辞不一样，因为模型需要知道的事实不一样（<code class="inl src-ref" data-src="dsh:packages/core/session/src/repair.ts:34" data-expect="no result was durably recorded">repair.ts:34</code> 起）:</p>
+
+<ul>
+<li><strong>调用已经开始、结果没落盘</strong>：告诉模型「结果未知。按工具语义决定是否重试：只读或幂等的操作可以重试；可能有副作用的，先核实外部状态或者问用户。不要盲目重试。」</li>
+<li><strong>调用还没被记为 started</strong>：告诉模型「中断发生在记录开始之前，如果还需要就重试。」</li>
+</ul>
+
+<p>这不是随便写的提示词。它把「日志缺了什么」这个事实精确地翻译成了模型能据以行动的判断依据——这正好是「日志是事实来源」的价值兑现：因为日志知道那条调用到底开始没开始，所以恢复时才能给出有信息量的错误。</p>
+
+<p>顺带一句，同一份机制还被 fork（从既有会话分叉）复用，只是原因改成 <code class="inl">forked</code>，措辞变成「这条调用在分叉点之后、父会话里可能已经完成」。</p>
+
+<h3 id="hx-04-s5-1">写入侧的对应机制：半行与截断</h3>
+
+<p>读取侧的恢复要跟写入侧的失败模式对上。JSONL 后端的写入是分批的：实时事件先进缓冲区（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/storage.ts:274" data-expect="enqueueLive(event: SessionEvent">storage.ts:274</code>），200 毫秒的窗口到期后一起刷盘（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/storage.ts:36" data-expect="export const LIVE_WRITE_BATCH_MAX_DELAY_MS = 200">storage.ts:36</code>）。批量写意味着进程被杀时最容易留下的是一行写到一半——也就是我们说的「残行」。</p>
+
+<p>后端的处理策略写在扫描器的注释里，非常直白：结束扫描时，<strong>忽略那个没有结尾换行的最后一条记录，把它当作撕裂的尾巴</strong>（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/format.ts:462" data-expect="ignoring a final record without a newline as a torn tail">format.ts:462</code>）。扫描器按字节找换行符，换行之前的算完整记录，换行之后的碎片留到下一块数据里（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/format.ts:438" data-expect="if (lineStart &lt; chunk.length) {">format.ts:438</code>），所以最后剩下的碎片天然就是「没有换行的那一条」。恢复的结果里带着一个安全截断偏移量，写入句柄的第一次追加会先把撕裂的字节截掉再写新内容（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/storage.ts:328" data-expect="if (this.state.tornTruncateTo !== undefined) {">storage.ts:328</code>）。</p>
+
+<p>关键在于：「坏行」和「半行」是两种不同的东西，处理方式必须不同。</p>
+
+<div class="table-wrap"><table><thead><tr><th></th><th>提交前缀里的坏行</th><th>没有结尾换行的最后一行</th></tr></thead><tbody>
+<tr><td>成因</td><td>磁盘损坏、程序 bug、人工编辑</td><td>进程在写这一行的中途被杀</td></tr>
+<tr><td>含义</td><td>日志本身不可信，后面的事件可能也被影响</td><td>这一行从未被承诺过，前缀完好</td></tr>
+<tr><td>正确反应</td><td>拒绝加载，报出位置</td><td>丢弃这一行，报告断点，继续加载前缀</td></tr>
+<tr><td>DSH</td><td><code class="inl">recovery: 'strict'</code>（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/format.ts:370" data-expect="recovery: 'strict',">format.ts:370</code>）；正式读取报 corruption</td><td>torn tail，截断后重写</td></tr>
+</tbody></table></div>
+
+<p>DSH 把这个区分做成了配置项 <code class="inl">SessionFormatRecovery</code>，取值只有 <code class="inl">'strict'</code> 和 <code class="inl">'recoverable'</code>（<code class="inl src-ref" data-src="dsh:packages/session/session-format/src/types.ts:91" data-expect="export type SessionFormatRecovery = 'strict' | 'recoverable'">types.ts:91</code>）。注意，可恢复模式放过的<strong>只是尾巴</strong>，不是任何一行：一旦已经记下一个 issue，后面如果再出现完整记录，官方实现的处理是把它当作损坏处理——因为「坏行之后又有好行」说明坏的不是尾巴，而是中间。</p>
+
+<p>我们的 labs 版本用一条更朴素的规则达到同样的区分：文件以 <code class="inl">split("\n")</code> 切开之后，如果最后一段是空字符串，那是正常的结尾换行；否则最后一段就是从未提交的残行。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/session_log.py::load"><span class="dec">    @classmethod</span>
+    <span class="kw">def</span> <span class="fn">load</span>(cls, path<span class="op">:</span> str <span class="op">|</span> <span class="cls">Path</span>, <span class="op">*</span>, strict<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>) <span class="op">-&gt;</span> <span class="str">"SessionLog"</span><span class="op">:</span>
+        <span class="str">"""从 JSONL 载入并校验。
+
+        - 头记录：版本必须是本文件认识的版本，读到更新版本直接拒绝（不要猜）；
+        - 事件行：必要字段齐全、seq 从 0 连续；
+        - 提交前缀里的坏行 → ``LogCorrupt``，异常里带行号；
+        - 最后一行没有结尾换行 → 进程被杀的残行，丢弃并记进 ``warnings``；
+          ``strict=True`` 时改为报错，适合「宁可失败也不要丢数据」的场合。
+        """</span>
+        source <span class="op">=</span> <span class="cls">Path</span>(path)
+        text <span class="op">=</span> source.read_text(encoding<span class="op">=</span><span class="str">"utf-8"</span>)
+        warnings<span class="op">:</span> list[str] <span class="op">=</span> []
+        lines <span class="op">=</span> text.split(<span class="str">"\n"</span>)
+        <span class="kw">if</span> lines <span class="kw">and</span> lines[<span class="op">-</span><span class="num">1</span>] <span class="op">==</span> <span class="str">""</span><span class="op">:</span>
+            lines.pop()  <span class="cmt"># 正常的结尾换行</span>
+        <span class="kw">elif</span> lines<span class="op">:</span>
+            torn <span class="op">=</span> lines.pop()  <span class="cmt"># 没有结尾换行：这一行从未被提交</span>
+            number <span class="op">=</span> len(lines) <span class="op">+</span> <span class="num">1</span>
+            message <span class="op">=</span> <span class="str">f"line {number}: dropped incomplete final line ({len(torn)} bytes, no trailing newline)"</span>
+            <span class="kw">if</span> strict<span class="op">:</span>
+                <span class="kw">raise</span> <span class="cls">LogCorrupt</span>(number, <span class="str">"incomplete final line (torn tail) and strict loading was requested"</span>)
+            warnings.append(message)
+
+        header<span class="op">:</span> dict[str, <span class="cls">Any</span>] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>
+        events<span class="op">:</span> list[<span class="cls">Event</span>] <span class="op">=</span> []
+        <span class="kw">for</span> number, raw <span class="kw">in</span> enumerate(lines, start<span class="op">=</span><span class="num">1</span>)<span class="op">:</span>
+            <span class="kw">if</span> <span class="kw">not</span> raw.strip()<span class="op">:</span>
+                warnings.append(<span class="str">f"line {number}: skipped blank line"</span>)
+                <span class="kw">continue</span>
+            <span class="kw">try</span><span class="op">:</span>
+                record <span class="op">=</span> json.loads(raw)
+            <span class="kw">except</span> json.<span class="cls">JSONDecodeError</span> <span class="kw">as</span> exc<span class="op">:</span>
+                <span class="kw">raise</span> <span class="cls">LogCorrupt</span>(number, <span class="str">f"not valid JSON ({exc.msg})"</span>) <span class="kw">from</span> exc
+            <span class="kw">if</span> <span class="kw">not</span> isinstance(record, dict)<span class="op">:</span>
+                <span class="kw">raise</span> <span class="cls">LogCorrupt</span>(number, <span class="str">"record is not a JSON object"</span>)
+            <span class="kw">if</span> record.get(<span class="str">"type"</span>) <span class="op">==</span> <span class="cls">HEADER_TYPE</span><span class="op">:</span>
+                <span class="kw">if</span> header <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+                    <span class="kw">raise</span> <span class="cls">LogCorrupt</span>(number, <span class="str">"duplicate session header"</span>)
+                version <span class="op">=</span> record.get(<span class="str">"version"</span>)
+                <span class="kw">if</span> version <span class="op">!=</span> <span class="cls">SESSION_FORMAT_VERSION</span><span class="op">:</span>
+                    <span class="kw">raise</span> <span class="cls">LogCorrupt</span>(
+                        number,
+                        <span class="str">f"unsupported session format version {version!r}; this build reads v{SESSION_FORMAT_VERSION}"</span>,
+                    )
+                header <span class="op">=</span> record
+                <span class="kw">continue</span>
+            <span class="kw">if</span> header <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+                <span class="kw">raise</span> <span class="cls">LogCorrupt</span>(number, <span class="str">"event appears before the session header"</span>)
+            event <span class="op">=</span> <span class="cls">Event</span>.from_record(record, number)
+            <span class="kw">if</span> event.seq <span class="op">!=</span> len(events)<span class="op">:</span>
+                <span class="kw">raise</span> <span class="cls">LogCorrupt</span>(number, <span class="str">f"event seq {event.seq} is not contiguous (expected {len(events)})"</span>)
+            events.append(event)
+
+        <span class="kw">if</span> header <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">LogCorrupt</span>(<span class="num">1</span>, <span class="str">"no session header; this file is not a session log"</span>)
+        log <span class="op">=</span> cls(str(header.get(<span class="str">"id"</span>, <span class="str">"session"</span>)), cwd<span class="op">=</span>header.get(<span class="str">"cwd"</span>), events<span class="op">=</span>events, warnings<span class="op">=</span>warnings)
+        log.created_at <span class="op">=</span> float(header.get(<span class="str">"createdAt"</span>, log.created_at))
+        <span class="kw">return</span> log</code></pre></div>
+
+<p>载入成功之后，<code class="inl">log.warnings</code> 里就带着「在哪里丢了一行、那行有多大」。这比静默丢弃强得多：恢复是信息，不是掩盖。</p>
+
+<h3 id="hx-04-s5-2">什么时候允许丢</h3>
+
+<p>崩溃恢复的另一半是「什么可以安全丢弃」。DSH 的选择是：<strong>丢尾，绝不改中间</strong>。已经提交的事件永不重写。后端 README 里的表述是「在一次崩溃之后，磁盘上的日志保留着它被打断的最后一轮；提交前缀里的每一条记录都存活下来，恢复的读者通过它的写句柄补写合成的收尾事件」。</p>
+
+<p>还有一个更晚才发生的裁剪机制值得提一句：投影缓存（<code class="inl src-ref" data-src="dsh:packages/session/session-projection-cache/src/index.ts:10" data-expect="fold shortcut, never an authority">projection-cache/index.ts:10</code>）。它把某些投影的状态（比如统计、标题）定期存成检查点，冷启动时就不用把整份日志折一遍。它的定位写得很克制：<em>是折叠的捷径，绝不是权威</em>——一行记录可能过期（它的 <code class="inl">seq</code> 字段说明有多过期），但永远不会是错的。所以它的写路径是 fail-soft 的：丢一次写，代价只是下次冷读时多折一段尾巴。</p>
+
+<p>这个措辞值得抄下来当设计原则：<strong>缓存可以过期，但不能说谎</strong>。实现方式是让缓存记录自己携带「我基于哪个 seq 算出来的」，读的时候跟日志的真实长度一比就知道要不要补折。</p>
+
+<h2 id="hx-04-s6">回放：把日志重新变成消息列表</h2>
+
+<p>到这里，回放几乎是免费的：日志已经包含了重建历史所需的一切，只需要一个把事件翻译成消息的函数。DSH 的实现叫 <code class="inl">deriveMessages</code>（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:984" data-expect="deriveMessages(): Message[] {">index.ts:984</code>），它的关键性质写在注释里：返回的是<strong>每次调用都全新的数组</strong>，但数组里的消息对象是共享且深冻结的——调用方既不能在不知情的情况下改动它，也不能通过它反过去改日志。它内部只走「产生消息的事件」这条序列，并且有增量缓存（纯追加只处理新节点，遇到替换就整体重建）。</p>
+
+<p>更重要的是它在调用点的语义。DSH 的 agent loop 在发起请求前，<strong>唯一的</strong>历史来源就是这次推导：</p>
+
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    const boundaryMessages = session.deriveMessages()</code></pre></div>
+
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:688" data-expect="const boundaryMessages = session.deriveMessages()">agent.ts:688</code>，紧接着它就被放进请求对象（<code class="inl">messages: boundaryMessages</code>）。也就是说，循环不维护自己的消息数组——它每次都从日志推导。这就是「日志是事实来源」在代码里的落地形态：不是两份数据保持同步，而是只有一份数据，另一份是算出来的。</p>
+
+<p>我们的 <code class="inl">Replayer</code> 只做推导这一件事，而且刻意不带任何跨调用状态：</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/session_log.py::Replayer"><span class="kw">class</span> <span class="cls">Replayer</span><span class="op">:</span>
+    <span class="str">"""把日志重放成模型可见的消息列表。
+
+    只由日志推导，**不另存一份状态**：同一个 seq 调用两次必须得到完全一样的结果。
+    这正是确定性测试的基础——失败场景记一份日志，之后不调模型就能复现同一串消息。
+    """</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, log<span class="op">:</span> <span class="cls">SessionLog</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self._log <span class="op">=</span> log
+        <span class="cmt"># 上一次 messages_upto 为保持历史合法而丢掉的悬空 tool_use 数量（诊断用）。</span>
+        self.last_dropped_calls <span class="op">=</span> <span class="num">0</span>
+
+    <span class="kw">def</span> <span class="fn">messages_upto</span>(self, seq<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> list[dict[str, <span class="cls">Any</span>]]<span class="op">:</span>
+        <span class="str">"""重放 seq（含）为止的事件为消息列表；``None`` 表示整份日志。
+
+        规则：标记事件不产生消息；相邻的 tool/result 合并成一条 user 消息（厂商要求一批
+        结果紧跟在一次调用之后）；截断落在 step 中间时，没有结果的 tool_use 会被丢掉——
+        否则重放出来的历史不是合法的请求前缀，下一次请求会被厂商直接拒绝。
+        """</span>
+        messages<span class="op">:</span> list[dict[str, <span class="cls">Any</span>]] <span class="op">=</span> []
+        pending<span class="op">:</span> dict[str, int] <span class="op">=</span> {}  <span class="cmt"># tool_call_id -&gt; 它的 tool_use 块所在消息的下标</span>
+        results_index<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>  <span class="cmt"># 当前这条「工具结果」user 消息的下标</span>
+
+        <span class="kw">for</span> event <span class="kw">in</span> self._log.events<span class="op">:</span>
+            <span class="kw">if</span> seq <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> event.seq <span class="op">&gt;</span> seq<span class="op">:</span>
+                <span class="kw">break</span>
+            kind <span class="op">=</span> event.kind
+            <span class="kw">if</span> kind <span class="op">==</span> <span class="str">"assistant/message"</span><span class="op">:</span>
+                message <span class="op">=</span> self._assistant_message(event)
+                messages.append(message)
+                results_index <span class="op">=</span> <span class="kw">None</span>
+                <span class="kw">for</span> block <span class="kw">in</span> message[<span class="str">"content"</span>]<span class="op">:</span>
+                    <span class="kw">if</span> block[<span class="str">"type"</span>] <span class="op">==</span> <span class="str">"tool_use"</span><span class="op">:</span>
+                        pending[block[<span class="str">"id"</span>]] <span class="op">=</span> len(messages) <span class="op">-</span> <span class="num">1</span>
+            <span class="kw">elif</span> kind <span class="op">==</span> <span class="str">"tool/result"</span><span class="op">:</span>
+                call_id <span class="op">=</span> str(event.payload.get(<span class="str">"call_id"</span>, <span class="str">""</span>))
+                block <span class="op">=</span> {
+                    <span class="str">"type"</span><span class="op">:</span> <span class="str">"tool_result"</span>,
+                    <span class="str">"tool_use_id"</span><span class="op">:</span> call_id,
+                    <span class="str">"content"</span><span class="op">:</span> str(event.payload.get(<span class="str">"content"</span>, <span class="str">""</span>)),
+                    <span class="str">"is_error"</span><span class="op">:</span> bool(event.payload.get(<span class="str">"is_error"</span>, <span class="kw">False</span>)),
+                }
+                <span class="kw">if</span> results_index <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> results_index <span class="op">==</span> len(messages) <span class="op">-</span> <span class="num">1</span><span class="op">:</span>
+                    messages[results_index][<span class="str">"content"</span>].append(block)
+                <span class="kw">else</span><span class="op">:</span>
+                    messages.append({<span class="str">"role"</span><span class="op">:</span> <span class="str">"user"</span>, <span class="str">"content"</span><span class="op">:</span> [block]})
+                    results_index <span class="op">=</span> len(messages) <span class="op">-</span> <span class="num">1</span>
+                pending.pop(call_id, <span class="kw">None</span>)
+            <span class="kw">elif</span> kind <span class="kw">in</span> (<span class="str">"system/message"</span>, <span class="str">"user/message"</span>)<span class="op">:</span>
+                messages.append(
+                    {
+                        <span class="str">"role"</span><span class="op">:</span> <span class="str">"system"</span> <span class="kw">if</span> kind <span class="op">==</span> <span class="str">"system/message"</span> <span class="kw">else</span> <span class="str">"user"</span>,
+                        <span class="str">"content"</span><span class="op">:</span> str(event.payload.get(<span class="str">"content"</span>, <span class="str">""</span>)),
+                    }
+                )
+                results_index <span class="op">=</span> <span class="kw">None</span>
+            <span class="cmt"># 其余事件（turn/start、step/start、request/header、developer/message…）不改历史。</span>
+
+        dropped <span class="op">=</span> <span class="num">0</span>
+        <span class="kw">for</span> call_id, index <span class="kw">in</span> pending.items()<span class="op">:</span>
+            kept <span class="op">=</span> [
+                block
+                <span class="kw">for</span> block <span class="kw">in</span> messages[index][<span class="str">"content"</span>]
+                <span class="kw">if</span> <span class="kw">not</span> (block[<span class="str">"type"</span>] <span class="op">==</span> <span class="str">"tool_use"</span> <span class="kw">and</span> block[<span class="str">"id"</span>] <span class="op">==</span> call_id)
+            ]
+            messages[index][<span class="str">"content"</span>] <span class="op">=</span> kept
+            dropped <span class="op">+=</span> <span class="num">1</span>
+        <span class="kw">if</span> dropped<span class="op">:</span>
+            <span class="cmt"># 空了内容或只剩空的 assistant 消息不要留在历史里（DSH 也把空 assistant 回复挡在转录之外）。</span>
+            messages <span class="op">=</span> [m <span class="kw">for</span> m <span class="kw">in</span> messages <span class="kw">if</span> <span class="kw">not</span> (m[<span class="str">"role"</span>] <span class="op">==</span> <span class="str">"assistant"</span> <span class="kw">and</span> <span class="kw">not</span> m[<span class="str">"content"</span>])]
+        self.last_dropped_calls <span class="op">=</span> dropped
+        <span class="kw">return</span> messages
+
+    <span class="kw">def</span> <span class="fn">last_boundary</span>(self, seq<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> int<span class="op">:</span>
+        <span class="str">"""≤seq 的最后一个安全截断点：一次 turn/end，或一次工具已全部配对的 step/end。
+
+        分片续跑从这个 seq 接着重放，就不会看到半截 step。找不到时返回 -1。
+        """</span>
+        boundary <span class="op">=</span> <span class="op">-</span><span class="num">1</span>
+        pending<span class="op">:</span> set[str] <span class="op">=</span> set()
+        <span class="kw">for</span> event <span class="kw">in</span> self._log.events<span class="op">:</span>
+            <span class="kw">if</span> seq <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> event.seq <span class="op">&gt;</span> seq<span class="op">:</span>
+                <span class="kw">break</span>
+            <span class="kw">if</span> event.kind <span class="op">==</span> <span class="str">"assistant/message"</span><span class="op">:</span>
+                <span class="kw">for</span> call <span class="kw">in</span> event.payload.get(<span class="str">"tool_calls"</span>, [])<span class="op">:</span>
+                    pending.add(str(call.get(<span class="str">"id"</span>, <span class="str">""</span>)))
+            <span class="kw">elif</span> event.kind <span class="op">==</span> <span class="str">"tool/result"</span><span class="op">:</span>
+                pending.discard(str(event.payload.get(<span class="str">"call_id"</span>, <span class="str">""</span>)))
+            <span class="kw">elif</span> event.kind <span class="op">==</span> <span class="str">"step/end"</span> <span class="kw">and</span> <span class="kw">not</span> pending<span class="op">:</span>
+                boundary <span class="op">=</span> event.seq
+            <span class="kw">elif</span> event.kind <span class="op">==</span> <span class="str">"turn/end"</span><span class="op">:</span>
+                pending.clear()
+                boundary <span class="op">=</span> event.seq
+        <span class="kw">return</span> boundary
+
+<span class="dec">    @staticmethod</span>
+    <span class="kw">def</span> <span class="fn">_assistant_message</span>(event<span class="op">:</span> <span class="cls">Event</span>) <span class="op">-&gt;</span> dict[str, <span class="cls">Any</span>]<span class="op">:</span>
+        <span class="str">"""一条 assistant/message 事件 → 一条历史消息。"""</span>
+        content<span class="op">:</span> list[dict[str, <span class="cls">Any</span>]] <span class="op">=</span> []
+        text <span class="op">=</span> event.payload.get(<span class="str">"text"</span>)
+        <span class="kw">if</span> text<span class="op">:</span>
+            content.append({<span class="str">"type"</span><span class="op">:</span> <span class="str">"text"</span>, <span class="str">"text"</span><span class="op">:</span> str(text)})
+        <span class="kw">for</span> call <span class="kw">in</span> event.payload.get(<span class="str">"tool_calls"</span>, [])<span class="op">:</span>
+            content.append(
+                {
+                    <span class="str">"type"</span><span class="op">:</span> <span class="str">"tool_use"</span>,
+                    <span class="str">"id"</span><span class="op">:</span> str(call.get(<span class="str">"id"</span>, <span class="str">""</span>)),
+                    <span class="str">"name"</span><span class="op">:</span> str(call.get(<span class="str">"name"</span>, <span class="str">""</span>)),
+                    <span class="str">"input"</span><span class="op">:</span> _json_snapshot(call.get(<span class="str">"args"</span>, {})),
+                }
+            )
+        <span class="kw">return</span> {<span class="str">"role"</span><span class="op">:</span> <span class="str">"assistant"</span>, <span class="str">"content"</span><span class="op">:</span> content}</code></pre></div>
+
+<p>推导规则本身有四条，都是被厂商协议逼出来的：</p>
+
+<ol>
+<li>标记事件（<code class="inl">turn/start</code>、<code class="inl">step/end</code>、<code class="inl">request/header</code>）不产生消息。它们只改状态。</li>
+<li>相邻的 <code class="inl">tool/result</code> 合并成<strong>一条</strong> user 消息。厂商要求 tool_result 块紧跟在它对应的 assistant 消息之后；分散成多条消息会被拒绝，也会白白浪费上下文。</li>
+<li>截断落在 step 中间时，没有对应结果的 tool_use 块必须从推导结果里去掉。也就是原样保留「模型要了一次工具、工具没答」这种历史，会产出一个不合法的请求前缀。</li>
+<li>推导结果必须是确定性的：同一个 seq 重放两次，逐字节相同。</li>
+</ol>
+
+<p>第三条最容易做错，因为它看起来像是在丢信息。但日志本身没丢——被丢掉只是「这一次投影」，从日志里依然看得见那次调用发生过。这正是日志式的历史和数组式的历史的本质区别：数组只能有一份，删了就没了；日志可以有多种投影，每种投影可以按自己的用途做取舍。</p>
+
+<h3 id="hx-04-s6-1">按序号截断回放</h3>
+
+<p><code class="inl">messages_upto(seq)</code> 是回放器最有用的一种形态：重放日志的一个前缀。用途包括：把长会话切成段续跑、定位「第一次出现异常的请求是第几次」、以及写测试时构造「跑到某一步的历史」。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/session_log.py::messages_upto">    <span class="kw">def</span> <span class="fn">messages_upto</span>(self, seq<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> list[dict[str, <span class="cls">Any</span>]]<span class="op">:</span>
+        <span class="str">"""重放 seq（含）为止的事件为消息列表；``None`` 表示整份日志。
+
+        规则：标记事件不产生消息；相邻的 tool/result 合并成一条 user 消息（厂商要求一批
+        结果紧跟在一次调用之后）；截断落在 step 中间时，没有结果的 tool_use 会被丢掉——
+        否则重放出来的历史不是合法的请求前缀，下一次请求会被厂商直接拒绝。
+        """</span>
+        messages<span class="op">:</span> list[dict[str, <span class="cls">Any</span>]] <span class="op">=</span> []
+        pending<span class="op">:</span> dict[str, int] <span class="op">=</span> {}  <span class="cmt"># tool_call_id -&gt; 它的 tool_use 块所在消息的下标</span>
+        results_index<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>  <span class="cmt"># 当前这条「工具结果」user 消息的下标</span>
+
+        <span class="kw">for</span> event <span class="kw">in</span> self._log.events<span class="op">:</span>
+            <span class="kw">if</span> seq <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> event.seq <span class="op">&gt;</span> seq<span class="op">:</span>
+                <span class="kw">break</span>
+            kind <span class="op">=</span> event.kind
+            <span class="kw">if</span> kind <span class="op">==</span> <span class="str">"assistant/message"</span><span class="op">:</span>
+                message <span class="op">=</span> self._assistant_message(event)
+                messages.append(message)
+                results_index <span class="op">=</span> <span class="kw">None</span>
+                <span class="kw">for</span> block <span class="kw">in</span> message[<span class="str">"content"</span>]<span class="op">:</span>
+                    <span class="kw">if</span> block[<span class="str">"type"</span>] <span class="op">==</span> <span class="str">"tool_use"</span><span class="op">:</span>
+                        pending[block[<span class="str">"id"</span>]] <span class="op">=</span> len(messages) <span class="op">-</span> <span class="num">1</span>
+            <span class="kw">elif</span> kind <span class="op">==</span> <span class="str">"tool/result"</span><span class="op">:</span>
+                call_id <span class="op">=</span> str(event.payload.get(<span class="str">"call_id"</span>, <span class="str">""</span>))
+                block <span class="op">=</span> {
+                    <span class="str">"type"</span><span class="op">:</span> <span class="str">"tool_result"</span>,
+                    <span class="str">"tool_use_id"</span><span class="op">:</span> call_id,
+                    <span class="str">"content"</span><span class="op">:</span> str(event.payload.get(<span class="str">"content"</span>, <span class="str">""</span>)),
+                    <span class="str">"is_error"</span><span class="op">:</span> bool(event.payload.get(<span class="str">"is_error"</span>, <span class="kw">False</span>)),
+                }
+                <span class="kw">if</span> results_index <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> results_index <span class="op">==</span> len(messages) <span class="op">-</span> <span class="num">1</span><span class="op">:</span>
+                    messages[results_index][<span class="str">"content"</span>].append(block)
+                <span class="kw">else</span><span class="op">:</span>
+                    messages.append({<span class="str">"role"</span><span class="op">:</span> <span class="str">"user"</span>, <span class="str">"content"</span><span class="op">:</span> [block]})
+                    results_index <span class="op">=</span> len(messages) <span class="op">-</span> <span class="num">1</span>
+                pending.pop(call_id, <span class="kw">None</span>)
+            <span class="kw">elif</span> kind <span class="kw">in</span> (<span class="str">"system/message"</span>, <span class="str">"user/message"</span>)<span class="op">:</span>
+                messages.append(
+                    {
+                        <span class="str">"role"</span><span class="op">:</span> <span class="str">"system"</span> <span class="kw">if</span> kind <span class="op">==</span> <span class="str">"system/message"</span> <span class="kw">else</span> <span class="str">"user"</span>,
+                        <span class="str">"content"</span><span class="op">:</span> str(event.payload.get(<span class="str">"content"</span>, <span class="str">""</span>)),
+                    }
+                )
+                results_index <span class="op">=</span> <span class="kw">None</span>
+            <span class="cmt"># 其余事件（turn/start、step/start、request/header、developer/message…）不改历史。</span>
+
+        dropped <span class="op">=</span> <span class="num">0</span>
+        <span class="kw">for</span> call_id, index <span class="kw">in</span> pending.items()<span class="op">:</span>
+            kept <span class="op">=</span> [
+                block
+                <span class="kw">for</span> block <span class="kw">in</span> messages[index][<span class="str">"content"</span>]
+                <span class="kw">if</span> <span class="kw">not</span> (block[<span class="str">"type"</span>] <span class="op">==</span> <span class="str">"tool_use"</span> <span class="kw">and</span> block[<span class="str">"id"</span>] <span class="op">==</span> call_id)
+            ]
+            messages[index][<span class="str">"content"</span>] <span class="op">=</span> kept
+            dropped <span class="op">+=</span> <span class="num">1</span>
+        <span class="kw">if</span> dropped<span class="op">:</span>
+            <span class="cmt"># 空了内容或只剩空的 assistant 消息不要留在历史里（DSH 也把空 assistant 回复挡在转录之外）。</span>
+            messages <span class="op">=</span> [m <span class="kw">for</span> m <span class="kw">in</span> messages <span class="kw">if</span> <span class="kw">not</span> (m[<span class="str">"role"</span>] <span class="op">==</span> <span class="str">"assistant"</span> <span class="kw">and</span> <span class="kw">not</span> m[<span class="str">"content"</span>])]
+        self.last_dropped_calls <span class="op">=</span> dropped
+        <span class="kw">return</span> messages</code></pre></div>
+
+<p>截断点的选择有个讲究。随便取一个 seq 风险很大，因为截在 step 中间会触发上面的第 3 条规则（丢掉悬空调用）。所以回放器还提供一个「安全截断点」查询：返回不大于目标 seq 的最后一个 <code class="inl">turn/end</code>，或者一个所有工具调用都已答复的 <code class="inl">step/end</code>。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/session_log.py::last_boundary">    <span class="kw">def</span> <span class="fn">last_boundary</span>(self, seq<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> int<span class="op">:</span>
+        <span class="str">"""≤seq 的最后一个安全截断点：一次 turn/end，或一次工具已全部配对的 step/end。
+
+        分片续跑从这个 seq 接着重放，就不会看到半截 step。找不到时返回 -1。
+        """</span>
+        boundary <span class="op">=</span> <span class="op">-</span><span class="num">1</span>
+        pending<span class="op">:</span> set[str] <span class="op">=</span> set()
+        <span class="kw">for</span> event <span class="kw">in</span> self._log.events<span class="op">:</span>
+            <span class="kw">if</span> seq <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> event.seq <span class="op">&gt;</span> seq<span class="op">:</span>
+                <span class="kw">break</span>
+            <span class="kw">if</span> event.kind <span class="op">==</span> <span class="str">"assistant/message"</span><span class="op">:</span>
+                <span class="kw">for</span> call <span class="kw">in</span> event.payload.get(<span class="str">"tool_calls"</span>, [])<span class="op">:</span>
+                    pending.add(str(call.get(<span class="str">"id"</span>, <span class="str">""</span>)))
+            <span class="kw">elif</span> event.kind <span class="op">==</span> <span class="str">"tool/result"</span><span class="op">:</span>
+                pending.discard(str(event.payload.get(<span class="str">"call_id"</span>, <span class="str">""</span>)))
+            <span class="kw">elif</span> event.kind <span class="op">==</span> <span class="str">"step/end"</span> <span class="kw">and</span> <span class="kw">not</span> pending<span class="op">:</span>
+                boundary <span class="op">=</span> event.seq
+            <span class="kw">elif</span> event.kind <span class="op">==</span> <span class="str">"turn/end"</span><span class="op">:</span>
+                pending.clear()
+                boundary <span class="op">=</span> event.seq
+        <span class="kw">return</span> boundary</code></pre></div>
+
+<p>这在 DSH 里有对应物：会话可以从任意边界分叉出一份新的子会话（<code class="inl">SessionForkErrorCode</code> 里的 <code class="inl">INVALID_BOUNDARY</code> 就是「边界不是连续存在的 seq」），而分叉点落在开口 turn 里时，子会话会用 <code class="inl">forked</code> 原因补写收尾事件——和崩溃恢复走同一套代码。</p>
+
+<h2 id="hx-04-s7">回放为什么是确定性测试的基础</h2>
+
+<p>把日志当事实来源，最直接的回报是测试形态的改变。DSH 有一个专门的回放插件包（<code class="inl src-ref" data-src="dsh:packages/test-support/llm-replay/src/index.ts:462" data-expect="export function deriveReplayScript">llm-replay/index.ts:462</code>），作用是从一份真实会话日志里推出「这次运行一共调了几次模型、每次的原始流是什么」，然后让这个脚本顶替真实的模型适配器。</p>
+
+<p>它的函数签名说明了一切：输入是事件数组，输出是一串「脚本条目」。推不出来的时候它会<strong>明说</strong>，而不是悄悄糊过去：如果某次调用没有以 finish 块结束（说明流是抛异常结束的），它会抛错并提示「这个场景需要一个 replay.override.json 旁挂文件」（<code class="inl src-ref" data-src="dsh:packages/test-support/llm-replay/src/index.ts:468" data-expect="ended without a finish chunk">llm-replay/index.ts:468</code>）。</p>
+
+<p>这套东西的价值在于把三类测试从「难以编写」变成「顺手就能写」：</p>
+
+<ul>
+<li><strong>回归测试不需要花 API 费用</strong>，也不依赖模型行为稳定。日志记的是模型当时真实返回的字节。</li>
+<li><strong>线上失败可以被固化成测试用例</strong>：把出问题那次的日志拿回来，回放一次，就得到了一次完全一样的运行。</li>
+<li><strong>非模型部分的 bug 可以被隔离出来</strong>。因为模型输出被钉死了，测试失败必然是 harness 的问题。</li>
+</ul>
+
+<p>我们 labs 里的测试是同一个思路的简化版：因为回放器只依赖日志，构造一段日志就等于构造了一个场景，不需要任何模型。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_session_log.py::test_replay_rebuilds_the_model_visible_history">    <span class="kw">def</span> <span class="fn">test_replay_rebuilds_the_model_visible_history</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        log <span class="op">=</span> make_log()
+        messages <span class="op">=</span> <span class="cls">Replayer</span>(log).messages_upto()
+        self.assertEqual([m[<span class="str">"role"</span>] <span class="kw">for</span> m <span class="kw">in</span> messages], [<span class="str">"system"</span>, <span class="str">"user"</span>, <span class="str">"assistant"</span>, <span class="str">"user"</span>, <span class="str">"assistant"</span>])
+        self.assertEqual(messages[<span class="num">0</span>][<span class="str">"content"</span>], <span class="str">"you are a coding agent"</span>)
+        assistant <span class="op">=</span> messages[<span class="num">2</span>][<span class="str">"content"</span>]
+        self.assertEqual(assistant[<span class="num">0</span>], {<span class="str">"type"</span><span class="op">:</span> <span class="str">"text"</span>, <span class="str">"text"</span><span class="op">:</span> <span class="str">"reading"</span>})
+        self.assertEqual(assistant[<span class="num">1</span>][<span class="str">"type"</span>], <span class="str">"tool_use"</span>)
+        self.assertEqual(assistant[<span class="num">1</span>][<span class="str">"input"</span>], {<span class="str">"path"</span><span class="op">:</span> <span class="str">"a.py"</span>})
+        results <span class="op">=</span> messages[<span class="num">3</span>][<span class="str">"content"</span>]
+        self.assertEqual(results[<span class="num">0</span>][<span class="str">"tool_use_id"</span>], <span class="str">"c1"</span>)
+        self.assertFalse(results[<span class="num">0</span>][<span class="str">"is_error"</span>])</code></pre></div>
+
+<p>还有一条性质值得单独测试，因为它正是「日志是唯一事实来源」这句话的操作化定义：在同一个截断点上，无论之后往日志里追加了多少事件，重放结果都不变。</p>
+
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_session_log.py::test_append_during_replay_does_not_disturb_earlier_results">    <span class="kw">def</span> <span class="fn">test_append_during_replay_does_not_disturb_earlier_results</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="str">"""回放的确定性与并发写入无关：截断点固定的重放结果不会因为又有新事件而变。"""</span>
+        log <span class="op">=</span> make_log()
+        replayer <span class="op">=</span> <span class="cls">Replayer</span>(log)
+        fixed <span class="op">=</span> replayer.messages_upto(<span class="num">7</span>)
+        log.append(<span class="str">"tool/result"</span>, {<span class="str">"call_id"</span><span class="op">:</span> <span class="str">"c9"</span>, <span class="str">"content"</span><span class="op">:</span> <span class="str">"late"</span>, <span class="str">"is_error"</span><span class="op">:</span> <span class="kw">False</span>})
+        self.assertEqual(replayer.messages_upto(<span class="num">7</span>), fixed)</code></pre></div>
+
+<h2 id="hx-04-s8">裁剪、压缩与检查点</h2>
+
+<p>日志会无限增长。一个跑了几小时的会话，日志里可能有几百次工具调用、每次几万字符的输出。这些数据都在日志里，但<strong>不能都进上下文</strong>。所以需要一个明确的区分：日志是持久层，上下文是窗口层；两者不是同一份东西，裁剪只作用于后者。</p>
+
+<p>DSH 的压缩是插件，但它改的也是日志——把一段历史替换成一条摘要事件。所以必须有一个机制标记「这段历史被替换掉了」，否则从日志推导出来的消息会把老消息和新摘要都算进去。DSH 的解法是给每个产生消息的事件配一个 surface 操作标记（<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:462" data-expect="export type SurfaceOp =">types.ts:462</code>），取值只有两种：普通追加，或者「替换掉某个 seq 区间」（<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:464" data-expect="{ op: &#39;replace&#39;; startSeq: SessionSeq; endSeq: SessionSeq }">{ op: &#39;replace&#39;; startSeq: SessionSeq; endSeq: SessionSeq }</code>）。推导函数就是按这些标记走的，注释里把话说得很清楚：「每个产生消息的追加都记录它的 <code class="inl">surfaceOp</code>，所以一条没有标记的原始事件（一个 chunk、一个 turn 边界）会被正确地排除在外，而压缩的 <code class="inl">replace</code> 会删掉被遮蔽的节点」（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:970" data-expect="append records its `surfaceOp`">index.ts:970</code>）。</p>
+
+<p>检查点是另一件事：在模型请求和工具执行<strong>之前</strong>把日志刷到磁盘。DSH 有一个专门的插件管这件事，文档说得很明确——刷盘失败就不调用模型、不执行工具（<code class="inl src-ref" data-src="dsh:packages/session/session-checkpoint-policy/src/index.ts:58" data-expect="fail-closed at the model and tool side-effect">checkpoint-policy/index.ts:58</code>），挂在三个位置：模型流开始前（<code class="inl src-ref" data-src="dsh:packages/session/session-checkpoint-policy/src/index.ts:64" data-expect="ctx.on('llm/stream'">index.ts:64</code>）、顶层工具执行前、以及每个 step 开始前（<code class="inl src-ref" data-src="dsh:packages/session/session-checkpoint-policy/src/index.ts:80" data-expect="await ctx.sessions.flush(agent.session)">index.ts:80</code>）。</p>
+
+<p>这些数字和位置都指向同一个取舍：<strong>检查点的目的不是「尽快落盘」，而是「在产生副作用之前确保记录已经在磁盘上」</strong>。所以在工具执行前刷一次——如果刷盘失败，宁可不执行工具，也不要执行了一个已经发生、日志里却没有记录的动作。</p>
+
+<p>裁剪策略本身在别的章节展开（压缩的具体策略见本模块后面的压缩章节，这里只讲它和日志的关系），这里只提它和日志的关系：<strong>裁剪产生的事件本身也要进日志</strong>。DSH 的压缩会写 <code class="inl">compaction/start</code>、<code class="inl">compaction/end</code>、<code class="inl">compaction/summary</code> 这几类事件，所以「模型当时看到的上下文是被压过的」这件事，事后也是可查的。这一点在我们的教学版里没有实现，见下面的坑与失败案例。</p>
+
+<h2 id="hx-04-s9">逐库对照</h2>
+
+<p>同一个问题——「会话状态存在哪里、怎么恢复」——三个仓库给了三种量级的答案。</p>
+
+<div class="table-wrap"><table><thead><tr><th></th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th></tr></thead><tbody>
+<tr><td>持久化模型</td><td>只追加的事件日志（<code class="inl">core/session</code>），JSONL 后端按批刷盘</td><td>整份快照覆盖写（<code class="inl">services/session_storage.py</code>）</td><td>基本没有；只有零散的 jsonl 落盘</td></tr>
+<tr><td>入口</td><td><code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:522" data-expect="export class Session {">index.ts:522</code> 的 <code class="inl">Session</code></td><td><code class="inl src-ref" data-src="oh:src/openharness/services/session_storage.py:63" data-expect="def save_session_snapshot(">session_storage.py:63</code> 的 <code class="inl">save_session_snapshot</code></td><td>各章各自处理，见 s16 的 <code class="inl">WorkflowJournal</code></td></tr>
+<tr><td>写方式</td><td>只追加；提交前缀永不重写</td><td><code class="inl">json.dumps(payload, indent=2)</code> 整份写好，原子替换（<code class="inl src-ref" data-src="oh:src/openharness/services/session_storage.py:97" data-expect="data = json.dumps(payload, indent=2)">session_storage.py:97</code>）</td><td>s16 用 <code class="inl">.journal.jsonl</code> 追加，key→value</td></tr>
+<tr><td>写入前的一致性处理</td><td>JSON 快照 + 信封校验，坏事件在 append 处失败</td><td>先跑一遍 <code class="inl">sanitize_conversation_messages</code>（<code class="inl src-ref" data-src="oh:src/openharness/services/session_storage.py:77" data-expect="messages = sanitize_conversation_messages(messages)">session_storage.py:77</code>）删掉悬空 tool_use，再整份写</td><td>不处理</td></tr>
+<tr><td>崩溃恢复</td><td>合成收尾事件（<code class="inl">repair.ts</code>），丢撕裂尾巴</td><td>读回快照时再 sanitize 一次（<code class="inl src-ref" data-src="oh:src/openharness/services/session_storage.py:110" data-expect="def _sanitize_snapshot_payload">session_storage.py:110</code>）</td><td>resume 时逐行校验 journal，坏行报「第几行」并退出（s16 code.py:342-354）</td></tr>
+<tr><td>模型可见历史的来源</td><td>每次请求从日志推导</td><td>内存里的 <code class="inl">self._messages</code>；快照只是它的副本</td><td>内存列表</td></tr>
+<tr><td>格式版本</td><td>v0…v4，相邻迁移 + 更新版本拒绝</td><td>无版本字段</td><td>无</td></tr>
+<tr><td>回放测试</td><td>有专门的 <code class="inl">llm-replay</code> 包，从日志推导模型脚本</td><td>测试用 <code class="inl">FakeApiClient</code> 手写脚本</td><td>测试用 <code class="inl">FakeMessagesApi</code> 手写脚本</td></tr>
+<tr><td>代价</td><td>包数量多、格式迁移要长期维护</td><td>实现简单；每次保存 O(整个历史)</td><td>最省事；没有跨进程续跑能力</td></tr>
+<tr><td>适用场景</td><td>长会话、多端接入、需要审计的部署</td><td>单个 CLI 会话，能接受整份重写</td><td>教学与单次运行</td></tr>
+</tbody></table></div>
+
+<p>教学示意（不是源码里的数字）：OpenHarness 每次保存要序列化整份历史，一个 200 轮的会话大约几百 KB；覆盖写一次的代价在本地可以忽略，但如果会话长到几 MB、保存频率又高，整份重写的开销就开始显著。DSH 的追加式写法则把每次保存的代价压成「这次新增的事件」。同一个取舍也体现在崩溃恢复上：追加式日志天然保留前缀，快照式保存一旦写到一半就两头不靠——所以 OpenHarness 必须靠原子写入来兜底。</p>
+
+<h2 id="hx-04-s10">坑与失败案例</h2>
+
+<h3 id="hx-04-s10-1">坑一：内存态与日志态分叉</h3>
+
+<p><strong>触发条件</strong>：循环里维护一个 <code class="inl">self.messages</code>，同时又把每次事件写进日志；某处代码改了数组但忘了写日志，或者反过来。</p>
+
+<p><strong>后果</strong>：运行中的行为和重启后的行为不一致。这类 bug 特别难查，因为它只在「重启」这个维度上表现出来，而开发者平时不重启。更坏的情况是两者都「看起来对」，只有在做回放对比时才暴露。</p>
+
+<p><strong>DSH 怎么防的</strong>：根本不让第二份状态存在。循环不持有消息数组，每次请求前从日志推导（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:688" data-expect="const boundaryMessages = session.deriveMessages()">agent.ts:688</code>）。连「当前请求头」这种小状态都走折叠函数（<code class="inl src-ref" data-src="dsh:packages/core/session/src/request-header.ts:63" data-expect="export function foldRequestHeader">request-header.ts:63</code>）。</p>
+
+<p><strong>教学版的防法</strong>：<code class="inl">Replayer</code> 是只读的，而且不带跨调用状态——它没法「忘记同步」，因为它没有可以不同步的东西。</p>
+
+<h3 id="hx-04-s10-2">坑二：序号不连续导致回放漏消息</h3>
+
+<p><strong>触发条件</strong>：日志被外部工具过滤过、被合并过，或者两份日志被拼成一份；也可能是载入时期的解析 bug 静默跳过了一行。</p>
+
+<p><strong>后果</strong>：回放出来的历史少了一条消息，但<strong>没有任何报错</strong>。这比崩溃危险得多：模型会看到一段缺了一条 tool_result 的历史，可能因此重复执行一个已经有副作用的操作。而且它完全不会在测试里出现——因为测试用的日志是完整的。</p>
+
+<p><strong>DSH 怎么防的</strong>：<code class="inl">seq = 日志长度</code>让连续成为写入路径的自然结果；载入时显式校验从 0 连续（<code class="inl src-ref" data-src="dsh:packages/core/session/src/index.ts:653" data-expect="seed must be contiguous from 0">index.ts:652</code>），并把「不连续」当成必须拒绝的错误，而不是警告。</p>
+
+<p><strong>教学版</strong>：同一处理方式，并且把行号和实际读到的 seq 一起报出来（<code class="inl">LogCorrupt</code>）。这里可以注意一个细节：跳号是在读到<strong>下一条</strong>时才暴露的，所以如果坏的是最后一行，就没有「下一条」来发现它——必须靠显式检查「这条事件的 seq 是否等于已读条数」。</p>
+
+<h3 id="hx-04-s10-3">坑三：日志里存完整工具输出，文件迅速膨胀</h3>
+
+<p><strong>触发条件</strong>：工具结果原样进日志。一次 <code class="inl">cat</code> 一个大文件就有几 MB；一个跑一小时的会话可以轻松到几百 MB。</p>
+
+<p><strong>后果</strong>：写盘变慢（每次刷盘都要写这些字节）、加载变慢（每次恢复要读完整份）、备份和上传变得不现实。更隐蔽的后果是：因为这些内容也在上下文里，压缩机制会去处理它们——但压缩作用于上下文，管不了日志文件的大小。</p>
+
+<p><strong>DSH 怎么处理的</strong>：转存（spill）。工具结果超过阈值时（<code class="inl">maxInlineTokens: 12500</code>，见 base bundle 的装配）内容被写到外部文件，日志里只留一个引用。压缩侧还有另一个机制：工具结果超过 8192 字符时裁剪成开头 4096 + 结尾 1024 字符，中间的用省略标记替代——裁剪本身也是日志事件（<code class="inl">compaction/prune</code>）。</p>
+
+<p><strong>教学版没做这个</strong>，这是一个明确的简化。要补的话，最小的切入点是在 <code class="inl">append</code> 里对 <code class="inl">tool/result</code> 的 <code class="inl">content</code> 做长度检查，超阈值就写外部文件、日志里存路径。要注意的是：转存之后<strong>回放仍然要能重建出模型当时看到的那个字符串</strong>（引用必须能解析），否则回放就不再等价了。</p>
+
+<h3 id="hx-04-s10-4">坑四：半行 JSON 让整份日志载入失败</h3>
+
+<p><strong>触发条件</strong>：进程在写某一行的时候被杀（或者机器断电）。这一行只写了一半，没有结尾换行，JSON 也不完整。</p>
+
+<p><strong>后果</strong>：如果载入器把「最后一行解析失败」和「中间某行解析失败」当成同一件事，那它会拒绝整份日志——用户丢掉的是<strong>整段会话</strong>，而实际上只损失了最后一行的内容。这是最典型的「错误处理写得太严格，反而造成更大损失」。</p>
+
+<p><strong>DSH 怎么防的</strong>：两个失败模式分开处理。完整的坏行按 corruption 拒绝，没有结尾换行的最后一条按可恢复的撕裂尾巴截断（<code class="inl src-ref" data-src="dsh:packages/session/session-persistence-jsonl/src/format.ts:462" data-expect="ignoring a final record without a newline as a torn tail">format.ts:462</code>）；写入句柄的第一次追加会先把撕裂字节截掉。判断依据是字节级的：哪一段后面有换行符，哪一段就是被提交过的。</p>
+
+<p><strong>教学版</strong>：<code class="inl">load()</code> 用「split 之后最后一段是不是空」来区分，丢弃残行并记进 <code class="inl">warnings</code>；<code class="inl">strict=True</code> 时改为报错。测试里专门覆盖了「残行前面的提交前缀必须全部载入成功」这一条。</p>
+
+<h3 id="hx-04-s10-5">坑五：把「未知事件类型」当成可以忽略</h3>
+
+<p><strong>触发条件</strong>：日志里有一个本构建不认识的事件类型（可能是更新的 harness 写的，也可能是某个插件写的），读取方选择跳过。</p>
+
+<p><strong>后果</strong>：静默跳过一个必需事件会重建出一份<strong>错误的</strong>会话——DSH 的注释原话是「这样的日志很可能是更新的 harness 写的，而静默跳过一个必需事件会重建出一个错误的会话」。比拒绝加载更糟的地方在于：拒绝加载是可见的，错误重建是不可见的。</p>
+
+<p><strong>DSH 怎么防的</strong>：默认必需。<code class="inl">ignorable?: true</code> 只能由写方显式加上（<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:511" data-expect="ignorable?: true">types.ts:511</code>），注释里写明这个默认值的方向：忘记打标记的后果是「过度拒绝」（麻烦），而不是「静默恢复出一个被掏空的会话」（灾难）。</p>
+
+<p>这条对我们写的任何「宽容的读取器」都是一个提醒：宽容应该体现在<strong>格式变体</strong>上（多一个字段就忽略），而不是体现在<strong>语义缺口</strong>上（少一个事件就当没有）。</p>
+
+<h2 id="hx-04-s11">小结</h2>
+
+<p>这一章把历史从「一个数组」换成了「一份日志」，换来的性质有四条：</p>
+
+<ol>
+<li><strong>可恢复</strong>：任何时刻进程被杀，磁盘上的提交前缀都是完整的；恢复只需要补写收尾事件，不需要重跑。</li>
+<li><strong>可审计</strong>：「模型第 N 次请求看到了什么、当时的配置是什么」都可以从日志算出来，包括工具集变化这种容易被漏掉的信息。</li>
+<li><strong>可回放</strong>：历史是被推导的，不是被保存的，所以同一份日志永远给出同一串消息。</li>
+<li><strong>可演进</strong>：格式带版本、迁移只允许相邻、读不认识的版本要说清楚——这三条让日志能活过多次重构。</li>
+</ol>
+
+<p>四个机制的边界也很清楚。日志解决「记什么」，检查点解决「什么时候必须已经在磁盘上」，压缩解决「上下文装不下」，回放解决「怎么把日志变回模型看得见的东西」。四者互相独立，但都建立在同一个前提上：日志是唯一的事实来源，其余都是它的投影。</p>
+
+<p>下一章转向上下文压力的量化：怎么在请求发出<strong>之前</strong>就知道这份历史装不下，而不是等厂商返回错误再补救（下一章，见 <span class="xref-pending" data-href="#hx-05">Token 计量与上下文压力</span>）。本章的日志正好是它的输入——压力是从日志推导出来的消息上量出来的，不是从某个单独维护的计数器上读出来的。</p>
+</section>

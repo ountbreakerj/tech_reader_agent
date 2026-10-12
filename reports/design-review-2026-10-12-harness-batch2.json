@@ -1,0 +1,40 @@
+{
+  "verdict": "pass",
+  "scope": [
+    "#/harness hx-02 工具定义与注册、hx-03 执行管线与并发、hx-04 会话日志与回放",
+    "#/dsh dsh-01 Cordis 与装配",
+    "desktop 1440、tablet 820、mobile 390；dark / light / sepia"
+  ],
+  "findings": [],
+  "resolvedFindings": [
+    {
+      "severity": "blocking",
+      "role": "ui",
+      "location": "#/harness hx-02 TS 摘录；#/dsh dsh-01 TS 摘录",
+      "evidence": "代码块里的 TypeScript 泛型 Promise<JsonValue>、InferArgs<S> 未转义，浏览器把 <S> 解析成删除线标签：桌面端一行代码被划掉，手机端对比表整段带删除线",
+      "resolution": "集成工具对所有非 Python 代码块整体转义（先还原实体再转义，不会二次转义）；集成时扫描正文，出现未知标签直接报错。复测 unknown 元素 0、line-through 元素 0"
+    },
+    {
+      "severity": "major",
+      "role": "ui",
+      "location": "#/harness hx-04 全章",
+      "evidence": "草稿混入 Markdown：48 处 **粗体**、4 处反引号代码原样显示给读者",
+      "resolution": "按文本段转换为 <strong> / <code class=\"inl\">，跳过 pre/code/属性值；一处跨行内代码的粗体手工修正。集成工具新增 Markdown 残留检查，写作约定补充说明"
+    },
+    {
+      "severity": "major",
+      "role": "product",
+      "location": "#/harness hx-04 → #hx-05",
+      "evidence": "hx-04 链接到尚未写的 hx-05，verify 报站内链接失效",
+      "resolution": "集成工具把指向未集成章节的链接降级为 span.xref-pending（保留 data-href），该章集成后自动恢复为链接"
+    }
+  ],
+  "checks": [
+    "py tools/harness-labs.py：158 个 labs 测试通过；34 个代码块与 labs 文件逐字一致；711 条 file:line 在钉住的 commit 上核对通过",
+    "node build.mjs / node verify.mjs：通过，496 个站内链接",
+    "node tools/assets.mjs audit：通过",
+    "node tools/browser-audit.mjs：21 个路由/视口组合通过",
+    "node tools/harness-audit.mjs：全部通过（含修正后的 DSH 卡片数与图片加载等待）",
+    "截图：hx-02/03/04、dsh-01 的桌面、平板、手机三视口与三主题；无页面级横向溢出、无 JS 异常"
+  ]
+}

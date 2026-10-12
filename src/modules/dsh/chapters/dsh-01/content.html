@@ -1,0 +1,420 @@
+<div class="book-scope">
+<section class="chapter" id="ch-dsh-01" data-slug="dsh-01"><div class="ch-head"><span class="ch-num">第 1 章</span></div><h1 id="dsh-01">Cordis 与装配：插件怎么接成运行时</h1>
+<p>上一章（<a href="#/dsh?section=dsh-00">导读：DSH 的整体架构</a>）把 DSH 当成一个黑盒看了个全景：335 个包、一次请求的 8 步。这一章把盒子拆开，看<strong>这些包是怎么被接成一个运行时的</strong>。全部内容基于 commit <code class="inl">d743267388641bc76f17c45ce8b4c231aed1d32c</code>，每个结论都带 <code class="inl">文件:行号</code>。</p>
+<p>如果你写 Python，可以先在心里做一次替换：DSH 里没有 <code class="inl">main.py</code> 里那一串 <code class="inl">db = Database(); agent = Agent(db, tools)</code>。取而代之的是一份 YAML 行列表（每行是一个插件），加上一个叫 Cordis 的插件框架负责"按声明的依赖顺序把它们点着"。这一章要讲清楚三件事：<strong>插件之间怎么找到对方</strong>（服务与依赖注入）、<strong>一棵插件树从哪来</strong>（profile / bundle / patch / Loader）、<strong>插件之间怎么在一件事上接力</strong>（事件派发与扩展点）。</p>
+
+<h2 id="dsh-01-s1">Cordis 是什么，为什么放在 vendor 里</h2>
+<p>Cordis 不在 <code class="inl">packages/</code> 里，它和 <code class="inl">cosmokit</code>、<code class="inl">schemastery</code>、<code class="inl">loader</code>、<code class="inl">include</code>、<code class="inl">group</code>、<code class="inl">hmr</code>、<code class="inl">timer</code> 一起放在 <code class="inl">vendor/</code>——是随仓库一起走的第三方代码（<code class="inl src-ref" data-src="dsh:pnpm-workspace.yaml:2" data-expect="vendor/*">pnpm-workspace.yaml:2</code>）。它自称 "Meta-Framework for Modern JavaScript Applications"，版本 <code class="inl">4.0.5-alpha.1</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/package.json:3" data-expect="Meta-Framework for Modern JavaScript Applications">vendor/cordis/package.json:3</code>、<code class="inl src-ref" data-src="dsh:vendor/cordis/package.json:4" data-expect="4.0.5-alpha.1">vendor/cordis/package.json:4</code>）。</p>
+<p>它的全部内核只有 9 个源文件、约 2,700 行：<code class="inl">context.ts</code>（146 行）、<code class="inl">events.ts</code>（352）、<code class="inl">fiber.ts</code>（754）、<code class="inl">reflect.ts</code>（418）、<code class="inl">registry.ts</code>（337）、<code class="inl">service.ts</code>（115）、<code class="inl">logger.ts</code>（271）、<code class="inl">utils.ts</code>（287）、<code class="inl">index.ts</code>（16）。<code class="inl">index.ts</code> 就是一张目录，把每个文件用一句注释说明白：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** Core context type and root context implementation. */
+export * from './context.ts'
+/** Event bus, dispatch modes, and event augmentation types. */
+export * from './events.ts'
+/** Plugin fiber lifecycle, effects, and config validation helpers. */
+export * from './fiber.ts'
+/** Logger facade, logger service, message, exporter, and formatting types. */
+export * from './logger.ts'
+/** Plugin registry, dependency injection, and plugin entrypoint types. */
+export * from './registry.ts'
+/** Base service class and service lifecycle symbols. */
+export * from './service.ts'</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/index.ts:1" data-expect="/** Core context type and root context implementation. */">vendor/cordis/src/index.ts:1</code>（省略处对应同文件第 2–16 行）</p>
+<p>Cordis 对 Python 读者来说是一个陌生的形态，用四个词就能框住：<strong>Context（代理对象）、Service（挂在 ctx 上的服务）、Plugin（一个会注册服务的函数或类）、Fiber（一次插件加载的运行时实例）</strong>。下面四节分别讲。</p>
+
+<h3 id="dsh-01-s1-1">ctx 不是字典，是一个代理</h3>
+<p>文档写得很直白："The concrete <code class="inl">Context</code> class is proxied at runtime"——<code class="inl">Context</code> 类在运行时被 Proxy 包了一层，所以文档上看到的 <code class="inl">ctx.xxx</code> 是由各个插件"事后增强"出来的（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/context.ts:12" data-expect="The concrete `Context` class is proxied at runtime">context.ts:12</code>）。根 Context 构造时就把代理装好：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  constructor() {
+    this[symbols.isolate] = Object.create(null)
+    this[symbols.intercept] = Object.create(null)
+    const self = new Proxy&lt;this&gt;(this, ReflectService.handler)
+    this.root = self
+    this.baseUrl = undefined
+    this.fiber = new Fiber(self, {}, Object.create(null), null, () =&gt; [])
+    this.reflect = new ReflectService(self)
+    this.registry = new RegistryService(self)
+    this.events = new EventsService(self)
+    this.logger = new LoggerService(self)
+    this.fiber._disposables.clear()
+    return self
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/context.ts:71" data-expect="  constructor() {">vendor/cordis/src/context.ts:71</code></p>
+<p>所以 <code class="inl">ctx</code> 上能读到什么是<strong>运行时决定的</strong>，不是类型决定的。读一个属性时，代理会交给 <code class="inl">ReflectService.handler.get</code>，那里做的是：先直接取（<code class="inl">reflect</code>、<code class="inl">registry</code>、<code class="inl">events</code>、<code class="inl">logger</code> 这些是真实字段），取不到就当成服务名去服务表里查。查不到就抛 <code class="inl">cannot get property ... without inject</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:144" data-expect="const error = new Error(`cannot get property">reflect.ts:144</code>）。</p>
+<p>服务查询不是查一张全局表，而是<strong>沿 fiber 链往上走</strong>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">          const key = target[symbols.isolate][prop]
+          let fiber = (ctx[symbols.shadow] as Context ?? ctx).fiber
+          while (true) {
+            const impl = fiber.store?.[prop]
+            if (impl) return getTraceable(ctx, impl.value)
+            if (prop in fiber.inject) {
+              error.message = `cannot get required service "${prop}" in inactive context`
+              throw error
+            }
+            if (!fiber.runtime) throw error
+            if (fiber.parent[symbols.isolate][prop] !== key) throw error
+            fiber = fiber.parent.fiber
+          }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:154" data-expect="          const key = target[symbols.isolate][prop]">vendor/cordis/src/reflect.ts:154</code></p>
+<p>三个细节值得记住。第一，<code class="inl">fiber.store</code> 是"这个 fiber 当时看得见的服务快照"，不是全局表——所以同名服务在不同层级可以不同。第二，<code class="inl">if (prop in fiber.inject)</code> 那一行把错误信息改写成 "in inactive context"（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:160" data-expect="error.message = `cannot get required service">reflect.ts:160</code>）：<strong>你声明了依赖但这个插件还没被激活</strong>，和你压根没声明依赖，是两种不同的错误，报错文本会区分。第三，<code class="inl">ctx.on</code>、<code class="inl">ctx.plugin</code>、<code class="inl">ctx.waterfall</code> 这些并没有写在 <code class="inl">Context</code> 类上，它们是 <code class="inl">ReflectService</code> 构造时用 <code class="inl">mixin</code> 转发出来的：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    this.mixin('reflect', ['get', 'set', 'provide', 'accessor', 'mixin'])
+    this.mixin('fiber', ['runtime', 'effect'])
+    this.mixin('registry', ['inject', 'plugin'])
+    this.mixin('events', ['on', 'once', 'parallel', 'emit', 'serial', 'bail', 'waterfall'])</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:219" data-expect="    this.mixin('reflect', ['get', 'set', 'provide', 'accessor', 'mixin'])">vendor/cordis/src/reflect.ts:219-222</code></p>
+<p>Python 对照：这相当于 <code class="inl">ctx</code> 是一个 <code class="inl">__getattr__</code> 全部重写过的对象，而 <code class="inl">ctx.on</code> 是 <code class="inl">ctx.events.on</code> 的转发。区别在于转发是<strong>可撤销的</strong>：mixin 也是注册在 fiber 上的 effect，插件卸载时这些属性一起消失。</p>
+
+<h3 id="dsh-01-s1-2">服务注册：构造函数里一行就够</h3>
+<p><code class="inl">Service</code> 是服务基类，子类只需 <code class="inl">super(ctx, name)</code>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  constructor(protected ctx: Context, name: string) {
+    name ??= this.constructor['provide'] as string
+
+    let self = this
+    const tracker: Tracker = {
+      associate: name,
+      property: 'ctx',
+    }
+    if (self[symbols.invoke]) {
+      self = createCallable(name, joinPrototype(Object.getPrototypeOf(this), Function.prototype), tracker)
+    }
+    self.ctx = ctx
+    self.name = name
+    defineProperty(self, symbols.tracker, tracker)
+
+    self.ctx.reflect.provide(name, self, this[symbols.check])
+    return self
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/service.ts:42" data-expect="  constructor(protected ctx: Context, name: string) {">vendor/cordis/src/service.ts:42-59</code></p>
+<p>最后一行是真注册（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/service.ts:57" data-expect="self.ctx.reflect.provide(name, self, this[symbols.check])">service.ts:57</code>）。注意它传了第三个参数 <code class="inl">this[symbols.check]</code>——一个可选的可用性谓词，声明在类上的 <code class="inl">static readonly check</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/service.ts:15" data-expect="  static readonly check: unique symbol = symbols.check">service.ts:15</code>）。含义是"服务存在 ≠ 服务可用"：<code class="inl">check()</code> 返回 false 时，依赖它的插件不会激活。</p>
+<p>注册走到 <code class="inl">ReflectService.provide</code>，本体是：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  provide(name: string, value?: any, check?: () =&gt; boolean) {
+    return this.ctx.fiber.effect(() =&gt; {
+      if (!this.props[name]) {
+        this.props[name] ??= { type: 'service' }
+      } else if (this.props[name].type !== 'service') {
+        throw new Error(`property "${name}" is already declared as ${this.props[name].type}`)
+      }
+      this.props[name] = { type: 'service' }
+
+      this.ctx.root[symbols.isolate][name] ??= Symbol(name)
+      const key = this.ctx[symbols.isolate][name]
+      const impl: Impl = { name, value, fiber: this.ctx.fiber, check }
+      if (this.store[key]) {
+        throw new Error(`service "${name}" has been registered at &lt;${this.store[key].fiber.name}&gt;`)
+      }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:277" data-expect="  provide(name: string, value?: any, check?: () => boolean) {">vendor/cordis/src/reflect.ts:277-290</code></p>
+<p>三件事发生在这里：<strong>①</strong> 整个注册体包在 <code class="inl">this.ctx.fiber.effect(...)</code> 里——服务是 fiber 的一个 effect，fiber 卸载服务自动注销（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:278" data-expect="return this.ctx.fiber.effect(() => {">reflect.ts:278</code>）；<strong>②</strong> 名字要么是 service 要么是 accessor，不能两边都占（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:280" data-expect="this.props[name] ??= { type: 'service' }">reflect.ts:280</code>）；<strong>③</strong> <strong>同一个作用域里同名服务已被注册就直接抛错，并把先注册者的插件名写进消息</strong>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:290" data-expect="throw new Error(`service &quot;${name}&quot; has been registered at">reflect.ts:290</code>）。这一条是后面"坑 2"的根源。</p>
+<p>服务上下线会触发 <code class="inl">notify</code>，遍历所有注册过的 fiber，谁声明了 <code class="inl">inject</code> 到这个名字就重算一次：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  notify(names: string[], filter = (ctx: Context, name: string) =&gt; ctx[symbols.isolate][name] === this.ctx[symbols.isolate][name]) {
+    const fibers: Fiber[] = []
+    for (const runtime of this.ctx.registry.values()) {
+      for (const fiber of runtime.fibers) {</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:314" data-expect="  notify(names: string[], filter = (ctx: Context, name: string)">vendor/cordis/src/reflect.ts:314-316</code></p>
+<blockquote><p><strong>Python 对照</strong>：最接近的现成东西是 <code class="inl">importlib.metadata</code> 的 entry points 加自定义容器，但没有哪个标准库会像 Cordis 这样<strong>在服务上下线时回头重新评估依赖它的插件</strong>。这是 Cordis 真正贵的地方：依赖图有一张反向索引，服务一变就重新点一次火。</p></blockquote>
+
+<h2 id="dsh-01-s2">插件：三种形态，一个 fiber</h2>
+<p>插件是一个联合类型（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/registry.ts:92" data-expect="export type Plugin<T = any> =">registry.ts:92</code>）：</p>
+<div class="table-wrap"><table><thead><tr><th>形态</th><th>长什么样</th><th>DSH 里的例子</th></tr></thead><tbody>
+<tr><td>函数</td><td><code class="inl">export function apply(ctx, config)</code></td><td>超时策略 <code class="inl">guard/timeout-policy</code></td></tr>
+<tr><td>类</td><td><code class="inl">export default class X extends Service</code>，构造时注册服务</td><td><code class="inl">AgentLoop</code>、<code class="inl">ToolRuntime</code>、<code class="inl">LlmRuntime</code></td></tr>
+<tr><td>对象</td><td><code class="inl">{ name, inject, apply(ctx, config) }</code></td><td><code class="inl">headless-runner</code>（<code class="inl">export const inject = [...]</code> + <code class="inl">apply</code>）</td></tr>
+</tbody></table></div>
+<p>函数形态最短。整个超时策略插件就是一个 <code class="inl">apply</code>（<code class="inl src-ref" data-src="dsh:packages/guard/timeout-policy/src/index.ts:55" data-expect="export function apply(ctx: Context): void {">timeout-policy/index.ts:55</code>）。类形态的代表是 agent-loop：它既是服务又是工厂实现，靠一行 <code class="inl">static inject</code> 声明依赖（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/index.ts:342" data-expect="static inject = ['agents', 'sessions', 'llm', 'tools', 'systemPrompt', 'sessionProjections']">agent-loop/index.ts:342</code>）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export class AgentLoop extends Service implements AgentFactory {
+  static inject = ['agents', 'sessions', 'llm', 'tools', 'systemPrompt', 'sessionProjections']</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/index.ts:341" data-expect="export class AgentLoop extends Service implements AgentFactory {">packages/core/agent-loop/src/index.ts:341-342</code></p>
+<p>对象形态的代表是 headless 驱动，它声明三个服务都就绪后才跑（<code class="inl src-ref" data-src="dsh:packages/bundle/headless/src/index.ts:40" data-expect="export const inject = ['agentDefaultModel', 'agents', 'sessions']">bundle/headless/src/index.ts:40</code>）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** Stable Cordis plugin name. */
+export const name = 'headless-runner'
+
+/** Core services required before the one-shot turn can start. */
+export const inject = ['agentDefaultModel', 'agents', 'sessions']</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/bundle/headless/src/index.ts:36" data-expect="/** Stable Cordis plugin name. */">packages/bundle/headless/src/index.ts:36-40</code></p>
+<p><code class="inl">inject</code> 有两种写法，注册时被归一化成同一张表（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/registry.ts:71" data-expect="  export function resolve(inject: Inject | null | undefined, result: Dict = Object.create(null)) {">registry.ts:71</code>）：数组形式 <code class="inl">['agents', 'sessions']</code> 表示只要求服务存在；对象形式 <code class="inl">{ llm: { ... } }</code> 表示<strong>顺便带上这个服务在本插件作用域下的拦截配置</strong>。归一化后每个名字都映射到一个值或 <code class="inl">null</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/registry.ts:73" data-expect="    if (Array.isArray(inject)) {">registry.ts:73</code>）。</p>
+<p>每次 <code class="inl">ctx.plugin()</code> 都新建一个 <strong>fiber</strong>，这是"这个插件这一次加载"的运行时实例：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  plugin(plugin: Plugin, config?: any, getOuterStack = buildOuterStack()) {
+    // check if it's a valid plugin
+    const callback = this.resolve(plugin)
+    if (!callback) throw new Error('invalid plugin, expect function or object with an "apply" method, received ' + typeof plugin)
+    this.ctx.fiber.assertActive()</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/registry.ts:316" data-expect="  plugin(plugin: Plugin, config?: any, getOuterStack = buildOuterStack()) {">vendor/cordis/src/registry.ts:316-320</code>（<code class="inl">assertActive()</code> 保证在已卸载的 fiber 上装插件直接报错）</p>
+
+<h3 id="dsh-01-s2-1">fiber 的状态机：依赖齐了才跑</h3>
+<p>fiber 有六个状态（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/fiber.ts:147" data-expect="export const enum FiberState {">fiber.ts:147</code>）：<code class="inl">PENDING</code>（等依赖）、<code class="inl">LOADING</code>、<code class="inl">ACTIVE</code>、<code class="inl">FAILED</code>、<code class="inl">UNLOADING</code>、<code class="inl">DISPOSED</code>。</p>
+<p>核心机制藏在一个叫 epoch 的字符串里。<code class="inl">_refresh()</code> 遍历 inject 的每个名字，从 <code class="inl">fiber.store</code> 里取实现，把它们的 fiber 序号拼成一个字符串；任何一个缺失，epoch 就是 <code class="inl">INACTIVE</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/fiber.ts:611" data-expect="  _refresh() {">fiber.ts:611</code>）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  _refresh() {
+    let epoch: string | boolean = false
+    epoch = ''
+    for (const name of Object.keys(this.inject)) {
+      const impl = this._store[name]
+      if (!impl) {
+        epoch = INACTIVE
+        break
+      }
+      epoch += ':' + impl.fiber.uid
+    }
+    this._setEpoch(epoch)
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/fiber.ts:611" data-expect="  _refresh() {">vendor/cordis/src/fiber.ts:611-623</code></p>
+<p>然后 <code class="inl">_setEpoch</code> 比较新旧 epoch：从 <code class="inl">INACTIVE</code> 变成有值就跑 <code class="inl">_reload()</code>，反过来跑 <code class="inl">_unload()</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/fiber.ts:625" data-expect="  private _setEpoch(epoch: string) {">fiber.ts:625-637</code>）。注意 epoch 里拼的是<strong>提供者 fiber 的 uid</strong>，所以"同一个名字换了一个提供者"也算变化，插件会被卸载再加载一次——这是 hot reload 与"服务被替换"能工作的原因。</p>
+<p>这一条对读配置很关键。<code class="inl">packages/bundle/base/cordis.patch.yml</code> 开头自己写了：</p>
+<div class="codeblock" data-lang="yaml"><pre><code class="lang-yaml"># Row order carries no load semantics (activation is service-availability
+# driven); the grouping is for readers.</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:12" data-expect="# Row order carries no load semantics (activation is service-availability">packages/bundle/base/cordis.patch.yml:12-13</code></p>
+<p>换句话说，那份 500 多行的 YAML <strong>不是按顺序执行的脚本</strong>。行序只影响可读性；真正决定"谁先跑"的是服务依赖：<code class="inl">llm</code> 服务没人提供时，所有 inject 了 <code class="inl">llm</code> 的插件都停在 <code class="inl">PENDING</code>。</p>
+
+<h3 id="dsh-01-s2-2">dispose 与 effect：所有资源都挂在一个列表上</h3>
+<p>插件要注册任何有生命周期的东西，都得包在 <code class="inl">ctx.effect(() =&gt; { ...; return () =&gt; 清理 })</code> 里（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/fiber.ts:418" data-expect="  effect(execute: () =&gt; Effect, label = 'anonymous'): any {">fiber.ts:418</code>）。<code class="inl">ctx.on</code> 就是这么实现的——注册监听者时顺手记一条 effect，标签写成 <code class="inl">ctx.on("事件名")</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:300" data-expect="    const label = `ctx.on(${typeof name === 'string' ? JSON.stringify(name) : name.toString()})`">events.ts:300</code>）。卸载时并行跑完所有 disposer（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/fiber.ts:676" data-expect="    await Promise.all(this._disposables.clear().map(async (dispose) =&gt; {">fiber.ts:676</code>）。</p>
+<p>一个插件"没 clean 干净"在 Cordis 里几乎没有借口：<code class="inl">ctx.on</code>、<code class="inl">ctx.provide</code>、<code class="inl">ctx.accessor</code>、<code class="inl">ctx.mixin</code> 全都是 effect。真正会泄漏的是<strong>逃出这套机制的持有物</strong>——比如一个定时器、一个长连接、一个自己在外面保存的闭包。这就是"坑 5"。</p>
+
+<h2 id="dsh-01-s3">装配：从 dsh 命令到一棵插件树</h2>
+<p>这一节回答"那 500 行 YAML 是从哪来的"。分工是：<strong>profile 决定用哪些 bundle，bundle 提供 patch 文件，patch 叠加成一棵条目树，Loader 把每个条目变成一次 <code class="inl">ctx.plugin</code></strong>。</p>
+
+<h3 id="dsh-01-s3-1">profile 是一个目录，不是一段代码</h3>
+<p>profile 位于 <code class="inl">$DSH_HOME/profiles/&lt;name&gt;</code>（<code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/profile.ts:169" data-expect="export function resolveProfileDir(">app-boot/src/profile.ts:169</code>），目录里有 <code class="inl">package.json</code>（写明这个 profile 用哪些 bundle）和 <code class="inl">cordis.patch.yml</code>（用户自己的补丁层）。仓库自带 5 个模板（<code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/profile.ts:179" data-expect="export const PROFILE_TEMPLATES">profile.ts:179</code>）：</p>
+<div class="table-wrap"><table><thead><tr><th>profile</th><th>bundles</th><th>出处</th></tr></thead><tbody>
+<tr><td><code class="inl">acp</code></td><td><code class="inl">dsh-base</code> + <code class="inl">dsh-acp-app</code></td><td><code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/profile.ts:181" data-expect="bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-acp-app'],">profile.ts:181</code></td></tr>
+<tr><td><code class="inl">web</code></td><td><code class="inl">dsh-base</code> + <code class="inl">dsh-web-app</code></td><td><code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/profile.ts:184" data-expect="bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],">profile.ts:184</code></td></tr>
+<tr><td><code class="inl">headless</code></td><td><code class="inl">dsh-base</code> + <code class="inl">dsh-headless</code></td><td><code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/profile.ts:187" data-expect="bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless'],">profile.ts:187</code></td></tr>
+<tr><td><code class="inl">sdk</code></td><td><code class="inl">dsh-base</code> + <code class="inl">dsh-sdk-app</code></td><td><code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/profile.ts:190" data-expect="bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-sdk-app'],">profile.ts:190</code></td></tr>
+<tr><td><code class="inl">sdk-minimal</code></td><td>只有 <code class="inl">dsh-sdk-minimal</code></td><td><code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/profile.ts:193" data-expect="bundles: ['@deepseek-ai/dsh-sdk-minimal'],">profile.ts:193</code></td></tr>
+</tbody></table></div>
+<p>bundle 是 npm 包，包清单里声明自己的补丁文件：<code class="inl">"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }</code>（<code class="inl src-ref" data-src="dsh:packages/bundle/base/package.json:33" data-expect="&quot;patch&quot;: &quot;./cordis.patch.yml&quot;">bundle/base/package.json:34</code>）。</p>
+
+<h3 id="dsh-01-s3-2">根配置是空的，整棵树都是叠出来的</h3>
+<p>这一条第一次看会反直觉。profile 目录里那个真正被 Loader 读的根配置文件（<code class="inl">cordis.yml</code>）内容是<strong>一个空列表</strong>：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/** The empty root entry list every profile tree patches over. */
+const PROFILE_ROOT_CONFIG = `# dsh profile root — an empty entry list. The tree is composed as patches:
+# each bundle in package.json's dsh.profile.bundles, then cordis.patch.yml, then any
+# --patch overlays. Edit cordis.patch.yml, not this file.
+[]
+`</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:apps/cli/src/profile-boot.ts:81" data-expect="const PROFILE_ROOT_CONFIG">apps/cli/src/profile-boot.ts:81-85</code></p>
+<p>而且<strong>每次启动都会重写它</strong>，理由写在注释里（<code class="inl src-ref" data-src="dsh:apps/cli/src/profile-boot.ts:171" data-expect="writeFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), PROFILE_ROOT_CONFIG)">profile-boot.ts:171</code>）：Loader 在插件自我卸载时会把当前树回写进这个文件，一旦被回写，下一次启动就会把每个 bundle 的 insert 重复叠一遍。所以"空根"是个不变量，靠每次启动重写来维持。这个文件之所以还存在于磁盘上，只是因为它给 Loader 提供了一个真实的 include 锚点来定 <code class="inl">baseUrl</code>。</p>
+<p>补丁栈的合成顺序写在 <code class="inl">composeProfile</code>（<code class="inl src-ref" data-src="dsh:apps/cli/src/profile-boot.ts:197" data-expect="async function composeProfile(">profile-boot.ts:197</code>），注释里写全了：bundle 层（按 <code class="inl">dsh.profile.bundles</code> 顺序）→ profile 自己的用户层 → <code class="inl">$DSH_HOME/cordis.patch.yml</code>（机器级偏好，所以盖过 per-profile 层）→ <code class="inl">--patch</code> 覆盖层 → 遥测开关。还有一个值得注意的顺序：<strong>在导入任何插件之前</strong>就先算好模块解析结果（<code class="inl src-ref" data-src="dsh:apps/cli/src/profile-boot.ts:206" data-expect="const resolution = await createRuntimeResolution(resolutionOptions)">profile-boot.ts:206</code>）。</p>
+<p>补丁本身怎么应用，在 <code class="inl">applyEntryPatches</code> 里（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:57" data-expect="export function applyEntryPatches(">include/src/index.ts:57</code>）。先深拷贝一份，保证热重载时删掉的补丁真的能撤销（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:63" data-expect="data = structuredClone(data)">include/index.ts:63</code>），然后按 id 建索引：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    if (insert) {
+      if (id) {
+        const target = entryMap.get(id)
+        if (!target) {
+          warn('patch insert: entry %C not found', id)
+          continue
+        }
+        if (!target.group) {
+          warn('patch insert: entry %C is not a group', id)
+          continue
+        }
+        if (!Array.isArray(target.config)) target.config = []
+        target.config.push(...insert)
+      } else {
+        data.push(...insert)
+      }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:79" data-expect="    if (insert) {">vendor/include/src/index.ts:79-93</code></p>
+<p>两种 insert：<strong>带 id 的</strong>是往某个 group 行的子列表里追加（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:91" data-expect="target.config.push(...insert)">include/index.ts:91</code>），<strong>不带 id 的</strong>是追加到顶层（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:93" data-expect="data.push(...insert)">include/index.ts:93</code>）。不带 insert 的补丁则是按 id 覆盖已有行的字段（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:120" data-expect="for (const [key, value] of Object.entries(overrides)) {">include/index.ts:120</code>），而 <code class="inl">config</code> 是<strong>整块替换</strong>而不是深合并——base 的注释专门强调了这一点（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:6" data-expect="# A patch replaces the targeted row's whole `config` rather than merging into">cordis.patch.yml:6</code>），所以任一模式 bundle 覆盖一行时必须把这一行的每个键都重述一遍。匹配不到 id、或 name 不一致时，补丁只是告警并跳过（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:116" data-expect="warn('patch: name mismatch for %C (expected %C, got %C), skipping', id, target.name, name)">include/index.ts:116</code>）——这是"坑 1"。</p>
+
+<h3 id="dsh-01-s3-3">Loader 把每个条目变成一次 ctx.plugin</h3>
+<p><code class="inl">boot()</code> 的主体很短（<code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/index.ts:975" data-expect="export async function boot(">app-boot/src/index.ts:975</code>）：新建根 Context → 装 Loader → 跑宿主准备回调 → 挂根 include → 等树 settle → 审计。</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">    await ctx.plugin(Loader)
+    await prepare?.(ctx)
+    stage = 'plugin tree failed to load'
+    await mountRootInclude(ctx, absoluteConfigPath, patches, bareModuleBaseUrl, binName)
+    // A surface can finish and dispose the whole tree while startup is still
+    // in flight, before the last entry settles. The Loader service goes with
+    // it, and the activation audit describes a live tree — reading `ctx.loader`
+    // past this point would throw a TypeError over an app that exited exactly
+    // as asked. Re-check after settlement before auditing the tree.
+    await ctx.get('loader')?.await()
+    if (ctx.get('loader') === undefined) return ctx
+    await auditStartupEntries(ctx, binName)
+    return ctx</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/index.ts:1004" data-expect="    await ctx.plugin(Loader)">packages/boot/app-boot/src/index.ts:1004-1015</code></p>
+<p>条目加载在 <code class="inl">Entry._init</code>：真正 <code class="inl">import</code> 模块（<code class="inl src-ref" data-src="dsh:vendor/loader/src/config/entry.ts:226" data-expect="      moduleNamespace = await this.parent.tree.import(this.options.name, this.getOuterStack)">loader/config/entry.ts:226</code>），解包 ESM/CJS 导出，然后<strong>每个条目最终就是一次 <code class="inl">ctx.plugin</code></strong>（<code class="inl src-ref" data-src="dsh:vendor/loader/src/config/entry.ts:236" data-expect="    this.fiber = this.ctx.registry.plugin(plugin, this.options.config, this.getOuterStack).ctx.fiber">entry.ts:236</code>）。所以"配置树"和"fiber 树"是一一对应的：一个 YAML 行 = 一个 fiber = 一次插件加载。</p>
+<p>条目支持 <code class="inl">disabled</code>，值可以是布尔也可以是 <code class="inl">!!js</code> 表达式，在当下上下文里求值（<code class="inl src-ref" data-src="dsh:vendor/loader/src/config/entry.ts:91" data-expect="  private disabledOf(options: EntryOptions): boolean {">entry.ts:91</code>）。这是 DSH 表达"按平台/按 profile 开关一个插件"的方式：</p>
+<div class="codeblock" data-lang="yaml"><pre><code class="lang-yaml">    - id: bash-sandbox
+      name: '@deepseek-ai/dsh-bash-sandbox'
+      disabled: !!js process.platform === 'win32'
+      config:
+        timeoutMs: 60000
+
+    - id: pwsh-sandbox
+      name: '@deepseek-ai/dsh-pwsh-sandbox'
+      disabled: !!js process.platform !== 'win32'</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:244" data-expect="    - id: bash-sandbox">packages/bundle/base/cordis.patch.yml:244-251</code></p>
+<p>启动审计是最后一道闸。<code class="inl">auditStartupEntries</code> 区分两类未激活：<code class="inl">FAILED</code>（激活失败，可能带原始错误）和 <code class="inl">PENDING</code>（还在等服务）。对 PENDING，它会<strong>列出缺哪些服务</strong>：<code class="inl">Object.keys(fiber.inject).filter(service =&gt; fiber.ctx.get(service) === undefined)</code>（<code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/index.ts:854" data-expect="const missing = Object.keys(fiber.inject).filter(service =&gt; fiber.ctx.get(service) === undefined)">app-boot/index.ts:873</code>）。只有落在"必需条目"名单里的失败才抛 <code class="inl">StartupError</code>，其余只记一行 warning（<code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/index.ts:937" data-expect="throw new StartupError(startupDiagnostic(binName, failures, required)">app-boot/index.ts:937</code>）。</p>
+
+<h3 id="dsh-01-s3-4">装配时怎么"选实现"</h3>
+<p>这是本节最有用的部分。同一个接口在 DSH 里有多种实现，切换方式一共四种，按粗暴程度递增：</p>
+<div class="table-wrap"><table><thead><tr><th>手法</th><th>怎么做</th><th>例子</th></tr></thead><tbody>
+<tr><td>注册表</td><td>服务本身不变，实现往它里面注册</td><td><code class="inl">ctx.llm.registerAdapter(['deepseek-official'], adapter)</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm-deepseek/src/host.ts:55" data-expect="  const registration = ctx.llm.registerAdapter([provider], adapter)">llm-deepseek/src/host.ts:55</code>）</td></tr>
+<tr><td>平台开关</td><td>同一功能的两行，用 <code class="inl">disabled: !!js</code> 互斥</td><td>bash-sandbox / pwsh-sandbox（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:246" data-expect="      disabled: !!js process.platform === 'win32'">cordis.patch.yml:246</code>、<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:252" data-expect="      disabled: !!js process.platform !== 'win32'">:250</code>）</td></tr>
+<tr><td>按 id 覆盖</td><td>后一层补丁改前一层的 config 或 disabled</td><td>web-app 重述 <code class="inl">session-query-sqlite</code>（<code class="inl src-ref" data-src="dsh:packages/bundle/web-app/cordis.patch.yml:27" data-expect="- id: session-query-sqlite">web-app/cordis.patch.yml:27</code>）</td></tr>
+<tr><td>隔离作用域</td><td>用 <code class="inl">isolate</code> 让第二份实现不覆盖父层那份</td><td>session-search 的 group（<code class="inl src-ref" data-src="dsh:packages/experimental/session-search/cordis.patch.yml:5" data-expect="      isolate:">session-search/cordis.patch.yml:5</code>）</td></tr>
+</tbody></table></div>
+<p>第四种最值得看。实验性的 session-search bundle 想装一份<strong>配置不同</strong>的 SQLite 检索实现，又不覆盖 base 那份：</p>
+<div class="codeblock" data-lang="yaml"><pre><code class="lang-yaml">- insert:
+    - id: optional-session-search
+      name: cordis:group
+      group: true
+      isolate:
+        sessionQuery: true
+      config:
+        - id: optional-session-query-sqlite
+          name: '@deepseek-ai/dsh-session-query-sqlite'
+          config:
+            path: ':memory:'
+            openAt: first-search</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/experimental/session-search/cordis.patch.yml:1" data-expect="- insert:">packages/experimental/session-search/cordis.patch.yml:1-13</code></p>
+<p>这里的 <code class="inl">cordis:group</code> 是一个 Loader 内置的假插件，作用只是提供一个嵌套的子条目列表（<code class="inl src-ref" data-src="dsh:vendor/group/src/index.ts:3" data-expect="export default Group">vendor/group/src/index.ts:3</code>，整个文件三行，转发 Loader 里的 <code class="inl">Group</code>）。<code class="inl">isolate.sessionQuery: true</code> 让这个 group 下面的 <code class="inl">sessionQuery</code> 解析到一个新的隔离标签上——于是两份实现并存，各看各的（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/context.ts:121" data-expect="  isolate(name: string, label?: symbol) {">context.ts:121</code>）。</p>
+<p>再看 LLM provider 这一层。base 里默认装了两个 provider 插件——一个是 API key 方式（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:514" data-expect="      name: '@deepseek-ai/dsh-llm-deepseek-api-key'">cordis.patch.yml:514</code>），一个是账号方式（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:517" data-expect="      name: '@deepseek-ai/dsh-llm-deepseek-account'">:517</code>）——它们不是互相替换，而是<strong>各注册各的 provider 名</strong>。默认用哪个，由另一行的配置决定（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:88" data-expect="        provider: deepseek-official">cordis.patch.yml:88</code>）。</p>
+<blockquote><p><strong>与 Python 的对照</strong>：如果自己用 Python 写，这一步通常是一个 <code class="inl">config.py</code> 里的字典加上 <code class="inl">if settings.provider == "..."</code>。DSH 把它拆成了"服务接口 + 多个注册方 + 配置行叠加"，好处是新增一个 provider 不用改任何现有代码；代价是<strong>默认值散落在 YAML 的不同层</strong>里，要回答"这个 provider 现在到底跑没跑"得把补丁栈读完。</p></blockquote>
+
+<h2 id="dsh-01-s4">插件之间怎么通信：事件与扩展点</h2>
+<p>服务解决"我要用别人"的问题；事件解决"我要在别人的流程里插一脚"。Cordis 的事件总线有五种派发模式（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:32" data-expect="export type DispatchMode = 'emit' | 'parallel' | 'serial' | 'bail' | 'waterfall'">events.ts:26</code>），DSH 实际主要用其中三种。</p>
+
+<h3 id="dsh-01-s4-1">waterfall：串成链条，不调 next() 就是否决</h3>
+<p>实现只有 10 行，读懂了就没有魔法：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  waterfall(...args: any[]) {
+    const cbs = this.dispatch('waterfall', args)
+    const inner = args.pop()
+    const next = () =&gt; {
+      const cb = cbs.shift() ?? inner
+      return cb(...args)
+    }
+    args.push(next)
+    return next()
+  }</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:234" data-expect="  waterfall(...args: any[]) {">vendor/cordis/src/events.ts:234-243</code></p>
+<p>最后一个参数是最里层的默认行为（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:236" data-expect="    const inner = args.pop()">events.ts:236</code>）；每次 <code class="inl">next()</code> 从监听者队列里取一个，取完就落到默认行为（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:238" data-expect="      const cb = cbs.shift() ?? inner">events.ts:238</code>）。文档明说：<strong>不调用 next() 的监听者会否决后面的处理和内置行为</strong>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:228" data-expect="run outermost-first; a listener that does not call `next()` vetoes the">events.ts:228</code>）。这就是 ASGI 中间件那个比喻——只是这里的"中间件"是<strong>可以声明"我不到场就让整件事不发生"</strong>的。</p>
+<p>另一个必须记住的点是<strong>顺序由注册顺序决定，而 DSH 里到处在改注册顺序</strong>。<code class="inl">ctx.on</code> 的第三个参数 <code class="inl">prepend</code> 会把监听者插到队首（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:114" data-expect="  prepend?: boolean">events.ts:140</code>）。spill-policy 就是这么用的：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">  ctx.on('tools/post-execute', async (exec, result, next): Promise&lt;PostToolDecision&gt; =&gt; {
+    const decision = await next()
+    if (decision.kind !== 'accept' || Object.hasOwn(decision, 'value') || exec.name === 'read') return decision</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:133" data-expect="ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {">spill-policy/src/index.ts:133-135</code>（该监听者注册时带 <code class="inl">prepend: true</code>，见同文件第 150 行）</p>
+<p>它先 <code class="inl">await next()</code> 拿到下游结论，再决定要不要把大结果转存成文件引用。因为在队首，它包住了所有别的 post-execute 监听者。</p>
+
+<h3 id="dsh-01-s4-2">三种派发怎么选</h3>
+<div class="table-wrap"><table><thead><tr><th>模式</th><th>语义</th><th>返回值怎么用</th><th>DSH 里的用例</th></tr></thead><tbody>
+<tr><td><code class="inl">emit</code></td><td>同步调用，不看返回值、不等 Promise（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:194" data-expect="  emit(...args: any[]) {">events.ts:194</code>）</td><td>忽略</td><td><code class="inl">agent/assistant-stream</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:449" data-expect="        (frame) =&gt; { this.dispatch.emit('agent/assistant-stream', { frame }) },">agent.ts:449</code>）、<code class="inl">tools/result</code>（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1710" data-expect="scopeTarget(this, exec.agent), 'tools/result', exec, result,">tools/index.ts:1710</code>）</td></tr>
+<tr><td><code class="inl">serial</code></td><td>按序 await，遇到 bail 值停下（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:204" data-expect="  async serial(...args: any[]) {">events.ts:204</code>）</td><td>第一个非 null/false/undefined 的值</td><td><code class="inl">agent/turn-stopping</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:362" data-expect="          await this.dispatch.serial('agent/turn-stopping', { turn, signal })">agent.ts:362</code>）</td></tr>
+<tr><td><code class="inl">waterfall</code></td><td>外面包里面，靠 <code class="inl">next()</code> 接力</td><td>最外层监听者的返回值</td><td><code class="inl">agent/pre-step</code>、<code class="inl">agent/request</code>、<code class="inl">tools/pre-execute</code> 等</td></tr>
+</tbody></table></div>
+<p>判定"截断"的规则在 <code class="inl">isBailed</code>：<strong>只有 <code class="inl">null</code>、<code class="inl">false</code>、<code class="inl">undefined</code> 三个值不算 bail</strong>，其余任何返回值都算（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:13" data-expect="export function isBailed(value: any) {">events.ts:13-15</code>）。这条规则意味着 <code class="inl">serial</code> 的监听者<strong>必须显式 return 才算"我处理了"</strong>，漏写 return 等于什么都没说。</p>
+
+<h3 id="dsh-01-s4-3">四个扩展点，谁在什么时候派发</h3>
+<p>挑四个最有代表性的，按一次 turn 的时间顺序排：</p>
+<div class="table-wrap"><table><thead><tr><th>扩展点</th><th>模式</th><th>何时派发</th><th>默认行为 / 返回值作用</th></tr></thead><tbody>
+<tr><td><code class="inl">agent/pre-step</code></td><td>waterfall</td><td>每个 step 开始前，消息已从 inbox 认领、系统提示词已组装（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:274" data-expect="    const decision = await this.dispatch.waterfall(">agent.ts:274</code>）</td><td>默认 <code class="inl">{ kind: 'enter' }</code> 并附上运行时上下文；返回 <code class="inl">reject</code> 会让整个 turn 以 <code class="inl">blocked</code> 结束（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:320" data-expect="          turnEnds = { kind: 'blocked' }">agent.ts:320</code>）</td></tr>
+<tr><td><code class="inl">agent/request</code></td><td>waterfall</td><td>每次要发模型请求前，拿到候选的 provider/model 之后（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:593" data-expect="    const proposedConfig = await this.dispatch.waterfall(">agent.ts:593</code>）</td><td>默认返回种子配置；监听者可以改 provider/model。改完仍然缺 provider 或 model 就直接抛错（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:599" data-expect="      throw new Error(`agent &quot;${this.id}&quot; has no provider/model: set AgentOptions.provider and AgentOptions.model or supply both via the agent/request waterfall`)">agent.ts:599</code>）</td></tr>
+<tr><td><code class="inl">tools/pre-execute</code></td><td>waterfall</td><td>工具调用通过参数校验、进入执行前（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1512" data-expect="        carrier, 'tools/pre-execute', exec,">tools/index.ts:1512</code>）</td><td>默认 <code class="inl">{ kind: 'allow' }</code>（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1513" data-expect="        () =&gt; Promise.resolve&lt;PreToolDecision&gt;({ kind: 'allow' }),">:1513</code>）。可以有四种决策：allow / deny / cancel / ask（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:145" data-expect="     * Allow, deny, cancel, or ask before dispatch.">tools/index.ts:145</code>）——<code class="inl">ask</code> 会转到审批服务</td></tr>
+<tr><td><code class="inl">tools/post-execute</code></td><td>waterfall</td><td>工具跑完、结果归一化之后（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1788" data-expect="    const decision = await this.ctx.waterfall(">tools/index.ts:1788</code>）</td><td>默认 <code class="inl">{ kind: 'accept' }</code>；可以 accept / replace / enrich / block（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:167" data-expect="     * Accept, replace, enrich, or block a normalized dispatch result.">tools/index.ts:167</code>）</td></tr>
+</tbody></table></div>
+<p>再补一个和上面对照的 <code class="inl">tools/result</code>：它是 <code class="inl">emit</code>，参数被深冻结，监听者<strong>改不了结果</strong>，抛错也只记一行警告（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1707" data-expect="      this.ctx.logger.warn(`tool &quot;${toolName}&quot; (${callId}): tools/result observer failed: ${errorMessage(error)}`)">tools/index.ts:1707</code>）。这就是"观察"和"参与"的分界。</p>
+<p><code class="inl">agent/request-error</code> 值得单独说，因为它是这套设计里收益最大的一处。模型调用失败时派发 waterfall，默认返回 <code class="inl">undefined</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:523" data-expect="          if (action?.kind !== 'retry') {">agent.ts:523</code>）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">          const action = await this.dispatch.waterfall(
+            'agent/request-error', {
+              turn,
+              step,
+              provider: request.provider,
+              failure: finish.failure,
+              retryPolicy: preparedCall?.retryPolicy,
+              signal,
+            },
+            () =&gt; Promise.resolve&lt;RequestErrorAction&gt;(undefined),
+          )
+          signal.throwIfAborted()
+          if (action?.kind !== 'retry') {
+            throw new LlmError(finish.failure.message, finish.failure.code, finish.failure)
+          }
+          continue</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:511" data-expect="          const action = await this.dispatch.waterfall(">packages/core/agent-loop/src/agent.ts:511-528</code></p>
+<p>agent-loop 本身<strong>完全不知道重试是什么</strong>。重试逻辑放在一个独立插件里，挂在同一个扩展点上（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:243" data-expect="const disposeListener = ctx.on('agent/request-error', (">llm-retry/src/index.ts:243</code>），显式返回 <code class="inl">{ kind: 'retry' }</code> 才触发。压缩插件用同一个扩展点做另一种恢复：只在错误码是"上下文超长"时压缩再重试（<code class="inl src-ref" data-src="dsh:packages/compaction/compaction-basic/src/index.ts:218" data-expect="      return { kind: 'retry' }">compaction-basic/src/index.ts:218</code>）。<strong>一个扩展点、两个消费者、各自判断条件</strong>——这就是插件化在真实代码里的样子。</p>
+<p>再看一个"包装层"的例子，超时策略（完整实现不到 40 行）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">export function apply(ctx: Context): void {
+  ctx.on('tools/execute', async (exec, next): Promise&lt;ToolExecutionResult&gt; =&gt; {
+    const timeoutMs = ctx.tools.get(exec.name, exec.agent)?.timeoutMs
+    // A tool that declares no budget: no deadline, delegate unchanged.
+    if (timeoutMs === undefined) return next()
+
+    using d = deadline(exec.signal, timeoutMs, TOOL_TIMEOUT)
+    // Swap the derived deadline onto exec for dispatch, then restore the
+    // caller's own signal so post-execute listeners never see this plugin's
+    // (possibly already-aborted) timeout signal.
+    const upstream = exec.signal
+    exec.signal = d.signal
+    try {
+      const result = await next()
+      // If OUR timer fired (scoped by code — a nested outer deadline reads as
+      // undefined here), the tool/capability saw the abort and reached
+      // quiescence; replace whatever it returned (its own abort result) with the
+      // structured TOOL_TIMEOUT the model sees.
+      if (timeoutOf(d.signal, TOOL_TIMEOUT) !== undefined) {
+        return toolTimeoutResult(timeoutMs)
+      }
+      return result
+    } finally {
+      exec.signal = upstream
+    }
+  })
+}</code></pre></div>
+<p><code class="inl src-ref" data-src="dsh:packages/guard/timeout-policy/src/index.ts:55" data-expect="export function apply(ctx: Context): void {">packages/guard/timeout-policy/src/index.ts:55-85</code></p>
+<p>它临时把 <code class="inl">exec.signal</code> 换成带 deadline 的 signal，调 <code class="inl">next()</code>，然后无论如何都换回来。三个细节都值得学：<strong>①</strong> 没用 <code class="inl">timeoutMs</code> 的工具直接 <code class="inl">return next()</code>，不做任何事也不改变行为（<code class="inl src-ref" data-src="dsh:packages/guard/timeout-policy/src/index.ts:59" data-expect="    if (timeoutMs === undefined) return next()">timeout-policy/index.ts:59</code>）；<strong>②</strong> 只有<strong>自己这个计时器</strong>触发时才改写结果，嵌套的外层 deadline 不会误判（<code class="inl src-ref" data-src="dsh:packages/guard/timeout-policy/src/index.ts:73" data-expect="      if (timeoutOf(d.signal, TOOL_TIMEOUT) !== undefined) {">:73</code>）；<strong>③</strong> 用 <code class="inl">finally</code> 恢复 signal，包出去的必须包回来。</p>
+
+<h3 id="dsh-01-s4-4">按作用域过滤：同一事件只发给相关的 Agent</h3>
+<p>DSH 在一个多 Agent 进程里跑，<code class="inl">tools/pre-execute</code> 这类事件不能广播给所有人。<code class="inl">EventsService.dispatch</code> 里有一段过滤器逻辑，每个监听者记录自己属于哪个 ctx，派发时逐个比对（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:171" data-expect="const filter = thisArg?.[Context.filter]">events.ts:163</code>）。DSH 侧对应的写法是 <code class="inl">scopeTarget(this, exec.agent)</code>——把当前 Agent 作为派发目标，只有这个作用域下的监听者收到（<code class="inl src-ref" data-src="dsh:packages/core/tools/src/index.ts:1510" data-expect="const carrier = scopeTarget(this, exec.agent)">tools/index.ts:1511</code>）。扩展点的类型注释里反复出现的那句 "Scope-filtered dispatch" 说的就是这件事。</p>
+
+<h2 id="dsh-01-s5">取舍与坑</h2>
+<h3 id="dsh-01-s5-1">三条路线对比</h3>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>Cordis 插件化（DSH 的做法）</th><th>直接 import 组装</th><th>钩子函数表</th></tr></thead><tbody>
+<tr><td>新增一个功能</td><td>写一个包 + 在 YAML 加一行</td><td>改组装代码</td><td>改组装代码并挂钩子</td></tr>
+<tr><td>替换实现</td><td>加一行 <code class="inl">disabled</code> 或按 id 覆盖 config</td><td>改 import</td><td>改钩子的挂钩点</td></tr>
+<tr><td>依赖顺序</td><td>由服务可用性决定，不用手排（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/fiber.ts:611" data-expect="  _refresh() {">fiber.ts:611</code>）</td><td>手写顺序，错了就崩</td><td>手写顺序</td></tr>
+<tr><td>卸载/热重载</td><td>disposer 自动跑，服务自动注销</td><td>多半没有</td><td>手动维护反注册</td></tr>
+<tr><td>调试成本</td><td>高：要知道最终跑的是哪几个插件，得把补丁栈读完</td><td>低：读一个文件</td><td>中：读钩子注册处</td></tr>
+<tr><td>失败模式</td><td>静默 PENDING（插件没激活但也不报错）</td><td>启动时直接异常</td><td>钩子没被调用，静默</td></tr>
+<tr><td>适用场景</td><td>多产品线共用一套内核（CLI / Web / 桌面 / SDK）</td><td>单一产品</td><td>单一产品但需要少量扩展点</td></tr>
+</tbody></table></div>
+<p>最后一行的失败模式是这套设计的真正代价，也是下面"坑 3"要展开的。<code class="inl">auditStartupEntries</code> 只在条目落在"必需"名单里时才判死，其余只是 warning；非必需的插件静默不激活是允许的（<code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/index.ts:941" data-expect="if (failures.length &gt; 0) warn(activationDiagnostic(binName, failures))">app-boot/index.ts:939</code>）。</p>
+
+<h3 id="dsh-01-s5-2">坑 1：补丁按 id 覆盖，行序完全不保证谁生效</h3>
+<p><strong>触发条件</strong>：你在 profile 的 <code class="inl">cordis.patch.yml</code> 里写一行想改 base 某个插件的配置，但 id 写错了，或者 <code class="inl">name</code> 与目标行不一致。</p>
+<p><strong>后果</strong>：补丁被<strong>静默跳过</strong>（只打一行 warning），启动照常成功，你以为改了但没改。applyEntryPatches 对三种情况都是 warn + continue：找不到 id（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:83" data-expect="warn('patch insert: entry %C not found', id)">include/index.ts:83</code>）、目标不是 group（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:87" data-expect="warn('patch insert: entry %C is not a group', id)">:87</code>）、name 不匹配（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:116" data-expect="warn('patch: name mismatch for %C (expected %C, got %C), skipping', id, target.name, name)">:116</code>）。</p>
+<p><strong>源码里怎么防的</strong>：部分防住。插入的行会被立刻建索引，所以同一份补丁列表里<strong>后面的补丁可以改前面刚插入的行</strong>（<code class="inl src-ref" data-src="dsh:vendor/include/src/index.ts:100" data-expect="buildMap(insert)">include/index.ts:100</code>，注释解释了不这么做的话"inserted rows were silently unpatchable"）。但跨层写错 id 依然只是 warning。要确认生效了，得用 <code class="inl">dsh --dump-config</code> 把最终树打出来看。</p>
+
+<h3 id="dsh-01-s5-3">坑 2：同名服务在同一作用域注册第二次，直接抛错</h3>
+<p><strong>触发条件</strong>：两个插件在同一层（没有 <code class="inl">isolate</code>）都提供同一个服务名。</p>
+<p><strong>后果</strong>：后注册者抛 <code class="inl">service "X" has been registered at &lt;先注册者的插件名&gt;</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:290" data-expect="        throw new Error(`service &quot;${name}&quot; has been registered at &lt;${this.store[key].fiber.name}&gt;`)">reflect.ts:290</code>），该插件变成 FAILED。</p>
+<p><strong>设计判断</strong>：这是<strong>故意的 fail-loud</strong>。Cordis 没有"后写的覆盖先写的"这种静默语义——因为同一层出现两个提供者，多半是配置写错了（比如你既装了 <code class="inl">sandbox-local</code> 又想装一个自己的沙箱，忘了把前者 disabled）。要真正做到"并存"必须显式隔离：<code class="inl">ctx.isolate(name)</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/context.ts:121" data-expect="  isolate(name: string, label?: symbol) {">context.ts:119</code>）或组补丁里的 <code class="inl">isolate: { sessionQuery: true }</code>（<code class="inl src-ref" data-src="dsh:packages/experimental/session-search/cordis.patch.yml:5" data-expect="      isolate:">session-search/cordis.patch.yml:5</code>）。<strong>这里的坑是</strong>：报错信息只写了"谁先注册的"，没写"你该去 disable 谁"，排查时得自己回去翻补丁栈。</p>
+
+<h3 id="dsh-01-s5-4">坑 3：inject 写错名字 → 插件静默不激活</h3>
+<p><strong>触发条件</strong>：插件的 <code class="inl">inject</code> 里有一个服务名，整个树里没有任何插件提供它（打错字、或者对应的插件被 <code class="inl">disabled: true</code> 关掉了）。</p>
+<p><strong>后果</strong>：fiber 永远停在 <code class="inl">PENDING</code>。<code class="inl">_refresh()</code> 发现某个名字没实现，epoch 就是 <code class="inl">INACTIVE</code>，插件体一行都不跑（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/fiber.ts:611" data-expect="  _refresh() {">fiber.ts:611-623</code>）。如果它不在必需名单里，启动只是打一行 warning。</p>
+<p><strong>源码里怎么防的</strong>：这是 DSH 明确设计过的诊断路径。<code class="inl">auditStartupEntries</code> 对 PENDING 条目会算出缺哪些服务并打印（<code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/index.ts:854" data-expect="const missing = Object.keys(fiber.inject).filter(service =&gt; fiber.ctx.get(service) === undefined)">app-boot/index.ts:873</code>），最终文本形如 <code class="inl">pending (waiting for service: X)</code>（<code class="inl src-ref" data-src="dsh:packages/boot/app-boot/src/index.ts:884" data-expect=": `pending (waiting for ${outcome.missing.length === 1 ? 'service' : 'services'}: ${outcome.missing.join(', ') || 'unknown'})`">:883</code>）。另外，运行期如果真去读一个"声明了但没激活"的服务，错误文本会被改写成 <code class="inl">cannot get required service "X" in inactive context</code>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/reflect.ts:160" data-expect="              error.message = `cannot get required service &quot;${prop}&quot; in inactive context`">reflect.ts:160</code>），和"没声明就直接用"区分开。读启动日志里那几行 warning 是排查这类问题的唯一入口。</p>
+
+<h3 id="dsh-01-s5-5">坑 4：waterfall 监听者漏写 return，链条退化成"谁都没处理"</h3>
+<p><strong>触发条件</strong>：在 <code class="inl">agent/request-error</code> 之类的 waterfall 里做异步判断，写成 <code class="inl">if (canRetry) { return { kind: 'retry' } }</code> 但外层忘了 <code class="inl">return await next()</code>，或者反过来<strong>该调 next() 却没调</strong>。</p>
+<p><strong>后果</strong>：两种都糟糕。漏调 <code class="inl">next()</code> 会<strong>否决整条链，包括内置行为</strong>（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:228" data-expect="run outermost-first; a listener that does not call `next()` vetoes the">events.ts:228</code>）；调了 next() 但把结果丢掉、自己返回 undefined，则下游的决策全部丢失，调用方看到的是"没人处理"。在 <code class="inl">agent/request-error</code> 上表现为：请求失败但不重试、直接抛 <code class="inl">LlmError</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:523" data-expect="          if (action?.kind !== 'retry') {">agent.ts:523</code>）。</p>
+<p><strong>源码里的写法</strong>：看 llm-retry 怎么处理的——超过上限时<strong>显式把控制权交出去</strong>：<code class="inl">return next()</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:223" data-expect="if (policy.mode === 'normal' &amp;&amp; previousRetry &gt;= policy.maxRetries) return next()">llm-retry/index.ts:223</code>）。<code class="inl">serial</code> 那边同理：判定"我处理了"用的是 <code class="inl">isBailed</code>，返回 <code class="inl">undefined</code> 等于没处理（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/events.ts:13" data-expect="export function isBailed(value: any) {">events.ts:13</code>）。规则可以一句话记：<strong>waterfall 必须二选一——要么 <code class="inl">return next()</code>，要么自己 return 一个决策；serial 必须显式 return 一个真值。</strong></p>
+
+<h3 id="dsh-01-s5-6">坑 5：注册顺序能改变行为，而顺序由 YAML 行序决定</h3>
+<p><strong>触发条件</strong>：两个插件监听同一个 waterfall 事件，行为取决于谁在外面。</p>
+<p><strong>后果</strong>：调换 YAML 的行序就能改变结果——尽管文件开头写着"行序不带加载语义"（<code class="inl src-ref" data-src="dsh:packages/bundle/base/cordis.patch.yml:12" data-expect="# Row order carries no load semantics (activation is service-availability">cordis.patch.yml:12</code>）。<strong>那句话只说对了激活时机</strong>：谁先激活由服务可用性决定，但<strong>监听者的排队顺序仍按注册顺序</strong>，<code class="inl">prepend</code> 还能再往前插。</p>
+<p><strong>源码里的实例</strong>：spill-policy 用 <code class="inl">prepend: true</code> 把自己放到 post-execute 队首（<code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:133" data-expect="ctx.on('tools/post-execute', async (exec, result, next): Promise&lt;PostToolDecision&gt; =&gt; {">spill-policy/index.ts:133</code>），先 <code class="inl">await next()</code> 拿全部下游结论再决定要不要转存。它对 <code class="inl">read</code> 工具的结果特意不转存（<code class="inl src-ref" data-src="dsh:packages/spill/spill-policy/src/index.ts:135" data-expect="    if (decision.kind !== 'accept' || Object.hasOwn(decision, 'value') || exec.name === 'read') return decision">:135</code>）——如果它排在别的监听者后面，别人已经改了 <code class="inl">content</code>，这个判断的前提就不一样了。<strong>防的方式</strong>：需要"包住所有人"的监听者显式写 <code class="inl">prepend: true</code>，不要指望 YAML 行序。</p>
+
+<h3 id="dsh-01-s5-7">坑 6：热重载与配置回写</h3>
+<p><strong>触发条件</strong>：改了 profile 的 <code class="inl">cordis.patch.yml</code>，或让某个插件自我卸载。</p>
+<p><strong>后果 A（配置被污染）</strong>：Loader 提供 <code class="inl">write()</code> 持久化，插件自我卸载时会把当前树回写到 <code class="inl">cordis.yml</code>（<code class="inl src-ref" data-src="dsh:vendor/loader/src/index.ts:165" data-expect="fiber.entry.parent.tree.write()">loader/index.ts:165</code>）。因为根配置是"空列表 + 全靠补丁叠"的结构，一旦被回写，下一次启动会把每个 bundle 的 insert 重复叠一遍。profile-boot 的防法是<strong>每次启动都重写空根</strong>（<code class="inl src-ref" data-src="dsh:apps/cli/src/profile-boot.ts:171" data-expect="  writeFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), PROFILE_ROOT_CONFIG)">profile-boot.ts:171</code>），注释里直接点明了这个原因。</p>
+<p><strong>后果 B（卸载时不清理）</strong>：fiber 卸载会并行跑完所有 effect 的 disposer（<code class="inl src-ref" data-src="dsh:vendor/cordis/src/fiber.ts:676" data-expect="    await Promise.all(this._disposables.clear().map(async (dispose) =&gt; {">fiber.ts:676</code>）。但但如果插件持有的是<strong>没被包进 effect 的资源</strong>——自己写的定时器、外部连接、挂在模块级变量上的状态——Cordis 不知道它的存在，热重载会让它累积。<strong>真实代码里怎么防的</strong>：llm-retry 在插件卸载时主动中止所有正在等待的重试（<code class="inl src-ref" data-src="dsh:packages/llm/llm-retry/src/index.ts:256" data-expect="lifetime.abort(new Error('llm-retry plugin disposed'))">llm-retry/index.ts:256</code>），也就是自己把"等待中的 Promise"登记进 effect 的清理链。这是写插件时的标准动作：<strong>凡是有"还在等"的东西，卸载时必须显式 abort。</strong></p>
+<blockquote><p><strong>另外注意 headless 直接关掉了热重载</strong>：headless bundle 里 <code class="inl">disabled: true</code>（<code class="inl src-ref" data-src="dsh:packages/bundle/headless/cordis.patch.yml:33" data-expect="disabled: true">bundle/headless/cordis.patch.yml:33</code>）就是那条 HMR 行。一次性任务不需要为重载付出复杂度。</p></blockquote>
+
+<h2 id="dsh-01-s6">读源码路线</h2>
+<p>按这个顺序读，每一步都不需要看别的模块：</p>
+<ol>
+<li><strong>先建立形状感</strong>：<code class="inl">vendor/cordis/src/index.ts</code>（16 行，每个文件一句话说明）。然后 <code class="inl">context.ts:71</code> 的根 Context 构造函数——知道 ctx 上有哪几个真实字段就够了。</li>
+<li><strong>服务那条线</strong>：<code class="inl">service.ts:42</code>（构造函数 18 行）→ <code class="inl">reflect.ts:277</code>（provide）→ <code class="inl">reflect.ts:154</code>（get 的 fiber 链查找）→ <code class="inl">reflect.ts:314</code>（notify）。读完这四个就知道"注册、查找、上下线通知"全貌。</li>
+<li><strong>生命周期那条线</strong>：<code class="inl">fiber.ts:147</code>（状态枚举）→ <code class="inl">fiber.ts:611</code>（_refresh 算 epoch）→ <code class="inl">fiber.ts:625</code>（_setEpoch 决定 reload/unload）→ <code class="inl">fiber.ts:418</code>（effect）。这一条是整套东西的引擎。</li>
+<li><strong>事件那条线</strong>：<code class="inl">events.ts:234</code>（waterfall 十行）→ <code class="inl">events.ts:13</code>（isBailed）→ <code class="inl">events.ts:294</code>（ctx.on 的 effect 登记）。</li>
+<li><strong>装配那条线（读 DSH 而不是 Cordis）</strong>：<code class="inl">apps/cli/src/profile-boot.ts:81</code>（空根配置）→ <code class="inl">profile-boot.ts:197</code>（composeProfile 的层次）→ <code class="inl">packages/boot/app-boot/src/index.ts:975</code>（boot）→ <code class="inl">vendor/include/src/index.ts:57</code>（补丁怎么叠）→ <code class="inl">vendor/loader/src/config/entry.ts:236</code>（条目变成 ctx.plugin）。</li>
+<li><strong>最后回到真实配置</strong>：打开 <code class="inl">packages/bundle/base/cordis.patch.yml</code>，配合 <code class="inl">app-boot/src/profile.ts:179</code> 的模板表，把一份 headless profile 的每一行在脑子里过一遍。此时你应该能回答"这行插件的服务是谁提供的、谁在消费它"。</li>
+</ol>
+<p>旧版精读里关于 Cordis 的那一节（<a href="#/dsh?section=s1">旧版 · Cordis：插件与服务</a>）用的是比喻讲法，可以当作对照读；本节的每条结论都以当前 commit 的源码为准。</p>
+<blockquote><p><strong>本章没覆盖到的</strong>：Cordis 的 <code class="inl">logger.ts</code>（271 行，日志门面与 exporter）和 <code class="inl">utils.ts</code>（287 行，含 tracing 用的 <code class="inl">getTraceable</code>）；<code class="inl">vendor/hmr</code> 的热重载实现细节；<code class="inl">cordis-plugin-timer</code>；以及 <code class="inl">intercept</code> 配置合并（<code class="inl">Service[symbols.resolveConfig]</code>）在 DSH 里的实际使用者。这些属于"可以单独成节"的量，本章只保证把"插件怎么接成运行时"这条主线讲透。</p></blockquote>
+</section>
+</div>

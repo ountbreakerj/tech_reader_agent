@@ -37,5 +37,10 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 |---|---|---|
 | hx-00 全景图 | `harness/messages.py`、`harness/llm.py` | `tests/test_llm.py` |
 | hx-01 Agent Loop 与停止条件 | `harness/loop.py` | `tests/test_loop.py` |
+| hx-02 工具定义与注册 | `harness/tools.py` | `tests/test_tools.py` |
+| hx-03 执行管线与并发 | `harness/tool_runtime.py` | `tests/test_tool_runtime.py` |
+| hx-04 会话日志与回放 | `harness/session_log.py` | `tests/test_session_log.py` |
+
+`tools.py` 和 `tool_runtime.py` 各有一个 `ToolSpec`：前者描述工具本身（schema、handler、只读标志），后者只描述调度需要的信息（可否并行、超时）。分开写是为了让每章的代码能单独读懂；第 25 章组装 mini-harness 时会把两者合并。
 
 后续章节的文件随章节补充。
