@@ -614,6 +614,8 @@
         var visibles = 0;
         var directory = $(".harness-scope", scope());
         if (directory) markIn(directory, q);
+        // 新版书页式章节（.book-scope）按正文搜索，命中计入“目录”一并跳转
+        $$(".book-scope", scope()).forEach(function (chapter) { markIn(chapter, q); });
         var directoryHits = hitMarks.length;
         cards.forEach(function (c) {
           var kw = (c.getAttribute("data-kw") || "") + " " + c.textContent.toLowerCase();
@@ -635,7 +637,7 @@
           sec.classList.toggle("hidden", !any && !headHit && $$(".card", sec).length > 0);
         });
         searchStatus.innerHTML = "<b>" + visibles + "</b> / " + cards.length + " 个模块";
-        if (directoryHits) searchStatus.appendChild(document.createTextNode(" · 目录 " + directoryHits + " 处命中"));
+        if (directoryHits) searchStatus.appendChild(document.createTextNode(" · 目录与新版章节 " + directoryHits + " 处命中 · Enter 跳转"));
         if (!visibles && !directoryHits) searchStatus.textContent = "无结果 · 换个关键词试试";
       },
       clear: function () {
@@ -702,7 +704,7 @@
 
   function enhanceCopyButtons() {
     // book codeblocks
-    $$("#mod-book .codeblock, #mod-harness .codeblock").forEach(function (wrap) {
+    $$("#mod-book .codeblock, #mod-harness .codeblock, #mod-dsh .book-scope .codeblock").forEach(function (wrap) {
       var lang = wrap.getAttribute("data-lang") || "";
       if (lang && lang !== "text") {
         var tag = document.createElement("span");

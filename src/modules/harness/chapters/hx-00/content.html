@@ -96,7 +96,7 @@
 <h3 id="hx-00-s3-3">lcc：每章一个机制</h3>
 <p>learn-claude-code 的章节目录从 <code class="inl">s01_agent_loop</code> 到 <code class="inl">s17_goal_loop</code>，每章一个 <code class="inl">code.py</code>，从 151 行（s01）长到 3,326 行（<code class="inl">s15_integrated_harness</code>）。它依赖 Anthropic 官方 SDK，模型名从环境变量读 <code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:54" data-expect="MODEL = os.environ[">code.py:54</code>。最值得读的三个文件：</p>
 <ol>
-<li><strong><code class="inl">s01_agent_loop/code.py</code></strong>：整个 harness 的最小形态，见 <a href="#hx-00-s1">本章第一节</a>。注意它写死了 <code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:100" data-expect="tools=TOOLS, max_tokens=8000,">code.py:100</code>，而且完全不看 <code class="inl">stop_reason</code>，被截断的回复也会走“没有工具调用就结束”的路径。</li>
+<li><strong><code class="inl">s01_agent_loop/code.py</code></strong>：整个 harness 的最小形态，见 <a href="#hx-00-s1">本章第一节</a>。注意它写死了 <code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:100" data-expect="tools=TOOLS, max_tokens=8000,">code.py:100</code>，而且完全不看 <code class="inl">stop_reason</code>，分不清“说完了”和“被 <code class="inl">max_tokens</code> 截断”。</li>
 <li><strong><code class="inl">s03_permission/code.py</code></strong>：<code class="inl src-ref" data-src="lcc:s03_permission/code.py:201" data-expect="def check_permission(block)">code.py:201</code> 把权限拆成三道闸：子串黑名单 <code class="inl src-ref" data-src="lcc:s03_permission/code.py:156" data-expect="DENY_LIST = [">code.py:156</code>、按工具匹配的规则 <code class="inl src-ref" data-src="lcc:s03_permission/code.py:175" data-expect="PERMISSION_RULES = [">code.py:175</code>、询问用户。三道闸的分工就是 hx-13 到 hx-16 的雏形。</li>
 <li><strong><code class="inl">s08_context_compact/code.py</code></strong>：<code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:254" data-expect="class ContextCompactor:">code.py:254</code> 的阈值都按字符计 <code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:255" data-expect="CONTEXT_CHAR_LIMIT = 50000">code.py:255</code>，估算方式是把消息 JSON 序列化后取长度 <code class="inl src-ref" data-src="lcc:s08_context_compact/code.py:269" data-expect="def estimate_chars(messages: list)">code.py:269</code>。hx-05 会讨论字符估算和真实 token 数之间的偏差。</li>
 </ol>
@@ -122,7 +122,7 @@
 <p>“模型这一轮说完了没有、要不要执行工具”是每个 harness 最先写的判断，也最能看出各仓库的取向：</p>
 <div class="table-wrap"><table><thead><tr><th>仓库</th><th>怎么判定</th><th>代价</th><th>适用场景</th></tr></thead><tbody>
 <tr><td>dsh</td><td>适配器把厂商取值翻译成内部 <code class="inl">FinishReason</code> <code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:156" data-expect="export interface FinishReasonMap {">types.ts:156</code>，未知值报错；截断时组装器丢掉工具调用块 <code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:137" data-expect="const kept = this.finish.kind === 'max-tokens'">assembler.ts:137</code>；循环先判截断再判工具调用</td><td>每接一个厂商都要写完整的翻译；厂商新增取值时先报错，要改代码才能继续</td><td>多厂商、要求历史始终合法的生产系统</td></tr>
-<tr><td>oh</td><td>循环只看有没有 <code class="inl">tool_uses</code>，不读 <code class="inl">stop_reason</code></td><td>分不清“正常结束”和“被截断”；截断回复按完成处理</td><td>快速接入多家兼容服务，先跑起来</td></tr>
+<tr><td>oh</td><td>循环只看有没有 <code class="inl">tool_uses</code>，不读 <code class="inl">stop_reason</code></td><td>分不清“正常结束”和“被截断”；被截断且不含工具调用的回复按完成处理</td><td>快速接入多家兼容服务，先跑起来</td></tr>
 <tr><td>lcc</td><td>同样只看 <code class="inl">tool_use</code> 块，并用测试固定“块和 <code class="inl">stop_reason</code> 冲突时以块为准” <code class="inl src-ref" data-src="lcc:tests/test_agent_loop_boundaries.py:244" data-expect="def test_parent_loop_executes_a_real_tool_call_even_if_stop_reason_disagrees(">test_agent_loop_boundaries.py:244</code></td><td>同 oh；好处是行为被测试钉住，不会悄悄变</td><td>教学、单厂商原型</td></tr>
 <tr><td>labs</td><td>适配器把取值统一成 Anthropic 词汇，带工具调用却报 <code class="inl">stop</code> 时纠正为 <code class="inl">tool_use</code>，未知值原样透出；判定交给 hx-01 的循环</td><td>循环必须处理它不认识的取值</td><td>本模块：既要看清每个取值，又不想因厂商新增取值而崩溃</td></tr>
 </tbody></table></div>
@@ -246,7 +246,7 @@
 <tr><td>上手成本</td><td>最高：每个部件都要自己想清楚</td><td>最低：给一个 prompt 和选项就能跑</td><td>中：读懂一个大仓库</td><td>高：先理解插件内核和接缝</td></tr>
 <tr><td>内置能力</td><td>只有你写了的</td><td>成套的编码 agent 能力</td><td>覆盖面广，深度参差</td><td>覆盖面广且每块都做得深</td></tr>
 <tr><td>对循环和停止条件的控制</td><td>完全掌控</td><td>通过选项和 hooks 调整，循环本身不归你</td><td>改源码</td><td>换掉或包装对应插件</td></tr>
-<tr><td>换模型</td><td>写一个适配器</td><td>限 Claude</td><td>内置多家适配</td><td>适配器是插件，可替换</td></tr>
+<tr><td>换模型</td><td>写一个适配器</td><td>面向 Claude 模型</td><td>内置多家适配</td><td>适配器是插件，可替换</td></tr>
 <tr><td>安全边界谁负责</td><td>你自己，没有任何默认</td><td>SDK 带权限机制，策略由你配置</td><td>框架给默认规则，你要审读默认值</td><td>沙箱、审批是独立插件，你要组合</td></tr>
 <tr><td>可测试性</td><td>从第一天就能用 FakeLLM</td><td>依赖 SDK 提供的测试手段</td><td>有模型客户端协议可替换</td><td>有回放插件，可从日志生成用例</td></tr>
 <tr><td>维护负担</td><td>全部在你</td><td>跟随 SDK 升级</td><td>跟随上游，或 fork 后自己维护</td><td>跟随上游，插件边界清楚</td></tr>

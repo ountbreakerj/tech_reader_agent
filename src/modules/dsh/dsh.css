@@ -197,3 +197,15 @@
     min-width: 100%;
   }
 }
+/* 新版书页式章节（chapters/dsh-NN），与 harness 模块的源码引用样式一致 */
+#mod-dsh .book-scope .src-ref { color: #99c3ff; white-space: nowrap; cursor: help; }
+[data-theme="light"] #mod-dsh .book-scope .src-ref, [data-theme="sepia"] #mod-dsh .book-scope .src-ref { color: #245dad; }
+#mod-dsh .book-scope td:first-child { white-space: nowrap; }
+#mod-dsh .book-scope th { word-break: keep-all; }
+/* 窄屏：三列以上的表给最小宽度，横向滚动，避免各列被挤成三五个字一行 */
+@media (max-width: 640px) {
+  #mod-dsh .book-scope .table-wrap table:has(th:nth-child(3)) { min-width: 32rem; }
+  #mod-dsh .book-scope .table-wrap table:has(th:nth-child(4)) { min-width: 42rem; }
+  #mod-dsh .book-scope .table-wrap table:has(th:nth-child(5)) { min-width: 54rem; }
+  #mod-dsh .book-scope .table-wrap td:not(:first-child) { min-width: 7.5rem; }
+}

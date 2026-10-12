@@ -23,9 +23,11 @@ REPOS = {
     "amt": ("03-agent-memory/Agent_Memory_Techniques", "4767c0341ccd8b714147334c5f17c26ff99d8e41"),
     "lhe": ("01-agent-harness/learn-harness-engineering", "38ddcd2bf8d65271f668b94e7c875ca1d629d622"),
 }
+# (模块目录, 章节子目录, 是否给每章单独包一层 .book-scope)
+# harness 的 .book-scope 由 home.html / end.html 统一包住；dsh 里新旧排版并存，每章自己包
 MODULES = {
-    "harness": (ROOT / "src/modules/harness", "chapters"),
-    "dsh": (ROOT / "src/modules/dsh", "chapters"),
+    "harness": (ROOT / "src/modules/harness", "chapters", False),
+    "dsh": (ROOT / "src/modules/dsh", "chapters", True),
 }
 
 LAB_BLOCK = re.compile(r'<code class="lang-python" data-lab="([^"]+)">(.*?)</code>', re.S)
@@ -36,7 +38,7 @@ _blob_cache: dict[tuple[str, str], list[str] | None] = {}
 
 def chapter_files() -> list[Path]:
     files: list[Path] = []
-    for base, sub in MODULES.values():
+    for base, sub, _ in MODULES.values():
         files += sorted((base / sub).glob("*/content.html"))
     return files
 
@@ -197,7 +199,7 @@ def render_chapter(draft: str, chapter_id: str, label: str) -> tuple[str, str, l
 
 
 def integrate(draft_dir: Path, module_key: str, prefix: str) -> None:
-    base, sub = MODULES[module_key]
+    base, sub, wrap = MODULES[module_key]
     config_path = base / "module.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     drafts = sorted(draft_dir.glob(f"{prefix}-[0-9][0-9].html"))
@@ -212,14 +214,18 @@ def integrate(draft_dir: Path, module_key: str, prefix: str) -> None:
         section, title, toc = render_chapter(draft.read_text(encoding="utf-8"), chapter_id, label)
         out = base / sub / chapter_id / "content.html"
         out.parent.mkdir(parents=True, exist_ok=True)
+        if wrap:
+            section = f'<div class="book-scope">\n{section}</div>\n'
         out.write_text(section, encoding="utf-8", newline="\n")
         by_id.setdefault(chapter_id, {"id": chapter_id, "sectionId": f"ch-{chapter_id}",
                                       "file": f"{sub}/{chapter_id}/content.html"})
         entry = {"id": chapter_id, "t": f"{number:02d} · {title}", "c": toc}
         toc_by_id[chapter_id] = entry
         print(f"集成 {chapter_id}：{title}（{len(toc)} 个小节）")
-    config["content"] = [by_id[k] for k in sorted(by_id, key=_chapter_sort)]
-    config["toc"] = [toc_by_id[k] for k in sorted(toc_by_id, key=_chapter_sort)]
+    config["content"] = _insert_chapters(list(by_id.values()), prefix)
+    config["toc"] = _insert_chapters(
+        [e for e in config["toc"] if not _is_chapter(e.get("id"), prefix)] +
+        [toc_by_id[k] for k in toc_by_id if _is_chapter(k, prefix)], prefix)
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     link_home(base, prefix, {c["id"] for c in config["content"]})
 
@@ -242,12 +248,16 @@ def link_home(base: Path, prefix: str, present: set[str]) -> None:
     home.write_text(text, encoding="utf-8", newline="\n")
 
 
-def _chapter_sort(chapter_id: str) -> tuple[int, str]:
-    # 目录页排最前，收尾文件（关闭 .module 容器）排最后，章节按编号夹在中间
-    tail = chapter_id.rsplit("-", 1)[-1]
-    if tail == "end":
-        return (10_000, chapter_id)
-    return (int(tail) if tail.isdigit() else -1, chapter_id)
+def _is_chapter(item_id: str | None, prefix: str) -> bool:
+    return bool(item_id) and re.fullmatch(rf"{prefix}-\d\d", item_id) is not None
+
+
+def _insert_chapters(items: list[dict], prefix: str) -> list[dict]:
+    """章节按编号插在 `<prefix>-home` 之后，其余条目（收尾文件、旧版内容）保持原有顺序。"""
+    chapters = sorted((i for i in items if _is_chapter(i.get("id"), prefix)), key=lambda i: i["id"])
+    others = [i for i in items if not _is_chapter(i.get("id"), prefix)]
+    at = next((n + 1 for n, i in enumerate(others) if i.get("id") == f"{prefix}-home"), 0)
+    return others[:at] + chapters + others[at:]
 
 
 def main(argv: list[str]) -> int:
