@@ -11,8 +11,11 @@
     from harness.sandbox import Sandbox            # 15 沙箱
     from harness.approval import ApprovalGate      # 16 审批与升档
     from harness.injection import wrap             # 17 Prompt 注入
+    from harness.retry import retry_call           # 18 重试与退避
+    from harness.timeouts import Deadline          # 19 超时
+    from harness.circuit import CircuitBreaker     # 20 熔断与降级
 
-05–12 章与 13–17 章的模块没有放进包级导出：它们的名字（Rule、Decision、wrap 等）
+05 章以后的模块没有放进包级导出：它们的名字（Rule、Decision、wrap 等）
 很通用，按模块导入能看清来源，也避免和以后的章节撞名。
 
 tools 和 tool_runtime 各有一个 ToolSpec（前者描述“工具是什么”，后者描述“怎么调度”），

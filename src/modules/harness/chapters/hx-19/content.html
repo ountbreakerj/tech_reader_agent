@@ -1,0 +1,313 @@
+<section class="chapter" id="ch-hx-19" data-slug="hx-19"><div class="ch-head"><span class="ch-num">第 19 章</span></div><h1 id="hx-19">超时</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 19 章（虚构）</span>
+<p>那个转了二十分钟的会话，是橘子调了一次 <code class="inl">run_tests</code>。测试套件里有一个用例在等一个本地数据库连接，数据库没启动，连接没有超时设置，于是那个测试一直等，测试框架一直等，工具一直等，循环一直等，用户一直看着转圈。</p>
+<p>林舟的第一反应是给所有工具加一个统一的 30 秒超时。当天下午，客户的完整测试套件——正常要跑四分钟——每次都在第 30 秒被杀掉，橘子收到“超时”，换个参数又跑一次，又被杀掉。</p>
+<p>他改成 10 分钟。第二天，一个会话里模型连续调了五个工具，每个都不算慢，加起来却跑了 40 分钟。用户中途去开了个会，回来发现橘子还在第三个文件上。</p>
+<p>第三件事更隐蔽。有一次模型的流式回复写到一半就停了，连接没断，也没有报错，只是不再有新的数据。林舟的 10 分钟总超时在第 10 分钟才发现这件事；而另一个正常的长回复，模型在稳定地一个字一个字往外写，写了 11 分钟，被同一个总超时在写到一半时杀掉了。</p>
+<p class="hx-story-say">“你只有一把尺子，”老唐说，“但你要量的东西有三种：一件事总共能做多久、一个工具能跑多久、一条连接能沉默多久。还有，量到一半，你得知道是哪把尺子先到头的。”</p>
+<p>这一章要把这一把尺子换成一套：整轮有总预算，每次模型调用、每个工具有自己的预算，内层永远不超过外层剩下的时间；流式响应用“空闲超时”而不是“总时长”判断卡没卡住；超时发生时说清楚是哪一层；以及——最容易被忽略的——超时之后，被等的那件事到底停下来没有。</p>
+</div>
+<p>第 18 章的重试处理的是“请求失败了”。还有一类问题重试管不到：请求既没有成功也没有失败，只是一直没有结果。harness 里到处都在等：等模型的第一个 token、等流式响应的下一块、等工具跑完、等用户批准、等整轮结束。任何一处等不到头，整个 agent 就卡住了，而且不会产生任何错误——没有错误，重试层、日志、告警都不会被触发。</p>
+<p>超时把“一直等”变成“等到某个时刻为止”，从而把“卡住”变成一个可以处理的失败。</p>
+
+<h2 id="hx-19-s0">先看全貌：超时是什么、管哪些事</h2>
+<p>一句话：超时给 harness 里每一处等待设一个上限，上限到了就放弃等待，并产生一个能说清楚“是哪一层、哪种预算用完了”的结果。</p>
+<p>这一层要管的事：</p>
+<ul>
+<li><strong>分层预算</strong>：整轮、模型调用、工具、审批，每一层有自己的预算；内层不能超过外层剩下的时间。</li>
+<li><strong>两种超时</strong>：总时长超时（这件事总共不能超过多久）和空闲超时（多久没有进展就算卡住）。</li>
+<li><strong>归因</strong>：超时发生时，是哪一层的预算先到期。</li>
+<li><strong>真的停下来</strong>：放弃等待之后，被等待的工作有没有被中止；做不到时，要清楚后果。</li>
+<li><strong>按工具设置</strong>：读文件和跑测试需要的时间差几个数量级，不能用同一个值。</li>
+<li><strong>超时之后说什么</strong>：不同层的超时，模型下一步该做的事完全不同。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>预算怎么设</td><td>所有地方一个统一的超时</td><td>分层：整轮、模型调用、每个工具各自一个预算；截止时刻往下传，内层不超过外层剩余时间</td></tr>
+<tr><td>流式响应</td><td>一个总时长超时</td><td>以空闲超时为主（多久没有新数据），总时长作为兜底；稳定输出的长回复不该被杀</td></tr>
+<tr><td>超时之后</td><td>不再等它，就算处理完了</td><td>必须设法让被等待的工作停下来：子进程要杀掉，协程和线程要收到取消信号；停不下来要记录</td></tr>
+<tr><td>给模型的信息</td><td>“超时了”</td><td>说清楚是工具太慢（换个小一点的调用）、连接卡住（可以重试）还是整轮时间用完（停下来总结）</td></tr>
+</tbody></table></div>
+<h3 id="hx-19-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript）：工具超时是一个独立的守卫插件，挂在“工具执行”扩展点上。它是<strong>协作式</strong>的：给工具一个截止时刻和取消信号，靠工具自己响应；工具没有声明 <code class="inl">timeoutMs</code> 就不设超时；只有这个插件自己的计时器触发时，才把结果改写成 <code class="inl">TOOL_TIMEOUT</code>。bash 工具的默认超时是 60 秒。模型的流式响应有一个独立的<strong>空闲看门狗</strong>，默认 5 分钟没有新数据就判为超时，并映射成可重试的 <code class="inl">TIMEOUT</code> 错误，交给第 18 章的重试层。本章的主要参照。</p>
+<p><strong>OpenHarness</strong>（Python）：bash 工具的超时由参数决定，默认和上限都是 600 秒，用 <code class="inl">asyncio.wait_for</code> 强制执行。压缩的摘要请求有一个 25 秒的整体超时。没有统一的分层预算。</p>
+<p><strong>learn-claude-code</strong>（教程）：bash 工具写死 120 秒超时，超时时只接住 <code class="inl">TimeoutExpired</code> 返回一句错误。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/timeouts.py</code>，可派生的截止时刻、带归因的超时异常、空闲守卫、协作式超时执行、分层配置，14 条测试，用假时钟。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1 节讲为什么一个统一的超时值不够，以及“截止时刻往下传”这个核心想法。</li>
+<li>第 2 节讲总时长与空闲两种超时，主要针对模型的流式响应。</li>
+<li>第 3 节讲超时之后被等待的工作能不能停下来——这是最容易被忽略、也最容易出事的一节。</li>
+<li>第 4、5 节讲按工具设置预算和给模型的信息；第 7 节的坑对应上面故事里的几次翻车。</li>
+</ol>
+<p>本章的源码描述来自前面章节已经核对过的笔记；不再逐条标注 <code class="inl">文件:行号</code>。</p></blockquote>
+
+<h2 id="hx-19-s1">截止时刻往下传</h2>
+<p>故事里的两次翻车，是“统一超时”的两个方向：设短了，正常的长任务（完整测试套件）被杀；设长了，多个都不算慢的工具加起来超出了用户愿意等的时间。根本原因是，一个值同时承担了两件不同的事：<strong>单个操作能跑多久</strong>，和<strong>整件事能花多久</strong>。</p>
+<p>解决办法是分层，并且让截止时刻从外往里传：</p>
+<div class="table-wrap"><table><thead><tr><th>层</th><th>预算（教学示意）</th><th>实际可用时间</th></tr></thead><tbody>
+<tr><td>整轮（处理一条用户输入）</td><td>10 分钟</td><td>10 分钟</td></tr>
+<tr><td>一次模型调用</td><td>5 分钟</td><td>min(5 分钟, 整轮剩余)</td></tr>
+<tr><td>工具 <code class="inl">run_tests</code></td><td>10 分钟</td><td>min(10 分钟, 整轮剩余)</td></tr>
+<tr><td>工具 <code class="inl">read_file</code></td><td>10 秒</td><td>min(10 秒, 整轮剩余)</td></tr>
+</tbody></table></div>
+<p>关键在第三列：内层的实际可用时间，是它自己的预算和外层剩余时间里较小的那个。整轮已经用掉 8 分钟时，<code class="inl">run_tests</code> 声明的 10 分钟预算实际只剩 2 分钟。如果每层各自计时，就会出现“整轮早就超时了，工具还在跑”的情况——外层放弃等待了，内层却不知道，继续占着资源。</p>
+<p>labs 用一个可以派生的截止时刻来表达这件事：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/timeouts.py::Deadline"><span class="dec">@dataclass</span>
+<span class="kw">class</span> <span class="cls">Deadline</span><span class="op">:</span>
+    <span class="str">"""一个截止时刻。可以派生出更短的子截止时刻，但永远不会比父级更晚。
+
+    deadline 往下传，而不是每层各自计时：外层还剩 5 秒时，内层声明的 60 秒预算
+    实际上只能用 5 秒。各层各算各的，就会出现「整轮已经超时，工具还在跑」。
+    """</span>
+
+    scope<span class="op">:</span> str
+    budget<span class="op">:</span> float
+    clock<span class="op">:</span> <span class="cls">Clock</span> <span class="op">=</span> time.monotonic
+    started<span class="op">:</span> float <span class="op">=</span> field(default<span class="op">=-</span><span class="num">1.0</span>)
+    parent<span class="op">:</span> <span class="str">"Deadline | None"</span> <span class="op">=</span> <span class="kw">None</span>
+
+    <span class="kw">def</span> <span class="fn">__post_init__</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">if</span> self.budget <span class="op">&lt;=</span> <span class="num">0</span><span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ValueError</span>(<span class="str">f"{self.scope} 的预算必须为正数"</span>)
+        <span class="kw">if</span> self.started <span class="op">&lt;</span> <span class="num">0</span><span class="op">:</span>
+            self.started <span class="op">=</span> self.clock()
+
+<span class="dec">    @property</span>
+    <span class="kw">def</span> <span class="fn">expires_at</span>(self) <span class="op">-&gt;</span> float<span class="op">:</span>
+        own <span class="op">=</span> self.started <span class="op">+</span> self.budget
+        <span class="kw">return</span> min(own, self.parent.expires_at) <span class="kw">if</span> self.parent <span class="kw">else</span> own
+
+    <span class="kw">def</span> <span class="fn">remaining</span>(self) <span class="op">-&gt;</span> float<span class="op">:</span>
+        <span class="kw">return</span> max(<span class="num">0.0</span>, self.expires_at <span class="op">-</span> self.clock())
+
+    <span class="kw">def</span> <span class="fn">elapsed</span>(self) <span class="op">-&gt;</span> float<span class="op">:</span>
+        <span class="kw">return</span> self.clock() <span class="op">-</span> self.started
+
+    <span class="kw">def</span> <span class="fn">expired</span>(self) <span class="op">-&gt;</span> bool<span class="op">:</span>
+        <span class="kw">return</span> self.remaining() <span class="op">&lt;=</span> <span class="num">0</span>
+
+    <span class="kw">def</span> <span class="fn">binding_scope</span>(self) <span class="op">-&gt;</span> <span class="str">"Deadline"</span><span class="op">:</span>
+        <span class="str">"""真正卡住的是哪一层：自己的预算，还是某个更早到期的祖先。"""</span>
+        node, best <span class="op">=</span> self, self
+        <span class="kw">while</span> node <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+            <span class="kw">if</span> node.started <span class="op">+</span> node.budget <span class="op">&lt;</span> best.started <span class="op">+</span> best.budget<span class="op">:</span>
+                best <span class="op">=</span> node
+            node <span class="op">=</span> node.parent
+        <span class="kw">return</span> best
+
+    <span class="kw">def</span> <span class="fn">check</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="str">"""到期就抛 Timeout，归因到真正到期的那一层。"""</span>
+        <span class="kw">if</span> self.expired()<span class="op">:</span>
+            owner <span class="op">=</span> self.binding_scope()
+            <span class="kw">raise</span> <span class="cls">Timeout</span>(owner.scope, owner.budget, owner.elapsed())
+
+    <span class="kw">def</span> <span class="fn">child</span>(self, scope<span class="op">:</span> str, budget<span class="op">:</span> float) <span class="op">-&gt;</span> <span class="str">"Deadline"</span><span class="op">:</span>
+        <span class="str">"""派生子预算。子预算按自己声明的值计时，但到期时刻不晚于父级。"""</span>
+        <span class="kw">return</span> <span class="cls">Deadline</span>(scope, budget, self.clock, parent<span class="op">=</span>self)</code></pre></div>
+<p>三个要点：</p>
+<ul>
+<li><strong>到期时刻取最早的</strong>：<code class="inl">expires_at</code> 是自己的到期时刻和父级到期时刻中较早的一个。子截止时刻永远不会比父级晚。</li>
+<li><strong>归因到真正到期的那一层</strong>：<code class="inl">binding_scope()</code> 沿着父级链找出最早到期的那一层。超时异常里写的是它，而不是“刚好在检查的那一层”。测试 <code class="inl">test_timeout_is_attributed_to_binding_scope</code> 覆盖了这种情况：工具声明了 60 秒，但整轮只剩 2 秒；3 秒后检查，超时被归因到“整轮”，而不是“工具”。</li>
+<li><strong>用单调时钟</strong>：<code class="inl">time.monotonic</code> 而不是 <code class="inl">time.time</code>。系统时间可能被调整（同步、夏令时、手动修改），单调时钟不会倒退。</li>
+</ul>
+<p>归因为什么重要？因为第 5 节会讲到：“工具太慢”和“整轮时间用完”，模型接下来应该做的事情完全不同。归因错了，给模型的建议就是错的。</p>
+
+<h2 id="hx-19-s2">总时长与空闲：流式响应要用哪一种</h2>
+<p>故事里的第三件事——停住的回复要到第 10 分钟才被发现，正常的长回复在第 10 分钟被杀——说明对于流式响应，总时长超时是一把错误的尺子。</p>
+<p>流式响应有两种失败形态：</p>
+<div class="table-wrap"><table><thead><tr><th>形态</th><th>表现</th><th>总时长超时</th><th>空闲超时</th></tr></thead><tbody>
+<tr><td>连接卡住</td><td>连接没断，但不再有新数据</td><td>要等到总时长用完才发现</td><td>空闲时间一到就发现</td></tr>
+<tr><td>稳定的长输出</td><td>一直有新数据，只是总量很大</td><td>到时间就被杀，半截内容作废</td><td>不受影响</td></tr>
+</tbody></table></div>
+<p>所以流式响应应该以空闲超时为主：两块数据之间超过 N 秒没有动静，才算卡住。总时长超时作为兜底，防止一个永远不结束、但每隔几秒吐一个字的异常连接。</p>
+<p>DSH 的流式适配器就是这样做的：一个独立的空闲看门狗，默认 5 分钟没有新数据就中止读取，并把它映射成 <code class="inl">TIMEOUT</code> 错误——一个可重试的错误码。这个设计把第 18、19 两章接了起来：卡住的连接被空闲超时发现，变成一次临时故障，交给重试层重新发起请求。DSH 的测试里有一条正好覆盖这个路径：停滞的响应体变成 <code class="inl">TIMEOUT</code>，下一次请求成功。</p>
+<p>labs 的空闲守卫是一个包装流的生成器：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/timeouts.py::idle_guard"><span class="kw">def</span> <span class="fn">idle_guard</span>(chunks<span class="op">:</span> <span class="cls">Iterable</span>[<span class="cls">T</span>], idle<span class="op">:</span> float, <span class="op">*</span>, total<span class="op">:</span> <span class="cls">Deadline</span> <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+               clock<span class="op">:</span> <span class="cls">Clock</span> <span class="op">=</span> time.monotonic, scope<span class="op">:</span> str <span class="op">=</span> <span class="str">"stream"</span>) <span class="op">-&gt;</span> <span class="cls">Iterator</span>[<span class="cls">T</span>]<span class="op">:</span>
+    <span class="str">"""包装一个流：两块之间间隔超过 idle 秒，或总时长到期，就抛 Timeout。
+
+    教学版在每一块**到达后**检查间隔，所以只能发现「已经恢复的停顿」。
+    生产实现要用一个独立的看门狗计时器，在停顿进行中就打断读取（DSH 的
+    流式适配器就是这样做的：空闲超时映射为可重试的 TIMEOUT）。
+    """</span>
+    last <span class="op">=</span> clock()
+    <span class="kw">for</span> chunk <span class="kw">in</span> chunks<span class="op">:</span>
+        now <span class="op">=</span> clock()
+        <span class="kw">if</span> now <span class="op">-</span> last <span class="op">&gt;</span> idle<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">Timeout</span>(scope, idle, now <span class="op">-</span> last, kind<span class="op">=</span><span class="str">"idle"</span>)
+        <span class="kw">if</span> total <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+            total.check()
+        last <span class="op">=</span> now
+        <span class="kw">yield</span> chunk</code></pre></div>
+<p>注意文档字符串里写明的局限：教学版在每一块数据<strong>到达之后</strong>才检查间隔，所以它只能发现“已经恢复的停顿”，发现不了“正在进行的停顿”——如果连接永远不再有数据，这个循环会永远等在 <code class="inl">for chunk in chunks</code> 上。生产实现需要一个独立的计时器，在停顿进行时就打断读取，DSH 的看门狗就是这种实现。labs 选择写成生成器，是因为它能清楚地展示“空闲”和“总时长”两种判据的区别；真正的打断要依赖 I/O 层的超时（套接字超时、HTTP 客户端的读超时）或者异步框架的取消。</p>
+<p>测试里能看到两种判据的差别：每 5 秒一块、总共 50 秒的稳定输出，在 10 秒空闲上限下全部通过；同样的流加上 20 秒总时长兜底，在第 4 块时被总时长超时打断：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_timeouts.py::IdleGuardTests.test_steady_stream_passes_even_if_long">    <span class="kw">def</span> <span class="fn">test_steady_stream_passes_even_if_long</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        clock <span class="op">=</span> <span class="cls">FakeClock</span>()
+
+        <span class="kw">def</span> <span class="fn">chunks</span>()<span class="op">:</span>
+            <span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">10</span>)<span class="op">:</span>
+                clock.advance(<span class="num">5</span>)        <span class="cmt"># 每 5 秒一块，总共 50 秒</span>
+                <span class="kw">yield</span> i
+
+        self.assertEqual(list(idle_guard(chunks(), idle<span class="op">=</span><span class="num">10</span>, clock<span class="op">=</span>clock)), list(range(<span class="num">10</span>)))</code></pre></div>
+
+<h2 id="hx-19-s3">超时之后，被等的那件事停了吗</h2>
+<p>这是本章最重要、也最容易被忽略的一节。“超时”常常被理解成“不等了”，但不等了不等于它停了。</p>
+<div class="table-wrap"><table><thead><tr><th>被等待的东西</th><th>能不能真的停下来</th><th>怎么停</th><th>停不下来的后果</th></tr></thead><tbody>
+<tr><td>子进程</td><td>能</td><td>杀进程（最好杀整个进程组，见第 15 章）</td><td>残留进程占着端口、CPU、文件锁</td></tr>
+<tr><td>异步任务（协程）</td><td>通常能</td><td>取消任务；任务在下一个 await 点收到取消</td><td>在不检查取消的同步代码段里，取消会被推迟</td></tr>
+<tr><td>线程</td><td>不能强制</td><td>只能发信号，靠线程自己检查并退出</td><td>线程在后台继续跑，继续产生副作用</td></tr>
+<tr><td>远程请求</td><td>只能断开本地连接</td><td>关闭连接；服务端可能继续处理</td><td>服务端仍然执行了这个请求（并且计费）</td></tr>
+</tbody></table></div>
+<p>Python 没有办法强行终止一个线程。labs 的 <code class="inl">run_with_timeout</code> 因此是<strong>协作式</strong>的：它给工作函数一个取消信号，超时后把信号置位，然后停止等待。工作函数如果检查这个信号，就能尽快退出；如果不检查，它会在后台一直跑完。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/timeouts.py::run_with_timeout"><span class="kw">def</span> <span class="fn">run_with_timeout</span>(fn<span class="op">:</span> <span class="cls">Callable</span>[[threading.<span class="cls">Event</span>], <span class="cls">T</span>], deadline<span class="op">:</span> <span class="cls">Deadline</span>) <span class="op">-&gt;</span> <span class="cls">T</span><span class="op">:</span>
+    <span class="str">"""在后台线程里跑 fn，最多等到 deadline。
+
+    fn 会收到一个 Event：超时后它被 set，fn 应该定期检查并尽快返回。
+    **这是协作式超时**：如果 fn 不检查 Event，它会在后台一直跑完，
+    只是调用方不再等它。子进程不在此列——子进程可以被真的杀掉（见 hx-15 的沙箱）。
+    """</span>
+    cancel <span class="op">=</span> threading.<span class="cls">Event</span>()
+    box<span class="op">:</span> dict[str, object] <span class="op">=</span> {}
+
+    <span class="kw">def</span> <span class="fn">target</span>() <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">try</span><span class="op">:</span>
+            box[<span class="str">"value"</span>] <span class="op">=</span> fn(cancel)
+        <span class="kw">except</span> <span class="cls">BaseException</span> <span class="kw">as</span> exc<span class="op">:</span>  <span class="cmt"># noqa: BLE001 — 原样转交给调用方</span>
+            box[<span class="str">"error"</span>] <span class="op">=</span> exc
+
+    worker <span class="op">=</span> threading.<span class="cls">Thread</span>(target<span class="op">=</span>target, daemon<span class="op">=</span><span class="kw">True</span>)
+    worker.start()
+    worker.join(deadline.remaining())
+    <span class="kw">if</span> worker.is_alive()<span class="op">:</span>
+        cancel.set()
+        owner <span class="op">=</span> deadline.binding_scope()
+        <span class="kw">raise</span> <span class="cls">Timeout</span>(owner.scope, owner.budget, owner.elapsed())
+    <span class="kw">if</span> <span class="str">"error"</span> <span class="kw">in</span> box<span class="op">:</span>
+        <span class="kw">raise</span> box[<span class="str">"error"</span>]  <span class="cmt"># type: ignore[misc]</span>
+    <span class="kw">return</span> box[<span class="str">"value"</span>]  <span class="cmt"># type: ignore[return-value]</span></code></pre></div>
+<p>DSH 的工具超时也是协作式的，它的包文档写得很直白：工具声明超时并承诺响应取消信号；一个忽略或者慢吞吞处理取消的工具，可能让调用方一直等下去，因为插件没有办法强行停止下游的工作。第 03 章讲过它的另一个细节：已经开始执行的工具体被取消时，不会被放弃，而是等它走到一个安静的点，再把结果改写成“已中止”。也就是说，DSH 宁可多等一会儿，也不留下一个状态未知的后台工作。</p>
+<p>这对写工具的人提出了一个要求：<strong>长时间运行的工具必须检查取消信号</strong>。循环读文件、轮询某个状态、逐个处理一批输入，这些地方都应该在每一轮检查一次。不能检查的工作（调用一个不支持取消的第三方库），最好放进子进程里跑——子进程是唯一能被真正杀掉的东西。</p>
+<blockquote><p><strong>远程请求的特殊性</strong>：模型调用超时、断开连接之后，模型厂商那边可能已经开始生成，甚至已经生成完了。这次请求通常仍然计费，而且如果紧接着重试，就会产生两次计费。这不是可以完全避免的事，但应该在用量账本里体现（第 05 章 DSH 把重试记成另一次计费调用，就是这个原因），而不是假装超时的那次请求没有发生过。</p></blockquote>
+
+<h2 id="hx-19-s4">按工具设置预算</h2>
+<p>不同工具需要的时间差几个数量级：读一个文件几毫秒，跑一个完整的测试套件可能几分钟，构建一个大项目可能十几分钟。用同一个值，要么让慢工具频繁超时，要么让快工具卡住时迟迟不被发现。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/timeouts.py::TimeoutPlan"><span class="dec">@dataclass</span>(frozen<span class="op">=</span><span class="kw">True</span>)
+<span class="kw">class</span> <span class="cls">TimeoutPlan</span><span class="op">:</span>
+    <span class="str">"""一份分层超时配置。数值是教学示意，不是推荐值。"""</span>
+
+    turn<span class="op">:</span> float <span class="op">=</span> <span class="num">600.0</span>             <span class="cmt"># 一轮（处理一条用户输入）的总预算</span>
+    model_total<span class="op">:</span> float <span class="op">=</span> <span class="num">300.0</span>      <span class="cmt"># 一次模型调用的总预算</span>
+    model_idle<span class="op">:</span> float <span class="op">=</span> <span class="num">60.0</span>        <span class="cmt"># 流式响应两块之间的最长空闲</span>
+    tool_default<span class="op">:</span> float <span class="op">=</span> <span class="num">60.0</span>      <span class="cmt"># 没有声明预算的工具</span>
+    tool_overrides<span class="op">:</span> tuple[tuple[str, float], ...] <span class="op">=</span> ((<span class="str">"run_tests"</span>, <span class="num">600.0</span>), (<span class="str">"read_file"</span>, <span class="num">10.0</span>))
+    approval<span class="op">:</span> float <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>   <span class="cmt"># 等人审批：None 表示不设上限（人可以去吃饭）</span>
+
+    <span class="kw">def</span> <span class="fn">tool_budget</span>(self, name<span class="op">:</span> str) <span class="op">-&gt;</span> float<span class="op">:</span>
+        <span class="kw">return</span> dict(self.tool_overrides).get(name, self.tool_default)</code></pre></div>
+<p>设置预算的几条经验：</p>
+<ul>
+<li><strong>预算属于工具定义</strong>。第 02 章的 <code class="inl">ToolSpec</code> 里有一个 <code class="inl">timeout</code> 字段，DSH 的工具定义里也有 <code class="inl">timeoutMs</code>，而且它要求必须是正的有限数。预算和工具写在一起，新增工具时就不会忘。</li>
+<li><strong>没有声明预算怎么办</strong>。DSH 的选择是不设超时（工具没声明就放行），labs 的选择是用一个默认值。前者把责任留给工具作者，后者保证任何工具都不会无限等。对于由第三方提供的工具（比如 MCP，第 22 章），后者更安全。</li>
+<li><strong>允许模型在范围内调整</strong>。OpenHarness 的 bash 工具让模型通过参数指定超时，但设了上限（600 秒）。模型知道自己要跑一个长任务时，可以主动要更多时间；上限保证它要不到无限。</li>
+<li><strong>审批不设超时，或者设得很长</strong>。等人批准的时候，人可能去吃饭了。审批超时之后默认拒绝是可以的，但不应该因为人没有立刻回应就让整个任务失败——更好的做法是暂停，等人回来。</li>
+</ul>
+
+<h2 id="hx-19-s5">超时之后说什么</h2>
+<p>不同层的超时，模型下一步该做的事完全不同：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/timeouts.py::describe_timeout"><span class="kw">def</span> <span class="fn">describe_timeout</span>(exc<span class="op">:</span> <span class="cls">Timeout</span>) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""给模型的一句话。区分「这个工具太慢」和「整体时间用完」，后续动作完全不同。"""</span>
+    <span class="kw">if</span> exc.kind <span class="op">==</span> <span class="str">"idle"</span><span class="op">:</span>
+        <span class="kw">return</span> (<span class="str">f"Error: {exc.scope} 在 {exc.elapsed:.0f}s 内没有新的输出（空闲上限 {exc.budget:.0f}s），"</span>
+                <span class="str">"连接可能已经卡住；这类错误可以重试。"</span>)
+    <span class="kw">if</span> exc.scope.startswith(<span class="str">"tool:"</span>)<span class="op">:</span>
+        name <span class="op">=</span> exc.scope.split(<span class="str">":"</span>, <span class="num">1</span>)[<span class="num">1</span>]
+        <span class="kw">return</span> (<span class="str">f"Error: 工具 {name} 超过了它的 {exc.budget:.0f}s 预算，已放弃等待。"</span>
+                <span class="str">"换一个范围更小的调用（比如只跑一个测试文件），不要原样重试。"</span>)
+    <span class="kw">return</span> (<span class="str">f"Error: {exc.scope} 的总时间预算 {exc.budget:.0f}s 已用完。"</span>
+            <span class="str">"请停下来，总结已经完成的部分和剩下的工作。"</span>)</code></pre></div>
+<div class="table-wrap"><table><thead><tr><th>哪一层超时</th><th>意味着什么</th><th>模型该做什么</th></tr></thead><tbody>
+<tr><td>工具预算</td><td>这个调用太大或者卡住了</td><td>换一个范围更小的调用：只跑一个测试文件、只搜一个目录；不要原样重试</td></tr>
+<tr><td>模型调用空闲</td><td>连接卡住了</td><td>由重试层自动重试，模型通常感知不到</td></tr>
+<tr><td>整轮预算</td><td>这件事已经花了太久</td><td>停下来，总结已经完成的部分和剩下的工作，交给用户决定是否继续</td></tr>
+</tbody></table></div>
+<p>故事里“30 秒统一超时”那次，橘子收到“超时”之后换个参数又跑了一次完整的测试套件，又被杀掉。如果它收到的是“工具 run_tests 超过了它的 30 秒预算；换一个范围更小的调用，不要原样重试”，它大概率会改成只跑相关的那个测试文件。</p>
+<p>整轮预算用完时的处理也值得多说一句。最差的做法是直接中断，把一个做了一半的任务丢给用户；更好的做法是给模型一次“收尾”的机会：不再允许调用工具，只让它写一段总结。这需要在整轮预算里预留一小段时间给收尾，而不是等到最后一秒才发现时间用完了。</p>
+
+<h2 id="hx-19-s6">超时与重试的配合</h2>
+<p>超时和重试经常一起出现，配合不好会互相放大：</p>
+<ul>
+<li><strong>重试的总时长要受整轮预算约束</strong>。第 18 章的总等待上限是一种保护，但它只管等待时间，不管每次请求本身花的时间。重试的每一次请求都应该从整轮的截止时刻派生自己的预算，整轮快用完时，不应该再发起一次可能要 5 分钟的重试。</li>
+<li><strong>哪种超时可以重试</strong>。模型调用的空闲超时（连接卡住）是可重试的临时故障；工具预算超时通常不是——同样的调用再跑一次，大概率还是超时。整轮预算超时绝不应该触发重试。</li>
+<li><strong>超时后的重试可能重复执行</strong>。如果超时的是一个有副作用的工具（它可能其实已经做完了，只是没来得及返回），重试会让它执行两次。这和第 18 章坑六是同一个问题：有副作用的调用不要自动重试。</li>
+</ul>
+
+<h2 id="hx-19-s7">坑与失败案例</h2>
+<h3 id="hx-19-s7-1">坑一：没有超时</h3>
+<ul>
+<li><strong>触发条件</strong>：某个工具、某次网络请求、某个子进程没有设超时。</li>
+<li><strong>后果</strong>：卡住时整个 agent 无限等待，不产生任何错误，日志、告警、重试都不会被触发。用户只看到转圈。</li>
+<li><strong>怎么防</strong>：每一处等待都有上限；工具没有声明预算时用默认值。把“所有工具都有超时”写成一条测试。</li>
+</ul>
+<h3 id="hx-19-s7-2">坑二：一个统一的超时值</h3>
+<ul>
+<li><strong>触发条件</strong>：所有工具、所有调用用同一个超时。</li>
+<li><strong>后果</strong>：设短了，正常的长任务被反复杀掉；设长了，快操作卡住时迟迟不被发现，多个操作加起来远超用户能接受的时间。</li>
+<li><strong>怎么防</strong>：分层预算，截止时刻往下传；工具各自声明预算。</li>
+</ul>
+<h3 id="hx-19-s7-3">坑三：流式响应只用总时长超时</h3>
+<ul>
+<li><strong>触发条件</strong>：模型调用的超时是一个固定的总时长。</li>
+<li><strong>后果</strong>：卡住的连接要等到总时长用完才被发现；稳定输出的长回复在写到一半时被杀，内容作废，还要重新计费。</li>
+<li><strong>怎么防</strong>：以空闲超时为主，总时长作为兜底；空闲超时映射为可重试的错误。</li>
+</ul>
+<h3 id="hx-19-s7-4">坑四：不等了，但它还在跑</h3>
+<ul>
+<li><strong>触发条件</strong>：超时后只是停止等待，没有中止被等待的工作；工作在线程里，或者工具不检查取消信号。</li>
+<li><strong>后果</strong>：后台工作继续产生副作用。最糟的情况是：harness 以为写文件的操作超时失败了，告诉模型“没写成”，模型重新写一遍，与此同时后台那次写入也完成了，两次写入交错。</li>
+<li><strong>怎么防</strong>：能杀的（子进程）就杀；不能杀的（线程、协程）发取消信号，并要求长时间运行的工具检查它；不支持取消的工作放进子进程。</li>
+</ul>
+<h3 id="hx-19-s7-5">坑五：超时归因错误</h3>
+<ul>
+<li><strong>触发条件</strong>：超时异常只说“超时了”，或者归因到碰巧在检查的那一层。</li>
+<li><strong>后果</strong>：整轮预算用完了，模型却收到“工具太慢，换个小一点的调用”，于是继续调用工具，而整轮早就没有时间了。</li>
+<li><strong>怎么防</strong>：超时异常带上真正到期的那一层；给模型的信息按层区分。</li>
+</ul>
+<h3 id="hx-19-s7-6">坑六：用系统时间计算超时</h3>
+<ul>
+<li><strong>触发条件</strong>：用 <code class="inl">time.time()</code> 计算已过时间。</li>
+<li><strong>后果</strong>：系统时间被同步或调整时（虚拟机恢复、NTP 校正），已过时间可能突然变成负数或者跳过几小时，超时提前触发或者永远不触发。</li>
+<li><strong>怎么防</strong>：计时一律用单调时钟（<code class="inl">time.monotonic</code>）；系统时间只用于显示和日志。</li>
+</ul>
+
+<h2 id="hx-19-s8">多仓库取舍对比</h2>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th><th>labs</th></tr></thead><tbody>
+<tr><td>工具超时</td><td>独立守卫插件，挂在工具执行扩展点；工具声明 <code class="inl">timeoutMs</code> 才生效；bash 默认 60 秒</td><td>bash 参数指定，默认且上限 600 秒</td><td>bash 写死 120 秒</td><td>按工具配置，未声明用默认值</td></tr>
+<tr><td>超时方式</td><td>协作式：截止时刻 + 取消信号；只有自己的计时器触发才改写结果</td><td><code class="inl">asyncio.wait_for</code> 强制</td><td><code class="inl">subprocess</code> 超时</td><td>协作式（线程）；子进程由沙箱杀掉</td></tr>
+<tr><td>流式响应</td><td>空闲看门狗，默认 5 分钟，映射为可重试的 TIMEOUT</td><td>无专门处理</td><td>无</td><td>空闲守卫（教学版，只检查到达后的间隔）+ 总时长兜底</td></tr>
+<tr><td>分层预算</td><td>工具级与流级独立</td><td>工具级；压缩摘要有 25 秒整体超时</td><td>无</td><td>可派生的截止时刻，内层不超过外层剩余</td></tr>
+<tr><td>归因</td><td>工具超时有专门错误码 <code class="inl">TOOL_TIMEOUT</code></td><td>错误文本</td><td>错误文本</td><td>超时异常带真正到期的层</td></tr>
+<tr><td>适合场景</td><td>工具来源多样、需要统一治理</td><td>单机 CLI</td><td>教学</td><td>理解分层预算与归因</td></tr>
+</tbody></table></div>
+<p>DSH 的协作式工具超时值得一提：它承认了一个现实——插件没有办法强行停止别人写的工具——然后把责任明确地放在工具作者身上，同时保证自己只改写由自己的计时器触发的超时。这比假装能强制中止、实际上留下一堆后台工作要诚实。</p>
+
+<h2 id="hx-19-s9">小结</h2>
+<ul>
+<li>每一处等待都要有上限；卡住不会产生错误，没有超时就没有任何机制会被触发。</li>
+<li>分层预算：整轮、模型调用、每个工具各自一个；截止时刻往下传，内层不超过外层剩余时间。</li>
+<li>流式响应以空闲超时为主、总时长兜底；空闲超时是可重试的临时故障。</li>
+<li>超时不等于停止：子进程要杀掉，其他工作要发取消信号并由工作自己检查；不支持取消的工作放进子进程。</li>
+<li>超时要归因到真正到期的那一层，给模型的建议按层区分。</li>
+<li>计时用单调时钟。</li>
+</ul>
+<p>重试处理偶尔的失败，超时处理不回来的请求。还剩最后一种情况：一个依赖持续地失败，重试和超时都在反复撞同一堵墙。继续读：<a href="#hx-20">熔断与降级</a>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>分层超时上线后，那个等数据库的测试在第 2 分钟被 <code class="inl">run_tests</code> 自己的预算杀掉了，橘子收到“工具超过它的预算，换一个范围更小的调用”，改成只跑相关的那个测试文件，30 秒后拿到了结果——包括那个连不上数据库的错误。林舟把空闲超时设成 60 秒，卡住的连接一分钟内就会被发现并重试。</p>
+<p>两周后的一个下午，厂商的一个模型出了长时间的故障。不是限流，是服务端错误，持续了四十分钟。</p>
+<p>橘子的表现完全符合设计：每次请求失败，按指数退避重试 5 次，每次重试最长等 10 秒，加起来将近一分钟，然后放弃，告诉用户“模型请求失败，共尝试 6 次”。用户点“继续”，橘子再来一遍：6 次请求，将近一分钟，失败。</p>
+<p>老唐看着监控面板：四十分钟里，他们的九个 agent 一共向一个明显已经挂掉的服务发了四百多次请求，每个用户每次操作都要白等一分钟才看到失败。</p>
+<p class="hx-story-say">“每一次都很守规矩，”老唐说，“问题是它们每一次都从头守一遍规矩。它们不记得这个服务五分钟前就已经挂了。”</p>
+<p>下一章：<a href="#hx-20">熔断与降级</a>。</p>
+</div>
+</section>

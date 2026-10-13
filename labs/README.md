@@ -53,9 +53,14 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 | hx-15 沙箱 | `harness/sandbox.py` | `tests/test_sandbox.py` |
 | hx-16 审批与升档 | `harness/approval.py` | `tests/test_approval.py` |
 | hx-17 Prompt 注入威胁模型 | `harness/injection.py` | `tests/test_injection.py` |
+| hx-18 重试与退避 | `harness/retry.py` | `tests/test_retry.py` |
+| hx-19 超时 | `harness/timeouts.py` | `tests/test_timeouts.py` |
+| hx-20 熔断与降级 | `harness/circuit.py` | `tests/test_circuit.py` |
 
 `tools.py` 和 `tool_runtime.py` 各有一个 `ToolSpec`：前者描述工具本身（schema、handler、只读标志），后者只描述调度需要的信息（可否并行、超时）。分开写是为了让每章的代码能单独读懂；第 25 章组装 mini-harness 时会把两者合并。
 
 安全部分（13–17）的模块按依赖顺序串起来：`sandbox` 复用 `permissions` 的路径规范化，`approval` 包在 `permissions` 的判定外面。`sandbox.py` 是进程内的教学版，挡不住子进程自己打开的文件，`test_sandbox.py` 里的 `LimitTests` 和 `test_injection.py` 里的 `LimitTests` 专门记录这类局限：它们断言的是“局限存在”，换成真正的隔离或更强的检测之后应当改写。
+
+韧性部分（18–20）的时钟、睡眠和随机数都可以注入，测试不真的等待（`test_timeouts.py` 里两条协作式超时的测试各约 0.1 秒）。参考仓库都没有三态熔断器，`circuit.py` 是按通用做法写的教学版。
 
 后续章节的文件随章节补充。

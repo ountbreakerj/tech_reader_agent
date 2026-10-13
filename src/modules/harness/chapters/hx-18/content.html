@@ -1,0 +1,287 @@
+<section class="chapter" id="ch-hx-18" data-slug="hx-18"><div class="ch-head"><span class="ch-num">第 18 章</span></div><h1 id="hx-18">重试与退避</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 18 章（虚构）</span>
+<p>那个 <code class="inl">429</code> 之后，林舟花了十分钟给橘子加上了重试：失败就等一秒，再试，最多试十次。当天晚上一切正常。</p>
+<p>第二天上午十点，模型厂商有一次持续二十分钟的限流。小橘科技的三个客户同时在用橘子，每个客户开着两三个会话，一共九个 agent。九个 agent 在同一秒收到 429，在同一秒等完那一秒，又在同一秒发出重试，又在同一秒收到 429。日志里的时间戳整整齐齐，像一排在同一个节拍上撞墙的人。</p>
+<p>更糟的是另一个会话。它收到的错误不是 429，是 400：<code class="inl">prompt is too long</code>。上下文超长了。橘子把它也当成了临时故障，老老实实重试了十次，每一次都把同样长的上下文原封不动地发出去，每一次都被拒，十次一共花了二十多秒，然后放弃。用户看着屏幕上的转圈，什么都不知道。</p>
+<p>第三个问题是林舟自己发现的：重试成功之后，模型的回复开头总带着一句奇怪的话——“我注意到之前的请求出了错……”。他翻日志，发现上一次失败时收到的半截回复和错误信息，被原样留在了历史里，下一次请求时模型都看见了。</p>
+<p class="hx-story-say">“你的重试有三个问题，”老唐数着手指，“不分什么错都重试；所有人同时重试；重试的时候把失败的垃圾也带上了。”</p>
+<p>这一章要把这三行重试代码，变成一个真正能用的重试层：先分清哪些错误值得再试，再决定隔多久——指数增长、随机打散、优先听服务端的——然后定好上限，最后保证失败那次的残留不会进入下一次请求，并且在等待之前先记下“我在重试”。</p>
+</div>
+<p>到这一章为止，循环里任何一次模型调用失败，都按第 01 章的设计“结构化地停下来”：返回 <code class="inl">llm_error</code>，历史保持完整。这对教学够了，对生产不够：网络抖一下、厂商限流几秒，整个任务就中断，用户得手动点“继续”。</p>
+<p>重试要解决的就是这类<strong>临时故障</strong>：再来一次很可能就好了的那种。难点不在于“再来一次”，而在于分清什么时候再来、隔多久、来几次，以及什么时候该承认“这不是临时的”。</p>
+
+<h2 id="hx-18-s0">先看全貌：重试与退避是什么、管哪些事</h2>
+<p>一句话：模型调用（或其他外部调用）失败后，harness 判断这次失败是不是临时的；是的话，等一段时间再试，等待时间随次数指数增长并加上随机抖动，直到成功、次数用完或者总等待时间超出预算。</p>
+<p>这一层要管的事：</p>
+<ul>
+<li><strong>分类</strong>：哪些失败可以重试（限流、服务端错误、超时、连接断开），哪些不能（鉴权失败、参数错误、上下文超长）。</li>
+<li><strong>等待时间</strong>：指数退避、随机抖动、优先采用服务端的 Retry-After。</li>
+<li><strong>上限</strong>：次数上限、单次等待上限、总等待上限，按“这一步”计算而不是整个会话累计。</li>
+<li><strong>历史清洁</strong>：失败尝试的半截输出和错误信息不进下一次请求的上下文。</li>
+<li><strong>留痕</strong>：先记录“要重试、等多久”，再开始等待；进程中途被杀，恢复后知道刚才在重试。</li>
+<li><strong>最终失败时说什么</strong>：重试耗尽之后，给模型或用户一句有用的话，而不是十条原始错误。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>哪些错误重试</td><td>所有异常都重试</td><td>只重试临时故障；分类按状态码和错误类型做，不按错误文本里有没有某个词</td></tr>
+<tr><td>隔多久</td><td>固定等一秒</td><td>指数退避 + 随机抖动；服务端给了 Retry-After 就听它的，超过上限就放弃而不是偷偷缩短</td></tr>
+<tr><td>试几次</td><td>一个固定次数，或者无限</td><td>次数上限 + 总等待上限；计数按“这一步”清零</td></tr>
+<tr><td>失败尝试的残留</td><td>留在历史里，下一次照发</td><td>失败尝试不提交任何消息；下一次请求的上下文和第一次完全相同</td></tr>
+</tbody></table></div>
+<h3 id="hx-18-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript）：这一层做得最完整，而且拆成了两半。<strong>策略</strong>写在每个模型提供方的配置里：默认最多重试 5 次，初始等待 500 毫秒，单次上限 10 秒，抖动比例 0.1，可重试的错误码是空响应、限流、服务端错误、超时、传输错误五种。<strong>执行</strong>是一个独立的重试插件，挂在“模型请求失败”这个扩展点上；它每次重试都先写一条日志事件、再开始等待，重试计数从日志里读，进程重启也不会丢。它还有一个“永远重试”的模式，用于不能中断的场景。本章的主要参照。</p>
+<p><strong>OpenHarness</strong>（Python）：重试做在 API 客户端这一层，可重试的状态码是 429、500、502、503、529，网络错误也算可重试；等待用指数退避加抖动，优先读 Retry-After 头。另外它会解析“输出 token 上限太大”的报错，把上限调低后重试，并且这次重试不计入轮数。它的循环里还有一处用错误文本里是否含 “connect” 或 “timeout” 来区分网络错误，本章会把它当作分类方式的反例来讲。</p>
+<p><strong>learn-claude-code</strong>（教程）：前期没有重试；到集成章节才加了一个“连续 529（API 过载）最多两次”的上限。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/retry.py</code>，错误分类、退避计算、等待规划、带日志挂点的重试执行，23 条测试，时钟和随机数都可注入，测试不真的睡眠。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1 节讲错误分类，是整个重试层的前提：分错了，后面做得再好也是在给不可恢复的错误浪费时间。</li>
+<li>第 2 节讲等待时间怎么算，配合测试里的“羊群”例子理解抖动的作用。</li>
+<li>第 3 节讲上限和 Retry-After；第 4 节讲重试和历史、日志的关系，这一节连着第 04 章。</li>
+<li>第 5 节讲重试放在哪一层；第 7 节的坑基本对应上面故事里的三个问题。</li>
+</ol>
+<p>本章的源码描述来自前面章节已经核对过的笔记；不再逐条标注 <code class="inl">文件:行号</code>。</p></blockquote>
+
+<h2 id="hx-18-s1">先分类：只有临时故障值得重试</h2>
+<p>重试的前提是“再来一次结果可能不同”。按这个标准，失败可以分成三类：</p>
+<div class="table-wrap"><table><thead><tr><th>类别</th><th>例子</th><th>再试一次会怎样</th><th>该怎么处理</th></tr></thead><tbody>
+<tr><td>临时故障</td><td>429 限流、529 过载、5xx、请求超时、连接被重置、空响应</td><td>过一会儿很可能成功</td><td>退避后重试</td></tr>
+<tr><td>请求本身有问题</td><td>400 参数错误、401/403 鉴权失败、密钥缺失</td><td>一万次结果都一样</td><td>立刻失败，把原因说清楚</td></tr>
+<tr><td>需要先改请求</td><td>上下文超长、输出上限设得太大</td><td>原样重发一定还失败；改完请求再发可能成功</td><td>交给专门的恢复逻辑（压缩、调低上限），而不是重试</td></tr>
+</tbody></table></div>
+<p>第三类最容易被混进第一类。故事里那个上下文超长的会话就是这样：它被当成临时故障重试了十次，每次都是同样的请求。正确的处理是第 07 章的压缩——先把请求改小，再发。DSH 和 OpenHarness 都把这件事单独处理：DSH 的压缩插件挂在同一个“请求失败”扩展点上，只有压缩确实改写了历史才返回“重试”；OpenHarness 对“提示过长”做一次反应式压缩再试，对“输出上限太大”解析出厂商允许的上限再试。它们都不是通用的重试，而是“改了请求再发”。</p>
+<p>分类函数应该按状态码和错误类型来判断：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/retry.py::classify_status"><span class="kw">def</span> <span class="fn">classify_status</span>(status<span class="op">:</span> int <span class="op">|</span> <span class="kw">None</span>, body<span class="op">:</span> str <span class="op">=</span> <span class="str">""</span>) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""把 HTTP 状态码和错误正文归到一个 kind。
+
+    按状态码分类，不按错误文本里有没有 "timeout" 这个词：文本匹配会把
+    「请求参数 timeout 不合法」这种 400 错误误判成可重试的超时。
+    """</span>
+    lowered <span class="op">=</span> body.lower()
+    <span class="kw">if</span> status <span class="op">==</span> <span class="num">429</span> <span class="kw">or</span> status <span class="op">==</span> <span class="num">529</span> <span class="kw">or</span> <span class="str">"overloaded"</span> <span class="kw">in</span> lowered<span class="op">:</span>
+        <span class="kw">return</span> <span class="cls">RATE_LIMIT</span>
+    <span class="kw">if</span> status <span class="kw">in</span> (<span class="num">401</span>, <span class="num">403</span>)<span class="op">:</span>
+        <span class="kw">return</span> <span class="cls">AUTH</span>
+    <span class="kw">if</span> status <span class="op">==</span> <span class="num">413</span> <span class="kw">or</span> <span class="str">"prompt is too long"</span> <span class="kw">in</span> lowered <span class="kw">or</span> <span class="str">"context length"</span> <span class="kw">in</span> lowered<span class="op">:</span>
+        <span class="kw">return</span> <span class="cls">TOO_LONG</span>
+    <span class="kw">if</span> status <span class="op">==</span> <span class="num">408</span> <span class="kw">or</span> status <span class="op">==</span> <span class="num">504</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="cls">TIMEOUT</span>
+    <span class="kw">if</span> status <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> <span class="num">500</span> <span class="op">&lt;=</span> status <span class="op">&lt;</span> <span class="num">600</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="cls">SERVER</span>
+    <span class="kw">if</span> status <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> <span class="num">400</span> <span class="op">&lt;=</span> status <span class="op">&lt;</span> <span class="num">500</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="cls">INVALID</span>
+    <span class="kw">return</span> <span class="cls">UNKNOWN</span></code></pre></div>
+<p>这里有一个看起来很小、其实很重要的选择：<strong>不按错误文本里有没有某个词来判断</strong>。OpenHarness 的循环里有一处是这样写的：错误信息里出现 “connect” 或 “timeout”，就当成网络错误。这类判断会把“请求参数 timeout 必须为正数”这样的 400 错误误判成可重试的超时，然后浪费一整轮退避序列。labs 的测试 <code class="inl">test_word_timeout_in_400_is_not_a_timeout</code> 专门钉住这一点。</p>
+<p>DSH 在这一点上做得更彻底：错误对象只携带事实（状态码、错误类型、服务端给的等待时间），不携带“是否可重试”的结论；可不可以重试由策略里的错误码列表决定。它还特意把“凭据无效”和“流正常结束但内容不完整”排除在默认可重试集合之外——前者重试没用，后者重试可能导致重复的副作用。</p>
+<p>labs 的可重试集合与 DSH 的默认一致：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/retry.py::DEFAULT_RETRYABLE"><span class="cls">DEFAULT_RETRYABLE</span> <span class="op">=</span> frozenset({<span class="cls">RATE_LIMIT</span>, <span class="cls">SERVER</span>, <span class="cls">TIMEOUT</span>, <span class="cls">TRANSPORT</span>, <span class="cls">EMPTY</span>})</code></pre></div>
+
+<h2 id="hx-18-s2">等多久：指数退避加随机抖动</h2>
+<p>等待时间要回答两个问题：<strong>给服务端多少恢复时间</strong>，以及<strong>怎样避免所有客户端在同一时刻重试</strong>。</p>
+<p>第一个问题用指数退避解决：第一次等 0.5 秒，第二次 1 秒，然后 2、4、8 秒……每次翻倍，直到一个上限。这样短暂的抖动很快就能恢复，持续的故障也不会被频繁的请求压得更重。</p>
+<p>第二个问题用随机抖动解决。故事里九个 agent 用的都是“等一秒”，所以它们的重试永远对齐在同一秒，形成一波一波的请求洪峰。指数退避本身也不能解决这个问题——九个 agent 第一次都等 0.5 秒、第二次都等 1 秒，仍然对齐。只有给每次等待加上随机偏移，才能把这些请求在时间上打散。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/retry.py::backoff_delay"><span class="kw">def</span> <span class="fn">backoff_delay</span>(policy<span class="op">:</span> <span class="cls">RetryPolicy</span>, retry<span class="op">:</span> int, rand<span class="op">:</span> <span class="cls">Callable</span>[[], float] <span class="op">=</span> random.random) <span class="op">-&gt;</span> float<span class="op">:</span>
+    <span class="str">"""第 retry 次重试（从 0 开始）之前要等多久。
+
+    指数增长、先夹上限、再加对称抖动、最后再夹一次上限：
+    抖动加在夹上限之后，否则到了上限附近所有客户端又会对齐到同一个值。
+    """</span>
+    base <span class="op">=</span> min(policy.max_delay, policy.initial_delay <span class="op">*</span> (<span class="num">2</span> <span class="op">**</span> retry))
+    factor <span class="op">=</span> <span class="num">1</span> <span class="op">+</span> policy.jitter <span class="op">*</span> (<span class="num">2</span> <span class="op">*</span> rand() <span class="op">-</span> <span class="num">1</span>)
+    <span class="kw">return</span> min(policy.max_delay, base <span class="op">*</span> factor)</code></pre></div>
+<p>注意顺序：先算指数值、夹到上限，再乘抖动因子，最后再夹一次上限。如果只在乘抖动之前夹上限，到了上限附近所有客户端的等待时间又会落在同一个值上，抖动在最需要它的时候失效了。DSH 的退避函数也是“两次夹上限”的写法，它的测试里能看到具体数值：第一次重试抖动到最小时是 500 × 0.9 = 450 毫秒，第二次抖动到最大时是 1000 × 1.1 = 1100 毫秒。</p>
+<p>抖动的效果可以直接用测试量出来：100 个客户端在第三次重试时的等待时间，没有抖动时最晚和最早相差 0 秒，抖动比例 0.5 时相差超过 2 秒：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_retry.py::BackoffTests.test_jitter_spreads_a_herd">    <span class="kw">def</span> <span class="fn">test_jitter_spreads_a_herd</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">import</span> random <span class="kw">as</span> _random
+        gen <span class="op">=</span> _random.<span class="cls">Random</span>(<span class="num">7</span>)
+        policy <span class="op">=</span> <span class="cls">RetryPolicy</span>(initial_delay<span class="op">=</span><span class="num">1</span>, max_delay<span class="op">=</span><span class="num">10</span>, jitter<span class="op">=</span><span class="num">0.5</span>)
+        no_jitter <span class="op">=</span> <span class="cls">RetryPolicy</span>(initial_delay<span class="op">=</span><span class="num">1</span>, max_delay<span class="op">=</span><span class="num">10</span>, jitter<span class="op">=</span><span class="num">0</span>)
+        spread <span class="op">=</span> herd_spread(backoff_delay(policy, <span class="num">2</span>, rand<span class="op">=</span>gen.random) <span class="kw">for</span> _ <span class="kw">in</span> range(<span class="num">100</span>))
+        flat <span class="op">=</span> herd_spread(backoff_delay(no_jitter, <span class="num">2</span>) <span class="kw">for</span> _ <span class="kw">in</span> range(<span class="num">100</span>))
+        self.assertEqual(flat, <span class="num">0</span>)
+        self.assertGreater(spread, <span class="num">2</span>)</code></pre></div>
+<blockquote><p><strong>抖动比例取多大</strong>：DSH 默认 0.1，即等待时间在 ±10% 之间浮动。比例越大，打散得越开，但单个请求的等待时间也越不可预测。对于同一个服务、同时可能有大量客户端重试的场景（比如一个团队的所有 agent 共用一个 API 账号），可以取得更大。本章 labs 的默认值 0.1 和 DSH 一致，测试里的 0.5 只是为了让效果更明显。</p></blockquote>
+
+<h2 id="hx-18-s3">试几次：三种上限与 Retry-After</h2>
+<p>只有次数上限是不够的。指数退避下，第 10 次重试之前要等 0.5 × 2⁹ ≈ 256 秒（如果没有单次上限的话）；10 次加起来超过 8 分钟。用户不会等那么久，循环外面的整轮预算（第 19 章）也不会允许。所以要有三种上限：</p>
+<div class="table-wrap"><table><thead><tr><th>上限</th><th>防的是什么</th><th>labs 默认（教学示意）</th><th>DSH 默认</th></tr></thead><tbody>
+<tr><td>次数</td><td>无限重试</td><td>5 次</td><td>5 次（即最多 6 次请求）</td></tr>
+<tr><td>单次等待</td><td>指数增长失控</td><td>10 秒</td><td>10 秒</td></tr>
+<tr><td>总等待</td><td>次数没到上限，时间已经太久</td><td>60 秒</td><td>（由次数和单次上限间接限定）</td></tr>
+</tbody></table></div>
+<p>计数的范围也要定清楚。DSH 的重试计数在每一步开始（<code class="inl">step/start</code>）和每一轮结束（<code class="inl">turn/end</code>）时清零。也就是说，一次模型调用最多重试 5 次，而不是整个会话一共只能重试 5 次——后者会让一个长会话在中途某次限流之后，再也没有重试的机会。</p>
+<p>服务端返回的 Retry-After 头是另一个等待时间的来源。它的意思是“请过这么久再来”，比本地算出来的退避时间更有依据，应该优先采用。但它也可能很长——几分钟甚至几小时。这时有三种做法：</p>
+<div class="table-wrap"><table><thead><tr><th>做法</th><th>问题</th></tr></thead><tbody>
+<tr><td>照等</td><td>循环卡住几小时，用户以为程序死了</td></tr>
+<tr><td>缩短到上限再试</td><td>等于无视服务端的限流要求，大概率继续被拒，还可能被更严厉地限流</td></tr>
+<tr><td>放弃，交给上层</td><td>当前这一步失败，但状态清楚，上层可以决定切换模型、提示用户或者停下来</td></tr>
+</tbody></table></div>
+<p>labs 和 DSH 都选第三种。DSH 的规则写得很清楚：Retry-After 在单次上限以内就原样采用；超过上限时，普通模式放弃并交给下一个处理者，“永远重试”模式改用本地退避。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/retry.py::plan_wait"><span class="kw">def</span> <span class="fn">plan_wait</span>(policy<span class="op">:</span> <span class="cls">RetryPolicy</span>, failure<span class="op">:</span> <span class="cls">Failure</span>, retry<span class="op">:</span> int, waited<span class="op">:</span> float,
+              rand<span class="op">:</span> <span class="cls">Callable</span>[[], float] <span class="op">=</span> random.random) <span class="op">-&gt;</span> tuple[float <span class="op">|</span> <span class="kw">None</span>, str, str]<span class="op">:</span>
+    <span class="str">"""决定下一次等多久。返回 (等待秒数, 来源, 放弃原因)；等待为 None 表示放弃。"""</span>
+    <span class="kw">if</span> failure.kind <span class="kw">not</span> <span class="kw">in</span> policy.retryable<span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">None</span>, <span class="str">""</span>, <span class="str">f"{failure.kind} 不可重试"</span>
+    <span class="kw">if</span> retry <span class="op">&gt;=</span> policy.max_retries<span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">None</span>, <span class="str">""</span>, <span class="str">f"已重试 {retry} 次，达到上限 {policy.max_retries}"</span>
+    <span class="kw">if</span> policy.honor_retry_after <span class="kw">and</span> failure.retry_after <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">if</span> failure.retry_after <span class="op">&gt;</span> policy.max_delay<span class="op">:</span>
+            <span class="cmt"># 服务端要求的等待超过了我们愿意等的上限：不要偷偷缩短它（那等于无视限流），</span>
+            <span class="cmt"># 也不要无条件照等（可能是几小时）。放弃，让上层决定。</span>
+            <span class="kw">return</span> <span class="kw">None</span>, <span class="str">""</span>, <span class="str">f"服务端要求等待 {failure.retry_after:.0f}s，超过单次上限 {policy.max_delay:.0f}s"</span>
+        delay, source <span class="op">=</span> failure.retry_after, <span class="str">"retry-after"</span>
+    <span class="kw">else</span><span class="op">:</span>
+        delay, source <span class="op">=</span> backoff_delay(policy, retry, rand), <span class="str">"backoff"</span>
+    <span class="kw">if</span> policy.max_total <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> waited <span class="op">+</span> delay <span class="op">&gt;</span> policy.max_total<span class="op">:</span>
+        <span class="kw">return</span> <span class="kw">None</span>, <span class="str">""</span>, <span class="str">f"累计等待将达到 {waited + delay:.1f}s，超过总上限 {policy.max_total:.0f}s"</span>
+    <span class="kw">return</span> delay, source, <span class="str">""</span></code></pre></div>
+<p><code class="inl">plan_wait</code> 是一个纯函数：给定策略、失败、已重试次数和已等待时间，返回“等多久”或“为什么放弃”。把它从执行逻辑里拆出来，所有上限规则都可以不睡觉地测试。</p>
+
+<h2 id="hx-18-s4">重试和历史、日志的关系</h2>
+<p>故事里第三个问题——重试成功后模型说“我注意到之前的请求出了错”——来自一个常见的实现错误：失败尝试的输出被写进了历史。</p>
+<p>流式响应失败时，往往已经收到了一部分内容：几句话、半个工具调用。如果这些内容被当作一条 assistant 消息提交，下一次请求就会带着它；如果错误信息被当作一条 user 消息或工具结果提交，模型会看到它并开始“解释”。两种情况都会让重试后的回复和第一次不一样，而且常常更糟。</p>
+<p>规则是：<strong>失败的尝试不提交任何消息</strong>。重试时发出的请求，应该和第一次请求逐字节相同（这也让前缀缓存继续有效，见第 06 章）。DSH 有两条测试专门守这条规则：失败尝试收到的半截内容只留在那一步的日志块里，不提交成 assistant 消息，也不触发工具副作用；重试后的模型上下文里既没有错误诊断，也没有半截输出。</p>
+<p>另一方面，重试<strong>本身</strong>要留下记录，只是不在对话历史里，而在会话日志里。DSH 的顺序是：</p>
+<ol>
+<li>决定要重试，写一条 <code class="inl">llm/retry</code> 事件（第几次、等多久、原因）；</li>
+<li>开始等待，等待可以被取消；</li>
+<li>等待结束，写一条 <code class="inl">llm/retry-started</code> 事件；</li>
+<li>发出请求。</li>
+</ol>
+<p>先写日志再等待，有两个好处。一是进程在等待期间被杀，恢复时能从日志里知道“刚才在第 3 次重试”，重试计数不会丢（DSH 的重试计数就是从日志投影里读出来的）。二是排查问题时能看到完整的时间线：哪一步失败了几次、每次等了多久、最后为什么成功或放弃。重试的用量也要单独记账：第 05 章讲过，DSH 的用量账本会把一次重试记成一次新的计费调用。</p>
+<p>labs 用一个回调来表达“等待之前”这个挂点：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/retry.py::retry_call"><span class="kw">def</span> <span class="fn">retry_call</span>(
+    fn<span class="op">:</span> <span class="cls">Callable</span>[[], <span class="cls">T</span>],
+    policy<span class="op">:</span> <span class="cls">RetryPolicy</span> <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+    <span class="op">*</span>,
+    sleep<span class="op">:</span> <span class="cls">Callable</span>[[float], <span class="kw">None</span>] <span class="op">=</span> time.sleep,
+    rand<span class="op">:</span> <span class="cls">Callable</span>[[], float] <span class="op">=</span> random.random,
+    should_stop<span class="op">:</span> <span class="cls">Callable</span>[[], bool] <span class="op">=</span> <span class="kw">lambda</span><span class="op">:</span> <span class="kw">False</span>,
+    on_attempt<span class="op">:</span> <span class="cls">Callable</span>[[<span class="cls">Attempt</span>], <span class="kw">None</span>] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+) <span class="op">-&gt;</span> <span class="cls">RetryOutcome</span><span class="op">:</span>
+    <span class="str">"""调用 fn，按策略重试。fn 失败时必须抛 Failure；其他异常视为 UNKNOWN、不重试。
+
+    on_attempt 在等待**之前**调用：这是「先写日志再等待」的挂点。
+    """</span>
+    policy <span class="op">=</span> policy <span class="kw">or</span> <span class="cls">RetryPolicy</span>()
+    attempts<span class="op">:</span> list[<span class="cls">Attempt</span>] <span class="op">=</span> []
+    waited <span class="op">=</span> <span class="num">0.0</span>
+    retry <span class="op">=</span> <span class="num">0</span>
+    <span class="kw">while</span> <span class="kw">True</span><span class="op">:</span>
+        <span class="kw">if</span> should_stop()<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">RetryOutcome</span>(<span class="kw">False</span>, failure<span class="op">=</span><span class="cls">Failure</span>(<span class="cls">CANCELLED</span>), attempts<span class="op">=</span>attempts,
+                                gave_up_because<span class="op">=</span><span class="str">"调用方取消"</span>)
+        number <span class="op">=</span> len(attempts) <span class="op">+</span> <span class="num">1</span>
+        <span class="kw">try</span><span class="op">:</span>
+            value <span class="op">=</span> fn()
+        <span class="kw">except</span> <span class="cls">Failure</span> <span class="kw">as</span> failure<span class="op">:</span>
+            delay, source, why <span class="op">=</span> plan_wait(policy, failure, retry, waited, rand)
+            attempt <span class="op">=</span> <span class="cls">Attempt</span>(number, failure.kind, delay <span class="kw">or</span> <span class="num">0.0</span>, source)
+            attempts.append(attempt)
+            <span class="kw">if</span> delay <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+                <span class="kw">return</span> <span class="cls">RetryOutcome</span>(<span class="kw">False</span>, failure<span class="op">=</span>failure, attempts<span class="op">=</span>attempts, gave_up_because<span class="op">=</span>why)
+            <span class="kw">if</span> on_attempt <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+                on_attempt(attempt)
+            sleep(delay)
+            waited <span class="op">+=</span> delay
+            retry <span class="op">+=</span> <span class="num">1</span>
+            <span class="kw">continue</span>
+        <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> exc<span class="op">:</span>  <span class="cmt"># noqa: BLE001 — 没分类的异常一律不重试</span>
+            failure <span class="op">=</span> <span class="cls">Failure</span>(<span class="cls">UNKNOWN</span>, <span class="str">f"{type(exc).__name__}: {exc}"</span>)
+            attempts.append(<span class="cls">Attempt</span>(number, <span class="cls">UNKNOWN</span>))
+            <span class="kw">return</span> <span class="cls">RetryOutcome</span>(<span class="kw">False</span>, failure<span class="op">=</span>failure, attempts<span class="op">=</span>attempts,
+                                gave_up_because<span class="op">=</span><span class="str">"未分类的异常不重试"</span>)
+        attempts.append(<span class="cls">Attempt</span>(number, <span class="kw">None</span>))
+        <span class="kw">return</span> <span class="cls">RetryOutcome</span>(<span class="kw">True</span>, value<span class="op">=</span>value, attempts<span class="op">=</span>attempts)</code></pre></div>
+<p><code class="inl">on_attempt</code> 在 <code class="inl">sleep</code> 之前被调用，测试 <code class="inl">test_on_attempt_called_before_sleep</code> 断言事件顺序是“先记录、后等待”。真实实现里，这个回调应该写会话日志（第 04 章的 <code class="inl">SessionLog</code>）。</p>
+
+<h2 id="hx-18-s5">重试放在哪一层</h2>
+<p>重试可以放在三个位置，各有取舍：</p>
+<div class="table-wrap"><table><thead><tr><th>位置</th><th>例子</th><th>优点</th><th>缺点</th></tr></thead><tbody>
+<tr><td>HTTP 客户端</td><td>OpenHarness 的 API 客户端</td><td>对上层透明，实现简单</td><td>看不到会话状态：没法写会话日志，没法和压缩、切换模型这类恢复手段协作</td></tr>
+<tr><td>循环的扩展点</td><td>DSH 的“模型请求失败”扩展点 + 重试插件</td><td>能写日志、能和其他恢复逻辑排队（压缩先试，不行再重试），策略可以按提供方配置</td><td>需要一个扩展点机制</td></tr>
+<tr><td>调用方自己</td><td>每个调用模型的地方写一个 for 循环</td><td>最直观</td><td>重复、不一致，迟早有一处漏掉上限或分类</td></tr>
+</tbody></table></div>
+<p>DSH 的设计有一个值得注意的细节：它的扩展点允许多个处理者排队。“上下文超长”这类失败先交给压缩插件，压缩插件确实改写了历史才返回“重试”；“永远重试”模式的重试插件也会先让下游的专门恢复逻辑跑一遍，自己作为最后的兜底。重试不是唯一的恢复手段，而是恢复链上的一环。</p>
+<p>labs 的 <code class="inl">retry_call</code> 是一个通用函数，可以包住第 00 章 <code class="inl">harness.llm</code> 里的任何一次模型调用。要把它接进第 01 章的循环，最小的改动是在 <code class="inl">run_agent</code> 调用 <code class="inl">llm.complete</code> 的地方换成 <code class="inl">retry_call(lambda: llm.complete(...))</code>，并让适配器把 HTTP 错误转成带分类的 <code class="inl">Failure</code>。</p>
+
+<h2 id="hx-18-s6">重试耗尽之后说什么</h2>
+<p>重试最终失败时，循环要停下来（第 01 章的 <code class="inl">llm_error</code>），并且给出一句话。这句话有两个读者：用户，以及下一次续跑时的模型。它应该包含：失败的类型、尝试了几次、一共等了多久、为什么停止。不应该包含：每一次失败的原始错误文本——那是日志的事。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/retry.py::describe_for_model"><span class="kw">def</span> <span class="fn">describe_for_model</span>(outcome<span class="op">:</span> <span class="cls">RetryOutcome</span>) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""重试最终失败时给模型（或用户）看的一句话。不要把每次失败的原始错误都塞进去。"""</span>
+    <span class="kw">if</span> outcome.ok<span class="op">:</span>
+        <span class="kw">return</span> <span class="str">""</span>
+    tried <span class="op">=</span> len(outcome.attempts)
+    kind <span class="op">=</span> outcome.failure.kind <span class="kw">if</span> outcome.failure <span class="kw">else</span> <span class="cls">UNKNOWN</span>
+    <span class="kw">return</span> (<span class="str">f"Error: 模型请求失败（{kind}），共尝试 {tried} 次，等待 {outcome.total_wait:.1f}s；"</span>
+            <span class="str">f"停止原因：{outcome.gave_up_because}"</span>)</code></pre></div>
+<p>“为什么停止”这一项尤其有用。“达到次数上限”和“服务端要求等待 3600 秒”是完全不同的情况：前者可能过一会儿就好了，后者说明配额用完了，需要换模型或者等到明天。用户看到这句话，才能决定下一步。</p>
+
+<h2 id="hx-18-s7">坑与失败案例</h2>
+<h3 id="hx-18-s7-1">坑一：所有错误都重试</h3>
+<ul>
+<li><strong>触发条件</strong>：<code class="inl">except Exception: retry()</code>。</li>
+<li><strong>后果</strong>：鉴权失败、参数错误、上下文超长被重试到次数用完，用户白等几十秒，最后看到的错误和第一次完全一样。上下文超长的情况下，每次重试还按全价计费。</li>
+<li><strong>怎么防</strong>：按状态码和错误类型分类，只重试临时故障；“需要先改请求”的失败交给专门的恢复逻辑。</li>
+</ul>
+<h3 id="hx-18-s7-2">坑二：固定间隔，所有客户端同时重试</h3>
+<ul>
+<li><strong>触发条件</strong>：<code class="inl">time.sleep(1)</code>，或者没有抖动的指数退避。</li>
+<li><strong>后果</strong>：服务端从故障中恢复的那一刻，迎来所有客户端同时发出的重试，又被压垮。故障时间被延长，所有人的重试都失败。</li>
+<li><strong>怎么防</strong>：指数退避加随机抖动；抖动加在夹上限之后。</li>
+</ul>
+<h3 id="hx-18-s7-3">坑三：失败尝试的残留进了下一次请求</h3>
+<ul>
+<li><strong>触发条件</strong>：流式响应中途失败，已收到的半截内容或错误信息被提交进历史。</li>
+<li><strong>后果</strong>：重试后的请求和第一次不同，模型开始解释“之前的错误”，或者在半截工具调用的基础上继续，产生重复的副作用。前缀缓存也会失效。</li>
+<li><strong>怎么防</strong>：失败尝试不提交任何消息；重试时的请求和第一次逐字节相同。半截内容只留在会话日志里供排查。</li>
+</ul>
+<h3 id="hx-18-s7-4">坑四：Retry-After 被忽略或被偷偷缩短</h3>
+<ul>
+<li><strong>触发条件</strong>：服务端返回了 Retry-After，客户端仍按本地退避（通常更短）重试；或者把它截断到单次上限。</li>
+<li><strong>后果</strong>：在服务端明确要求等待的时间内持续发请求，继续被拒，严重时触发更长时间的限流甚至封禁。</li>
+<li><strong>怎么防</strong>：Retry-After 在上限以内就照等；超过上限就放弃并说明原因，让上层决定。</li>
+</ul>
+<h3 id="hx-18-s7-5">坑五：重试计数整个会话累计</h3>
+<ul>
+<li><strong>触发条件</strong>：重试计数器是会话级的，从不清零。</li>
+<li><strong>后果</strong>：长会话在前面遇到几次限流之后，后面的任何一次临时故障都直接失败，而用户不知道为什么“它今天特别脆弱”。</li>
+<li><strong>怎么防</strong>：重试预算按“一步”计算，每一步开始时清零。DSH 在 <code class="inl">step/start</code> 和 <code class="inl">turn/end</code> 时清零。</li>
+</ul>
+<h3 id="hx-18-s7-6">坑六：重试有副作用的调用</h3>
+<ul>
+<li><strong>触发条件</strong>：把通用的重试包装套在工具调用上，比如一个“创建 issue”或“发送消息”的工具。第一次请求其实成功了，只是响应在返回途中丢了。</li>
+<li><strong>后果</strong>：issue 被创建两次，消息被发送两次。</li>
+<li><strong>怎么防</strong>：重试默认只用于模型调用和只读操作；有副作用的调用要么带幂等键，要么不自动重试，把“结果未知”如实告诉模型（第 04 章 DSH 的恢复逻辑就是这样处理的：已开始但结果未落盘的调用，补一条“结果未知，有副作用的操作先核实”的错误结果）。</li>
+</ul>
+
+<h2 id="hx-18-s8">多仓库取舍对比</h2>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th><th>labs</th></tr></thead><tbody>
+<tr><td>位置</td><td>循环的“请求失败”扩展点 + 独立重试插件</td><td>API 客户端</td><td>集成章节的循环里</td><td>通用函数 <code class="inl">retry_call</code></td></tr>
+<tr><td>分类</td><td>错误只带事实；按策略里的错误码列表判断，默认五种</td><td>按状态码（429/500/502/503/529）+ 网络错误；循环里另有按文本匹配的判断</td><td>只处理 529</td><td>按状态码与错误类型，不按文本</td></tr>
+<tr><td>退避</td><td>指数 + 对称抖动 0.1，两次夹上限</td><td>指数 + 抖动</td><td>无</td><td>指数 + 对称抖动，两次夹上限</td></tr>
+<tr><td>Retry-After</td><td>上限内照等；超限时普通模式放弃、永远模式改本地退避</td><td>优先读取</td><td>无</td><td>上限内照等；超限放弃</td></tr>
+<tr><td>上限</td><td>5 次 / 单次 10 秒；按步清零</td><td>固定最大次数</td><td>连续 529 最多 2 次</td><td>次数 + 单次 + 总等待</td></tr>
+<tr><td>留痕</td><td>先写日志再等待；计数从日志投影读取，重启不丢</td><td>日志</td><td>无</td><td>等待前回调（真实实现应写会话日志）</td></tr>
+<tr><td>历史清洁</td><td>失败尝试不提交消息，有测试</td><td>不适用（客户端层重试，失败响应不进历史）</td><td>不适用</td><td>失败尝试不返回内容</td></tr>
+</tbody></table></div>
+<p>一句话取舍：把重试放在 HTTP 客户端里最省事，而且对大多数单用户场景够用；一旦需要“重试可恢复、可审计、能和压缩等恢复手段协作”，就需要 DSH 那样把它放到循环的扩展点上，用日志作为重试状态的唯一来源。</p>
+
+<h2 id="hx-18-s9">小结</h2>
+<ul>
+<li>先分类：只重试临时故障。“需要先改请求”的失败交给压缩或调整参数，而不是重试。分类按状态码和错误类型，不按文本。</li>
+<li>等待时间用指数退避加随机抖动，抖动加在夹上限之后；Retry-After 优先，超过上限就放弃而不是缩短。</li>
+<li>三种上限：次数、单次、总等待；计数按步清零。</li>
+<li>失败尝试不提交任何消息，重试的请求和第一次相同；重试本身先写日志再等待。</li>
+<li>重试耗尽时，说清楚失败类型、尝试次数、等待时间和停止原因。</li>
+<li>有副作用的调用不要套通用重试。</li>
+</ul>
+<p>重试解决了“失败了再来”，但还有一类问题它管不到：请求根本没有失败，只是一直没有回来。继续读：<a href="#hx-19">超时</a>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>新的重试上线后，下一次限流来的时候，九个 agent 的日志不再整齐划一：第一次重试散落在 0.45 到 0.55 秒之间，第二次在 0.9 到 1.1 秒之间。厂商的限流在三分钟后解除，九个会话里有八个在限流解除后十秒内恢复，用户几乎没有察觉。第九个会话碰上的是“上下文超长”，它没有被重试，而是交给了压缩，压完一次就继续跑了。</p>
+<p>林舟正高兴，客户那边打来电话：“你们的助手卡住了，转圈转了二十分钟。”</p>
+<p>他打开那个会话的日志，最后一条记录是一个 <code class="inl">run_tests</code> 工具调用，开始时间是二十分钟前，没有结束时间，没有错误，没有重试。它没有失败，所以重试层什么都没做。它只是一直没有回来。</p>
+<p class="hx-story-say">“重试管的是‘失败了怎么办’，”老唐说，“这个连失败都没失败。”</p>
+<p>下一章：<a href="#hx-19">超时</a>。</p>
+</div>
+</section>

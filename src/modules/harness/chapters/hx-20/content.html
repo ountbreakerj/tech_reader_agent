@@ -1,0 +1,353 @@
+<section class="chapter" id="ch-hx-20" data-slug="hx-20"><div class="ch-head"><span class="ch-num">第 20 章</span></div><h1 id="hx-20">熔断与降级</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 20 章（虚构）</span>
+<p>四百多次请求，打在一个已经挂了四十分钟的服务上。老唐把这个数字写在白板上，下面画了一个电闸。</p>
+<p class="hx-story-say">“家里的电闸为什么要跳？”他问。</p>
+<p class="hx-story-say">“短路了，不跳会着火。”林舟说。</p>
+<p class="hx-story-say">“跳了之后呢？你会每隔一秒去推一次闸吗？”</p>
+<p>不会。跳闸之后，你会等一会儿，排查一下，然后试着推上去一次。推上去没事，就恢复；又跳了，就再等。在跳闸到推上去之间，家里不是一片漆黑——应急灯会亮。</p>
+<p>老唐在电闸旁边写了三个词：<strong>闭合、断开、试探</strong>。然后又画了一盏应急灯，旁边写着：<strong>降级</strong>。</p>
+<p>林舟这才想起来，他们其实一直有一个备用的模型账号，是另一家厂商的，便宜一些、能力弱一些，平时没在用。如果四十分钟前橘子能意识到“主模型挂了”，然后切到备用模型，并且告诉用户“现在用的是备用模型，复杂任务可能完成得不太好”，那四十分钟就不会是四十分钟的空转。</p>
+<p>他们还发现了一个更细的问题：同一时间，备用厂商那边一切正常，但有个用户的会话因为主模型的故障被反复重试，用完了自己的整轮预算，最后被超时打断了——如果他的请求一开始就被引到备用模型，他根本不会注意到有故障发生。</p>
+<p>这一章要做两件事：给每个依赖装一个电闸——持续失败时停止撞墙，过一会儿试探一次，恢复了再合上；以及准备好应急灯——主路不通时走哪条备用路，并且把“现在走的是备用路”说出来。</p>
+</div>
+<p>第 18 章的重试和第 19 章的超时，都是在“单次请求”的范围里做决定：这一次失败了，要不要再来；这一次等太久了，要不要放弃。它们都不记得过去。当一个依赖持续失败时，每一次请求都要从头经历完整的重试序列，才能得出“它挂了”这个结论；同时，大量重试又把本来就过载的服务压得更死。</p>
+<p>熔断器给 harness 加上了“记忆”：它记住一个依赖最近的表现，持续失败时直接拒绝请求，不再浪费时间；降级给 harness 加上了“退路”：主路不通时，有一条明确的备用路可走。</p>
+
+<h2 id="hx-20-s0">先看全貌：熔断与降级是什么、管哪些事</h2>
+<p>一句话：熔断器是一个三态开关，依赖持续失败时从“闭合”切到“断开”，直接拒绝请求，冷却一段时间后进入“半开”放行少量试探请求，试探成功就恢复；降级是请求无法通过主路时，按预先排好的顺序走备用路，并明确告知结果来自备用路。</p>
+<p>这一层要管的事：</p>
+<ul>
+<li><strong>判断依赖挂了</strong>：连续失败多少次、或者一段时间内失败率多高，算“持续失败”。</li>
+<li><strong>断开期间</strong>：直接拒绝，不调用依赖，立刻返回。</li>
+<li><strong>恢复</strong>：冷却多久之后试探、试探几个请求、成功或失败后怎么转换。</li>
+<li><strong>粒度</strong>：一个依赖一个熔断器，不能一个挂了全部断开。</li>
+<li><strong>降级链</strong>：主模型不可用时换哪个、再不行用缓存还是停下来。</li>
+<li><strong>告知</strong>：降级必须说出来；熔断状态变化必须被人看到。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>依赖挂了怎么办</td><td>每次请求都按重试策略来一遍</td><td>熔断：持续失败就断开，断开期间立刻拒绝，冷却后试探恢复</td></tr>
+<tr><td>判据</td><td>只看连续失败次数</td><td>连续失败数 + 窗口失败率：前者反应快，后者能抓住“时好时坏”</td></tr>
+<tr><td>恢复</td><td>只有断开，靠人手动恢复</td><td>三态：冷却时间到自动进入半开，少量试探请求决定恢复还是继续断开</td></tr>
+<tr><td>降级</td><td>悄悄换成备用模型</td><td>降级链明确排序，结果带“已降级”标记和说明，告诉用户</td></tr>
+</tbody></table></div>
+<h3 id="hx-20-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p>先说结论：<strong>三个参考仓库都没有真正的三态熔断器</strong>。这一章的熔断器是按通用做法实现的教学版。但它们各自有一些熔断思想的影子，值得对照着看：</p>
+<p><strong>OpenHarness</strong>（Python）：自动压缩有一个“连续失败 3 次就不再自动压缩”的保护。计数器跨轮保存，摘要成功时清零，失败时加一，判据函数的第一行就是短路检查。这是一个<strong>只有闭合到断开、没有半开和自动恢复</strong>的单向开关：断开之后，这个会话里就再也不会自动压缩了。</p>
+<p><strong>DSH</strong>（TypeScript）：没有熔断器，但用两种方式防止空转。一是重试预算：每一步最多重试 5 次，用完就放弃。二是“有进展才继续”：压缩插件的超长恢复只在历史确实被改写过时才消耗一次重试额度并返回重试，没有实际进展就不重试，Agent 回到空闲时计数清零。它还有一个“重复工具调用提醒”的守卫，模型连续重复同一个调用 3、5、8 次时提醒它，但只提醒、不拦截。</p>
+<p><strong>learn-claude-code</strong>（教程）：集成章节有“连续 529 最多两次”的上限，属于重试上限，不是熔断。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/circuit.py</code>，三态熔断器（连续失败与失败率双判据、冷却、半开试探数限制、状态变化记录）和降级链，16 条测试。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1 节讲为什么重试和超时不够，熔断补的是什么。</li>
+<li>第 2 节讲三态熔断器的状态机，配合 labs 的代码读，这是本章的核心机制。</li>
+<li>第 3 节讲判据和参数怎么选；第 4 节讲熔断器的粒度和放置位置。</li>
+<li>第 5 节讲降级链，以及为什么降级必须说出来。</li>
+<li>第 6 节对照三个仓库里的“半个熔断器”；第 8 节的坑可以当自查清单。</li>
+</ol>
+<p>本章的源码描述来自前面章节已经核对过的笔记；不再逐条标注 <code class="inl">文件:行号</code>。</p></blockquote>
+
+<h2 id="hx-20-s1">重试和超时为什么不够</h2>
+<p>故事里的四十分钟，每一次请求的行为都是“正确”的：失败了按退避重试，重试用完了放弃，放弃时说清楚原因。问题出在“每一次”都要重新走一遍这个过程：</p>
+<div class="table-wrap"><table><thead><tr><th></th><th>只有重试</th><th>重试 + 熔断</th></tr></thead><tbody>
+<tr><td>依赖刚挂掉</td><td>第一个请求重试 5 次，约 1 分钟后失败</td><td>同左：熔断器还在闭合状态，正在积累失败</td></tr>
+<tr><td>依赖挂了 5 分钟</td><td>每个请求都重试 5 次，每次都约 1 分钟后失败</td><td>熔断器已经断开：请求立刻被拒绝，耗时接近 0</td></tr>
+<tr><td>对依赖的压力</td><td>每个请求 6 次调用，持续不断</td><td>几乎为 0，冷却期结束时只有少量试探请求</td></tr>
+<tr><td>依赖恢复时</td><td>下一个请求成功</td><td>冷却结束后第一个试探请求成功，熔断器闭合</td></tr>
+<tr><td>能不能走备用路</td><td>要等每次重试用完才知道主路不通</td><td>断开状态本身就是“主路不通”的信号，立刻走备用路</td></tr>
+</tbody></table></div>
+<p>熔断的价值集中在中间三行：<strong>快速失败</strong>（用户不用每次白等一分钟）、<strong>减少压力</strong>（给依赖恢复的机会，而不是在它最脆弱的时候持续施压）、<strong>触发降级</strong>（断开本身就是切换备用路的信号）。</p>
+<p>它的代价也在第一行和最后一行：熔断器需要积累一定数量的失败才会断开，所以依赖刚挂掉时帮不上忙；依赖恢复后，要等冷却时间结束才会发现，这段时间里本可以成功的请求会被拒绝。参数要在这两个代价之间权衡（第 3 节）。</p>
+
+<h2 id="hx-20-s2">三态状态机</h2>
+<p>熔断器有三个状态：</p>
+<div class="table-wrap"><table><thead><tr><th>状态</th><th>行为</th><th>离开条件</th></tr></thead><tbody>
+<tr><td>闭合（closed）</td><td>正常放行，记录成功和失败</td><td>连续失败数或窗口失败率超过阈值 → 断开</td></tr>
+<tr><td>断开（open）</td><td>直接拒绝，不调用依赖</td><td>冷却时间到 → 半开</td></tr>
+<tr><td>半开（half_open）</td><td>放行少量试探请求，其余仍然拒绝</td><td>试探成功 → 闭合；试探失败 → 断开（重新计算冷却）</td></tr>
+</tbody></table></div>
+<p>labs 的实现：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/circuit.py::CircuitBreaker"><span class="kw">class</span> <span class="cls">CircuitBreaker</span><span class="op">:</span>
+    <span class="str">"""一个依赖一个熔断器。按依赖分，而不是全局一个：模型 A 挂了不该连带模型 B。"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, name<span class="op">:</span> str, config<span class="op">:</span> <span class="cls">BreakerConfig</span> <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>, clock<span class="op">:</span> <span class="cls">Clock</span> <span class="op">=</span> time.monotonic) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self.name <span class="op">=</span> name
+        self.config <span class="op">=</span> config <span class="kw">or</span> <span class="cls">BreakerConfig</span>()
+        self.clock <span class="op">=</span> clock
+        self.state <span class="op">=</span> <span class="cls">CLOSED</span>
+        self.consecutive_failures <span class="op">=</span> <span class="num">0</span>
+        self.recent<span class="op">:</span> deque[bool] <span class="op">=</span> deque(maxlen<span class="op">=</span>self.config.window)   <span class="cmt"># True 表示失败</span>
+        self.opened_at<span class="op">:</span> float <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>
+        self.in_flight_probes <span class="op">=</span> <span class="num">0</span>
+        self.transitions<span class="op">:</span> list[<span class="cls">Transition</span>] <span class="op">=</span> []
+
+    <span class="cmt"># ---- 状态 ----</span>
+
+    <span class="kw">def</span> <span class="fn">_move</span>(self, new<span class="op">:</span> str, reason<span class="op">:</span> str) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">if</span> new <span class="op">!=</span> self.state<span class="op">:</span>
+            self.transitions.append(<span class="cls">Transition</span>(self.clock(), self.state, new, reason))
+            self.state <span class="op">=</span> new
+        <span class="kw">if</span> new <span class="op">==</span> <span class="cls">OPEN</span><span class="op">:</span>
+            self.opened_at <span class="op">=</span> self.clock()
+            self.in_flight_probes <span class="op">=</span> <span class="num">0</span>
+        <span class="kw">if</span> new <span class="op">==</span> <span class="cls">CLOSED</span><span class="op">:</span>
+            self.consecutive_failures <span class="op">=</span> <span class="num">0</span>
+            self.recent.clear()
+            self.opened_at <span class="op">=</span> <span class="kw">None</span>
+
+    <span class="kw">def</span> <span class="fn">current_state</span>(self) <span class="op">-&gt;</span> str<span class="op">:</span>
+        <span class="str">"""读状态时顺便处理「冷却时间已到」：open 到期就变 half_open。"""</span>
+        <span class="kw">if</span> self.state <span class="op">==</span> <span class="cls">OPEN</span> <span class="kw">and</span> self.opened_at <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+            <span class="kw">if</span> self.clock() <span class="op">-</span> self.opened_at <span class="op">&gt;=</span> self.config.cooldown<span class="op">:</span>
+                self._move(<span class="cls">HALF_OPEN</span>, <span class="str">f"冷却 {self.config.cooldown:.0f}s 已到，开始试探"</span>)
+        <span class="kw">return</span> self.state
+
+    <span class="kw">def</span> <span class="fn">failure_rate</span>(self) <span class="op">-&gt;</span> float<span class="op">:</span>
+        <span class="kw">return</span> sum(self.recent) <span class="op">/</span> len(self.recent) <span class="kw">if</span> self.recent <span class="kw">else</span> <span class="num">0.0</span>
+
+    <span class="cmt"># ---- 记录 ----</span>
+
+    <span class="kw">def</span> <span class="fn">record_success</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">if</span> self.state <span class="op">==</span> <span class="cls">HALF_OPEN</span><span class="op">:</span>
+            self._move(<span class="cls">CLOSED</span>, <span class="str">"试探请求成功"</span>)
+            <span class="kw">return</span>
+        self.consecutive_failures <span class="op">=</span> <span class="num">0</span>
+        self.recent.append(<span class="kw">False</span>)
+
+    <span class="kw">def</span> <span class="fn">record_failure</span>(self, reason<span class="op">:</span> str <span class="op">=</span> <span class="str">""</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">if</span> self.state <span class="op">==</span> <span class="cls">HALF_OPEN</span><span class="op">:</span>
+            self._move(<span class="cls">OPEN</span>, <span class="str">f"试探请求失败：{reason}"</span> <span class="kw">if</span> reason <span class="kw">else</span> <span class="str">"试探请求失败"</span>)
+            <span class="kw">return</span>
+        self.consecutive_failures <span class="op">+=</span> <span class="num">1</span>
+        self.recent.append(<span class="kw">True</span>)
+        cfg <span class="op">=</span> self.config
+        <span class="kw">if</span> self.consecutive_failures <span class="op">&gt;=</span> cfg.failure_threshold<span class="op">:</span>
+            self._move(<span class="cls">OPEN</span>, <span class="str">f"连续失败 {self.consecutive_failures} 次"</span>)
+        <span class="kw">elif</span> len(self.recent) <span class="op">&gt;=</span> cfg.min_calls <span class="kw">and</span> self.failure_rate() <span class="op">&gt;=</span> cfg.failure_rate<span class="op">:</span>
+            self._move(<span class="cls">OPEN</span>, <span class="str">f"最近 {len(self.recent)} 次失败率 {self.failure_rate():.0%}"</span>)
+
+    <span class="cmt"># ---- 调用 ----</span>
+
+    <span class="kw">def</span> <span class="fn">call</span>(self, fn<span class="op">:</span> <span class="cls">Callable</span>[[], <span class="cls">T</span>]) <span class="op">-&gt;</span> <span class="cls">T</span><span class="op">:</span>
+        <span class="str">"""通过熔断器调用 fn。打开时直接抛 CircuitOpen，不调用 fn。"""</span>
+        state <span class="op">=</span> self.current_state()
+        <span class="kw">if</span> state <span class="op">==</span> <span class="cls">OPEN</span><span class="op">:</span>
+            <span class="kw">assert</span> self.opened_at <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span>
+            <span class="kw">raise</span> <span class="cls">CircuitOpen</span>(self.name, self.config.cooldown <span class="op">-</span> (self.clock() <span class="op">-</span> self.opened_at))
+        <span class="kw">if</span> state <span class="op">==</span> <span class="cls">HALF_OPEN</span><span class="op">:</span>
+            <span class="kw">if</span> self.in_flight_probes <span class="op">&gt;=</span> self.config.half_open_probes<span class="op">:</span>
+                <span class="kw">raise</span> <span class="cls">CircuitOpen</span>(self.name, <span class="num">0.0</span>)
+            self.in_flight_probes <span class="op">+=</span> <span class="num">1</span>
+        <span class="kw">try</span><span class="op">:</span>
+            value <span class="op">=</span> fn()
+        <span class="kw">except</span> <span class="cls">BaseException</span> <span class="kw">as</span> exc<span class="op">:</span>
+            <span class="kw">if</span> state <span class="op">==</span> <span class="cls">HALF_OPEN</span><span class="op">:</span>
+                self.in_flight_probes <span class="op">-=</span> <span class="num">1</span>
+            <span class="kw">if</span> self.config.counts_as_failure(exc)<span class="op">:</span>
+                self.record_failure(<span class="str">f"{type(exc).__name__}: {exc}"</span>)
+            <span class="kw">else</span><span class="op">:</span>
+                <span class="cmt"># 不计入失败的异常（例如参数错误）说明依赖本身是好的</span>
+                self.record_success()
+            <span class="kw">raise</span>
+        <span class="kw">if</span> state <span class="op">==</span> <span class="cls">HALF_OPEN</span><span class="op">:</span>
+            self.in_flight_probes <span class="op">-=</span> <span class="num">1</span>
+        self.record_success()
+        <span class="kw">return</span> value</code></pre></div>
+<p>几个实现细节：</p>
+<ul>
+<li><strong>冷却到期在读状态时处理</strong>。<code class="inl">current_state()</code> 发现断开时间已经超过冷却时间，就转成半开。这样不需要后台计时器，状态转换发生在下一个请求到来的时候。</li>
+<li><strong>半开时限制试探数</strong>。<code class="inl">half_open_probes</code> 默认 1：冷却刚结束时，只放一个请求过去试探，其余请求仍然被拒绝。否则冷却结束的那一刻，所有积压的请求一起涌向刚恢复（或者根本没恢复）的依赖，又把它压垮。</li>
+<li><strong>试探失败重新计算冷却</strong>。从半开回到断开时，<code class="inl">opened_at</code> 被更新成当前时间，冷却重新开始。测试 <code class="inl">test_probe_failure_reopens_with_fresh_cooldown</code> 断言这一点。</li>
+<li><strong>状态变化被记录</strong>。每次转换都追加一条 <code class="inl">Transition</code>，带时间和原因。熔断器断开是需要人知道的事：它意味着某个依赖持续出问题，应该进日志和监控。</li>
+</ul>
+<p>一次完整的“断开—试探—恢复”在测试里是这样的：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_circuit.py::BreakerTests.test_transitions_are_recorded">    <span class="kw">def</span> <span class="fn">test_transitions_are_recorded</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self.trip()
+        self.clock.advance(<span class="num">30</span>)
+        self.breaker.call(ok)
+        self.assertEqual([(t.old, t.new) <span class="kw">for</span> t <span class="kw">in</span> self.breaker.transitions],
+                         [(<span class="cls">CLOSED</span>, <span class="cls">OPEN</span>), (<span class="cls">OPEN</span>, <span class="cls">HALF_OPEN</span>), (<span class="cls">HALF_OPEN</span>, <span class="cls">CLOSED</span>)])</code></pre></div>
+
+<h2 id="hx-20-s3">判据和参数</h2>
+<p>熔断器什么时候断开，有两种常见判据，labs 两种都用：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/circuit.py::BreakerConfig"><span class="dec">@dataclass</span>
+<span class="kw">class</span> <span class="cls">BreakerConfig</span><span class="op">:</span>
+    <span class="str">"""熔断器参数。数值是教学示意。
+
+    同时用「连续失败数」和「窗口内失败率」两个判据：
+    连续失败数反应快（依赖彻底挂掉时几次就断开），
+    失败率能抓住「时好时坏、但大部分在失败」的情况（连续计数会被偶尔的成功清零）。
+    """</span>
+
+    failure_threshold<span class="op">:</span> int <span class="op">=</span> <span class="num">5</span>          <span class="cmt"># 连续失败多少次就断开</span>
+    window<span class="op">:</span> int <span class="op">=</span> <span class="num">20</span>                    <span class="cmt"># 失败率统计的窗口（最近 N 次调用）</span>
+    failure_rate<span class="op">:</span> float <span class="op">=</span> <span class="num">0.5</span>           <span class="cmt"># 窗口内失败率超过多少就断开</span>
+    min_calls<span class="op">:</span> int <span class="op">=</span> <span class="num">10</span>                 <span class="cmt"># 窗口里至少有这么多调用才计算失败率，避免冷启动误判</span>
+    cooldown<span class="op">:</span> float <span class="op">=</span> <span class="num">30.0</span>              <span class="cmt"># 断开后多久进入半开</span>
+    half_open_probes<span class="op">:</span> int <span class="op">=</span> <span class="num">1</span>           <span class="cmt"># 半开时允许同时试探几个请求</span>
+    counts_as_failure<span class="op">:</span> <span class="cls">Callable</span>[[<span class="cls">BaseException</span>], bool] <span class="op">=</span> field(default<span class="op">=</span><span class="kw">lambda</span> exc<span class="op">:</span> <span class="kw">True</span>)</code></pre></div>
+<div class="table-wrap"><table><thead><tr><th>判据</th><th>擅长</th><th>漏掉的情况</th></tr></thead><tbody>
+<tr><td>连续失败数</td><td>依赖彻底挂掉：几次就断开，反应快</td><td>时好时坏：偶尔一次成功就把计数清零，永远到不了阈值</td></tr>
+<tr><td>窗口失败率</td><td>时好时坏、大部分在失败</td><td>冷启动：窗口里样本太少时，一次失败就是 100%</td></tr>
+</tbody></table></div>
+<p>测试 <code class="inl">test_failure_rate_trips_even_with_interleaved_success</code> 构造了一个“失败、失败、成功”交替的模式：10 次里 7 次失败，但连续失败数从不超过 2。只看连续失败数，熔断器永远不会断开；看失败率，它在第 10 次时断开。<code class="inl">min_calls</code> 处理反方向的问题：窗口里至少要有 10 次调用才计算失败率，避免刚启动时一次失败就断开。</p>
+<p>另一个重要参数是 <code class="inl">counts_as_failure</code>：<strong>不是所有异常都说明依赖出了问题</strong>。400 参数错误、401 鉴权失败，说明的是请求本身有问题，依赖是好的；如果这些也计入失败，一个总是发错误请求的会话就能把熔断器打开，影响所有其他会话。这和第 18 章的错误分类是同一个思路：只有临时故障（限流、5xx、超时、连接错误）才计入熔断器的失败。</p>
+<p>参数的取舍：</p>
+<div class="table-wrap"><table><thead><tr><th>参数</th><th>调小的效果</th><th>调大的效果</th></tr></thead><tbody>
+<tr><td>失败阈值</td><td>断开得快，但可能因为短暂抖动误断</td><td>不容易误断，但依赖挂掉后要更久才断开</td></tr>
+<tr><td>冷却时间</td><td>恢复得快，但试探更频繁，对依赖压力更大</td><td>对依赖友好，但依赖恢复后要更久才发现</td></tr>
+<tr><td>半开试探数</td><td>恢复判断更保守</td><td>恢复判断更快，但冷却结束时冲击更大</td></tr>
+</tbody></table></div>
+<p>labs 的默认值（连续 5 次、窗口 20、失败率 50%、冷却 30 秒、试探 1 个）是教学示意。真实取值要看依赖的特点：模型厂商的故障通常持续几分钟到几十分钟，冷却时间可以取 30 秒到 1 分钟；本地工具的故障（比如某个 MCP 服务器崩溃）可能需要人工重启，冷却时间可以更长。</p>
+
+<h2 id="hx-20-s4">粒度与位置</h2>
+<p><strong>一个依赖一个熔断器</strong>。如果整个 harness 只有一个熔断器，主模型挂了，它会断开，连带备用模型、工具调用、一切都被拒绝。熔断器的粒度应该和故障的粒度一致：</p>
+<ul>
+<li>每个模型提供方（或者每个“提供方 + 模型”组合）一个；</li>
+<li>每个外部服务（MCP 服务器、搜索 API、代码托管平台的 API）一个；</li>
+<li>本地工具通常不需要熔断器——它们的失败更可能是参数问题，由第 02 章的校验和第 01 章的错误预算处理。</li>
+</ul>
+<p>熔断器的状态是<strong>进程级</strong>的，不是会话级的：所有会话共享同一个依赖的熔断器。这正是它有用的原因——一个会话发现主模型挂了，其他会话立刻受益，不需要各自再撞一遍墙。故事里九个 agent 的问题，有一半就出在每个会话都在独立地发现“主模型挂了”。</p>
+<p>位置上，熔断器应该放在重试<strong>外面</strong>：</p>
+<div class="table-wrap"><table><thead><tr><th>顺序</th><th>行为</th></tr></thead><tbody>
+<tr><td>熔断器 → 重试 → 调用</td><td>熔断器断开时连重试都不做，立刻失败；闭合时，一次“带重试的调用”作为一次结果计入熔断器</td></tr>
+<tr><td>重试 → 熔断器 → 调用</td><td>熔断器断开时，重试层会对“熔断器拒绝”这个错误进行退避重试——白白等待，而且每一次重试都会被立刻拒绝</td></tr>
+</tbody></table></div>
+<p>第一种顺序是对的。如果因为结构原因必须是第二种，那么熔断器拒绝的错误必须被标记为不可重试。</p>
+
+<h2 id="hx-20-s5">降级：走备用路，并且说出来</h2>
+<p>熔断器断开之后，请求要么失败，要么走一条备用路。降级链就是预先排好的备用路列表：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/circuit.py::with_fallback"><span class="kw">def</span> <span class="fn">with_fallback</span>(routes<span class="op">:</span> <span class="cls">Sequence</span>[<span class="cls">Route</span>], breakers<span class="op">:</span> dict[str, <span class="cls">CircuitBreaker</span>] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> <span class="cls">FallbackResult</span><span class="op">:</span>
+    <span class="str">"""按顺序尝试降级链。熔断打开的路线直接跳过，不浪费一次调用。
+
+    降级必须**说出来**：结果里带 degraded 和 note，调用方要把它告诉用户。
+    悄悄换成一个更弱的模型，用户只会觉得「今天它变笨了」。
+    """</span>
+    breakers <span class="op">=</span> breakers <span class="kw">or</span> {}
+    skipped<span class="op">:</span> list[tuple[str, str]] <span class="op">=</span> []
+    <span class="kw">for</span> index, route <span class="kw">in</span> enumerate(routes)<span class="op">:</span>
+        breaker <span class="op">=</span> breakers.get(route.name)
+        <span class="kw">try</span><span class="op">:</span>
+            value <span class="op">=</span> breaker.call(route.fn) <span class="kw">if</span> breaker <span class="kw">else</span> route.fn()
+        <span class="kw">except</span> <span class="cls">CircuitOpen</span> <span class="kw">as</span> exc<span class="op">:</span>
+            skipped.append((route.name, <span class="str">f"熔断中（{exc.retry_in:.0f}s 后试探）"</span>))
+            <span class="kw">continue</span>
+        <span class="kw">except</span> <span class="cls">Exception</span> <span class="kw">as</span> exc<span class="op">:</span>  <span class="cmt"># noqa: BLE001</span>
+            skipped.append((route.name, <span class="str">f"{type(exc).__name__}: {exc}"</span>))
+            <span class="kw">continue</span>
+        <span class="kw">return</span> <span class="cls">FallbackResult</span>(<span class="kw">True</span>, value, route.name, degraded<span class="op">=</span>index <span class="op">&gt;</span> <span class="num">0</span>, note<span class="op">=</span>route.note, skipped<span class="op">=</span>skipped)
+    <span class="kw">return</span> <span class="cls">FallbackResult</span>(<span class="kw">False</span>, route<span class="op">=</span><span class="str">""</span>, skipped<span class="op">=</span>skipped,
+                          note<span class="op">=</span><span class="str">"所有路线都不可用："</span> <span class="op">+</span> <span class="str">"；"</span>.join(<span class="str">f"{n}（{why}）"</span> <span class="kw">for</span> n, why <span class="kw">in</span> skipped))</code></pre></div>
+<p>一个编码 agent 的典型降级链：</p>
+<div class="table-wrap"><table><thead><tr><th>顺序</th><th>路线</th><th>要告诉用户的话</th></tr></thead><tbody>
+<tr><td>1</td><td>主模型</td><td>（不需要）</td></tr>
+<tr><td>2</td><td>同厂商的备用区域或备用模型</td><td>“主模型暂时不可用，已切换到备用模型”</td></tr>
+<tr><td>3</td><td>另一家厂商的模型</td><td>“已切换到另一家的模型，复杂任务可能完成得不够好”</td></tr>
+<tr><td>4</td><td>停在可恢复的状态</td><td>“所有模型都不可用，任务已暂停，进度已保存，恢复后可以继续”</td></tr>
+</tbody></table></div>
+<p>关于降级，有三条要注意：</p>
+<ul>
+<li><strong>降级必须说出来</strong>。<code class="inl">FallbackResult</code> 带着 <code class="inl">degraded</code> 和 <code class="inl">note</code>。悄悄换成一个更弱的模型，用户只会觉得“今天它变笨了”，然后开始怀疑自己的提示词、怀疑代码、怀疑一切，唯独想不到是换了模型。</li>
+<li><strong>熔断中的路线直接跳过</strong>。降级链里的每条路线可以有自己的熔断器，断开的路线不调用，直接记一条“熔断中”然后走下一条。测试 <code class="inl">test_open_breaker_skips_route_without_calling</code> 断言被跳过的路线一次都没有被调用。</li>
+<li><strong>最后一级是“停下来”，而不是“随便给个结果”</strong>。用缓存的旧回复、编一个“通用的”答案，看起来比失败好，实际上更糟：用户以为任务完成了。对 agent 来说，最可靠的最后一级是把任务停在一个可以恢复的状态——第 04 章的日志让这一点成为可能。</li>
+</ul>
+<p>降级还有一个容易被忽略的成本：<strong>切换模型会让前缀缓存失效</strong>（第 06 章），而且不同厂商的消息格式、工具调用格式不同，需要第 00 章的适配器做转换。切到备用模型的第一轮请求会比平时慢、比平时贵。如果降级很频繁，这个成本值得放进考虑。</p>
+<p>熔断打开时，如果没有备用路可走，给模型的话要阻止它在这一轮里反复尝试：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/circuit.py::describe_open"><span class="kw">def</span> <span class="fn">describe_open</span>(exc<span class="op">:</span> <span class="cls">CircuitOpen</span>) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""熔断打开时给模型的一句话：不要让它在这一轮里反复重试同一个依赖。"""</span>
+    <span class="kw">return</span> (<span class="str">f"Error: {exc.name} 暂时不可用（已熔断，约 {exc.retry_in:.0f}s 后自动试探恢复）。"</span>
+            <span class="str">"不要在这一轮里重复调用它；如果任务离不开它，请停下来说明情况。"</span>)</code></pre></div>
+
+<h2 id="hx-20-s6">三个仓库里的“半个熔断器”</h2>
+<p>虽然没有一个仓库实现了完整的三态熔断器，但它们解决的是同一类问题，各自给出了一部分答案。对照着看，能更清楚三态设计里每一部分的作用。</p>
+<p><strong>OpenHarness 的自动压缩保护：只有闭合和断开</strong>。连续失败 3 次后，自动压缩就不再触发，失败时返回原来的历史而不让这一轮崩溃，并且每次失败都记一个带失败次数的检查点。它有熔断器的前两个要素：失败计数和断开。它没有的是半开和自动恢复：一旦断开，这个会话里就不会再自动压缩，即使导致失败的原因（比如摘要模型的临时故障）早就消失了。对于压缩这种“没有也能凑合”的功能，单向断开是一个可以接受的简化；对于模型调用这种核心依赖，就不够了。</p>
+<p><strong>DSH 的“有进展才继续”：防的是另一种空转</strong>。DSH 的压缩插件处理“上下文超长”时，只有在历史确实被改写过（表面的改写代数增加了）的情况下，才消耗一次重试额度并返回“重试”；没有实际进展就直接交给下一个处理者。它的测试里有一条专门覆盖“后端报告成功、但没有真的替换历史”的情况：这时不重试。这不是熔断，但它解决了熔断器也要解决的问题——避免在一件不会成功的事情上反复尝试——只是判据不是“失败了几次”，而是“有没有进展”。这个判据在 agent 里很有用：很多空转不表现为失败，而表现为“成功了但什么都没变”。</p>
+<p><strong>DSH 的重复调用提醒：只提醒，不拦截</strong>。模型连续重复同一个工具调用 3、5、8 次时，守卫会给模型一个提醒；用户插话后重新计数。它的设计原则写在注释里：观察并补充信息，从不否决。这是熔断思想在模型行为上的应用——检测“在同一件事上打转”——但它选择把决定权留给模型，而不是像熔断器那样直接拒绝。</p>
+<p><strong>labs 第 01 章的连续错误预算</strong>也属于这一类：工具连续失败达到上限就停止循环。它是会话级的、单向的、作用于整个循环的“熔断”。</p>
+<p>把这些放在一起，可以看出熔断思想在 agent 里有三个层次：</p>
+<div class="table-wrap"><table><thead><tr><th>层次</th><th>防的是</th><th>例子</th><th>恢复方式</th></tr></thead><tbody>
+<tr><td>依赖级</td><td>外部服务持续故障</td><td>本章的三态熔断器</td><td>冷却后自动试探</td></tr>
+<tr><td>功能级</td><td>某个辅助功能反复失败</td><td>OpenHarness 的自动压缩保护</td><td>（OpenHarness：不恢复）</td></tr>
+<tr><td>行为级</td><td>模型在同一件事上打转</td><td>DSH 的重复调用提醒、有进展才继续；labs 的连续错误预算</td><td>用户插话、或者停止循环</td></tr>
+</tbody></table></div>
+
+<h2 id="hx-20-s7">把韧性三章接起来</h2>
+<p>重试、超时、熔断、降级，组合起来是一条完整的处理链。一次模型调用从发出到得到结果（或者确定失败），会经过这些层：</p>
+<div class="table-wrap"><table><thead><tr><th>层（由外到内）</th><th>作用</th><th>章节</th></tr></thead><tbody>
+<tr><td>整轮截止时刻</td><td>这件事总共能花多久，所有内层从它派生</td><td>19</td></tr>
+<tr><td>降级链</td><td>主路不通时按顺序尝试备用路</td><td>20</td></tr>
+<tr><td>熔断器（每条路线一个）</td><td>依赖持续失败时立刻拒绝</td><td>20</td></tr>
+<tr><td>重试</td><td>临时故障时退避重试</td><td>18</td></tr>
+<tr><td>单次调用的超时（空闲 + 总时长）</td><td>不回来的请求变成可处理的失败</td><td>19</td></tr>
+<tr><td>实际调用</td><td>—</td><td>00</td></tr>
+</tbody></table></div>
+<p>这个顺序有讲究：熔断器在重试外面（第 4 节），降级在熔断外面（断开是切换的信号），整轮截止时刻在所有东西外面（重试和降级都不能让整轮超时）。</p>
+
+<h2 id="hx-20-s8">坑与失败案例</h2>
+<h3 id="hx-20-s8-1">坑一：没有熔断，每个请求都从头撞墙</h3>
+<ul>
+<li><strong>触发条件</strong>：依赖持续故障，只有重试。</li>
+<li><strong>后果</strong>：每个请求都要等完整个重试序列才失败，用户每次白等；所有客户端的重试持续压在故障的服务上，延长恢复时间。</li>
+<li><strong>怎么防</strong>：每个外部依赖一个熔断器，放在重试外面。</li>
+</ul>
+<h3 id="hx-20-s8-2">坑二：只有断开，没有恢复</h3>
+<ul>
+<li><strong>触发条件</strong>：熔断后需要重启进程或者人工操作才能恢复。</li>
+<li><strong>后果</strong>：依赖早就恢复了，harness 还在拒绝请求；或者运维人员忘了恢复，功能一直不可用。</li>
+<li><strong>怎么防</strong>：三态设计，冷却后自动进入半开试探。OpenHarness 的自动压缩保护是单向的，对于辅助功能可以接受，对于核心依赖不行。</li>
+</ul>
+<h3 id="hx-20-s8-3">坑三：一个全局熔断器</h3>
+<ul>
+<li><strong>触发条件</strong>：整个 harness 共用一个熔断器。</li>
+<li><strong>后果</strong>：主模型故障时，熔断器断开，备用模型、工具调用也一起被拒绝——降级链完全失效。</li>
+<li><strong>怎么防</strong>：熔断器粒度与故障粒度一致：每个提供方、每个外部服务一个。</li>
+</ul>
+<h3 id="hx-20-s8-4">坑四：客户端错误打开了熔断器</h3>
+<ul>
+<li><strong>触发条件</strong>：所有异常都计入熔断器的失败，包括 400、401。</li>
+<li><strong>后果</strong>：一个持续发送错误请求的会话（比如上下文超长、参数格式错误）把熔断器打开，所有其他正常的会话被拒绝。</li>
+<li><strong>怎么防</strong>：只有临时故障计入失败；参数错误、鉴权错误不计入，甚至可以视为“依赖是好的”的证据。</li>
+</ul>
+<h3 id="hx-20-s8-5">坑五：悄悄降级</h3>
+<ul>
+<li><strong>触发条件</strong>：主模型不可用时自动切到备用模型，不告诉用户。</li>
+<li><strong>后果</strong>：用户感觉 agent “变笨了”，花时间排查提示词和代码，找不到原因；如果备用模型在某个关键任务上出了错，用户甚至不知道这次结果来自一个更弱的模型。</li>
+<li><strong>怎么防</strong>：降级结果带标记和说明，界面上可见；会话日志里记录每次降级。</li>
+</ul>
+<h3 id="hx-20-s8-6">坑六：半开时放行所有请求</h3>
+<ul>
+<li><strong>触发条件</strong>：冷却结束后进入半开，不限制试探数量。</li>
+<li><strong>后果</strong>：冷却期间积压的请求在同一时刻全部涌向依赖。依赖如果刚恢复，可能又被压垮；如果没恢复，所有这些请求一起失败，熔断器重新断开，但已经白白消耗了一大批请求。</li>
+<li><strong>怎么防</strong>：半开时只放行少量试探请求（labs 默认 1 个），其余继续被拒绝，直到试探结果出来。</li>
+</ul>
+
+<h2 id="hx-20-s9">多仓库取舍对比</h2>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th><th>labs</th></tr></thead><tbody>
+<tr><td>三态熔断器</td><td>无</td><td>无</td><td>无</td><td>有（教学版）</td></tr>
+<tr><td>熔断的影子</td><td>重试预算按步清零；压缩“有进展才重试”；重复调用提醒（只提醒不拦截）</td><td>自动压缩连续失败 3 次后不再触发（单向，不恢复）</td><td>连续 529 最多 2 次（重试上限）</td><td>第 01 章连续错误预算</td></tr>
+<tr><td>判据</td><td>重试次数；有没有实际进展</td><td>连续失败次数</td><td>连续 529 次数</td><td>连续失败数 + 窗口失败率</td></tr>
+<tr><td>恢复</td><td>每步 / Agent 空闲时清零</td><td>摘要成功时清零；断开后不再尝试</td><td>不适用</td><td>冷却后半开，试探数受限</td></tr>
+<tr><td>降级</td><td>（可通过提供方路由实现）</td><td>无</td><td>无</td><td>降级链 + 熔断跳过 + 降级标记</td></tr>
+</tbody></table></div>
+<p>三个仓库都没有实现三态熔断器，这本身是一个值得注意的信号：对于单用户、单会话的本地 agent，熔断器的价值有限——只有一个会话在用，它自己的重试上限已经能防止大部分空转。熔断器的价值随着并发会话数增长：会话越多，共享“依赖挂了”这个知识的收益越大。如果你的 harness 是一个服务多个用户的后端，熔断器几乎是必需的；如果是一个本地命令行工具，重试上限加上 DSH 那种“有进展才继续”的判据，可能就够了。</p>
+
+<h2 id="hx-20-s10">小结</h2>
+<ul>
+<li>重试和超时只看单次请求，不记得过去；熔断器记住依赖最近的表现，持续失败时快速失败、减少压力、触发降级。</li>
+<li>三态：闭合正常放行，断开直接拒绝，冷却后半开放行少量试探；试探结果决定恢复还是继续断开。</li>
+<li>判据用连续失败数加窗口失败率；只有临时故障计入失败。</li>
+<li>一个依赖一个熔断器，状态进程级共享；熔断器放在重试外面。</li>
+<li>降级链按顺序排好，熔断中的路线直接跳过；降级必须告诉用户；最后一级是停在可恢复的状态，而不是随便给个结果。</li>
+<li>参考仓库都没有三态熔断器，但有它的影子：OpenHarness 的单向断开、DSH 的“有进展才继续”和重复调用提醒。</li>
+</ul>
+<p>韧性部分到这里结束。到目前为止，harness 的所有能力都是写在 harness 自己的代码里的。下一部分讨论怎样让别人——用户、插件作者、第三方服务——在不改 harness 代码的情况下扩展它。继续读：<span class="xref-pending" data-href="#hx-21">Hooks</span>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 白板的第三页（虚构）</span>
+<p>熔断器和降级链上线后，下一次主模型故障持续了二十五分钟。这一次，第一个撞上故障的会话花了一分钟确认“它挂了”，熔断器断开；接下来的所有请求都直接走了备用模型，每个回复开头都带着一行灰色的小字：“主模型暂时不可用，当前使用备用模型”。二十五分钟里，对主模型的请求只有每 30 秒一次的试探。第五十次试探成功，熔断器闭合，接下来的请求自动回到了主模型。</p>
+<p>有个用户在反馈里写：“今天中午好像切了一下模型，不过不影响。”林舟把这条反馈截图发到群里，老唐回了个大拇指。</p>
+<p>老唐把白板翻到第三页，“它会出事”下面写了三行：再试一次、别等太久、别撞同一堵墙。然后他把三页白板拍下来，发给了一个新同事——客户那边派来对接的工程师，叫阿青。</p>
+<p>阿青看完，回了一条消息：“很完整。我们这边有几个需求：每次橘子改完代码之后要自动跑一遍我们的格式化脚本；它调用部署工具之前要先通知我们的值班群；还有，我们有一套内部的代码规范检查工具，想让橘子也能用。这些需要改橘子的代码吗？”</p>
+<p>林舟看了看橘子的代码，所有的东西——工具、规则、重试、熔断——都写死在里面。每加一个这样的需求，就要改一次橘子、发一个新版本。</p>
+<p class="hx-story-say">“到现在为止，橘子能做的每一件事，都是我们写进去的，”老唐说，“接下来的问题是：怎么让别人也能往里加东西，又不把它搞坏。”</p>
+<p>下一部分：<span class="xref-pending" data-href="#hx-21">Hooks</span>。</p>
+</div>
+</section>
