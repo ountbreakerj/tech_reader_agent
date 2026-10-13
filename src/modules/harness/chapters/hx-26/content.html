@@ -1,0 +1,324 @@
+<section class="chapter" id="ch-hx-26" data-slug="hx-26"><div class="ch-head"><span class="ch-num">第 26 章</span></div><h1 id="hx-26">Agent 范式</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 26 章（虚构）</span>
+<p>白板背面写下的第一个问题来自阿青团队自己的活：“我们想把过去两年的故障复盘整理成一份一页纸的经验清单。”</p>
+<p>橘子用最直接的办法做：读一份复盘、写一段、接着读下一份。读到第十一份，它的上下文里已经堆了十份复盘的全文和十段半成品，而它写出来的清单开始重复——第五份和第八份讲的是同一类问题，但它没有发现，因为那两份相隔太远，中间隔了六个文件。</p>
+<p>老唐换了三种做法试同一件事。</p>
+<p><strong>第一种</strong>，让它先列出计划再执行：“先按主题把四十八份复盘分成六组，每组写一小段，最后合并。”它列了计划，橘子照着执行，中途发现分组不合理，重新分了一次。清单的质量明显好了，但多花了规划的时间。</p>
+<p><strong>第二种</strong>，把四十八份拆成六组，每组开一个独立的子代理，各自总结，最后主线合并。整体快了很多，每组内部的细节互不干扰。代价是有一组的结论和另一组对不上，因为两组对“配置错误”和“部署错误”的划分不同——子代理彼此看不到对方。</p>
+<p><strong>第三种</strong>，先让橘子写一版，然后交给一个“评审”角色，拿着他们的故障复盘模板逐条核对，把不合格的退回去重写。这一版最慢，但只有这一版让阿青直接拿去用了。</p>
+<p class="hx-story-say">“零件是同一套，”老唐说，“摆法不一样，结果差得很多。”</p>
+<p>这一章不再讲新的部件，而是讲怎么摆：同一套循环、工具、权限、委派，按什么样的控制流去解一个任务。这是全书最后一章。</p>
+</div>
+<p>前二十五章造的是 harness。这一章换一个角度：<strong>用这些部件，按什么样的控制流去解一个任务</strong>。同一个 harness，摆法不同，成本和效果可能差好几倍。</p>
+<p>这些摆法在文献里被叫做 agent 范式。它们不是互斥的选项，也不是越复杂越好；它们各自适合某一类任务。真正需要练的能力，是看到一个任务之后判断该用哪一种——或者判断这个任务根本不该交给 agent。</p>
+
+<h2 id="hx-26-s0">先看全貌：有几个范式、分别适合什么</h2>
+<p>一句话：范式是 harness 之上的控制流——谁决定下一步、什么时候结束、状态放在哪。同一个 agent 循环，可以摆成六种以上的形状。</p>
+<div class="table-wrap"><table><thead><tr><th>范式</th><th>控制流</th><th>适合的任务</th><th>主要代价</th></tr></thead><tbody>
+<tr><td>ReAct</td><td>思考 → 行动 → 观察，循环到给出答案</td><td>边探索边决定的任务：查文档、调试、找 bug</td><td>容易在同一个思路上打转；轮数不好预估</td></tr>
+<tr><td>Plan-and-Execute</td><td>先列完整计划，再逐步执行，可重新规划</td><td>步骤明确、需要人先审计划的任务</td><td>多一次规划调用；计划可能第一步就被现实推翻</td></tr>
+<tr><td>分治（Divide and Conquer）</td><td>拆成独立子任务，分别求解，再合并</td><td>子任务彼此独立的批量工作：总结长文档、迁移很多文件</td><td>合并是新的失败点；子任务之间看不到彼此</td></tr>
+<tr><td>DAG 规划</td><td>有依赖关系的子任务按拓扑顺序执行，同层可并行</td><td>有明确前置关系的工程任务：先建表、再写接口、最后端到端测试</td><td>规划结果必须校验（缺依赖、成环）</td></tr>
+<tr><td>Reflexion</td><td>做 → 评审 → 反思 → 带着反思重做</td><td>有可验证标准、第一次常常不达标的任务</td><td>必须有外部评审信号；多花轮数</td></tr>
+<tr><td>多 agent 编排</td><td>协调者分派给不同角色的 worker，再汇总</td><td>需要不同视角或不同工具集的任务：审查 + 测试 + 文档</td><td>沟通与汇总成本高；角色之间可能不一致</td></tr>
+</tbody></table></div>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>怎么选范式</td><td>用最熟的那一种</td><td>看两件事：子任务之间是否独立、有没有可验证的完成标准</td></tr>
+<tr><td>要不要先规划</td><td>总是先列一个计划</td><td>步骤少于三步、或者下一步取决于刚看到的结果时，直接 ReAct；计划值得列的时候是“做完之后能让人审”</td></tr>
+<tr><td>谁来验收</td><td>让模型自己说“完成了”</td><td>能验证的就跑验证（测试、规则、模板）；不能验证的，才让人看</td></tr>
+<tr><td>什么时候停下</td><td>等模型说完了</td><td>每个范式都要有自己明确的上限：轮数、子任务数、尝试次数、递归深度</td></tr>
+</tbody></table></div>
+<h3 id="hx-26-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript）：本体是一个 ReAct 循环（思考与工具调用交替），把“长任务不跑偏”交给外部机制——一个专门的长任务包用工作区当作长期记忆和事实来源，靠循环推进工作。它没有内置“先规划再执行”这一步，而是通过指令文件和 Skill 把计划写在仓库里。</p>
+<p><strong>OpenHarness</strong>（Python）：本体也是循环；有几种权限模式，其中“计划模式”限制了执行类的工具，用于先让人看方案。</p>
+<p><strong>learn-claude-code</strong>（教程）：课程后期有一课专门讲目标循环，属于长任务的规划与推进；其余章节都是循环加不同部件。</p>
+<p>三个仓库的共同点是：<strong>它们都只提供一种执行形状（循环），把别的范式当成“指令 + 工具组合”来实现</strong>。这是很务实的做法，也是本章后面要展开的观点——范式的差别主要在提示、工具集和外部验收机制上，而不一定需要新的运行时。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/paradigms.py</code>，六个范式各写成一个小函数，都基于同一套 <code class="inl">run_agent</code> 和 LLM 协议，18 条测试用 FakeLLM 回放。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1 节讲 ReAct，以及它其实是第 01 章循环的一种用法，不是新东西。</li>
+<li>第 2、3 节讲 Plan-and-Execute 与分治，这两节给出“什么时候值得先规划 / 什么时候值得拆开”。</li>
+<li>第 4 节讲 DAG，第 5 节讲 Reflexion（外部验证信号是关键），第 6 节讲多 agent 编排。</li>
+<li>第 7 节给出选择流程，第 8 节讲组合，第 9 节讲什么时候不该用 agent。</li>
+</ol>
+<p>本章讲的是控制流与取舍，不引用具体源码行；各仓库的做法按已核对的笔记描述。</p></blockquote>
+
+<h2 id="hx-26-s1">ReAct：思考、行动、观察</h2>
+<p>ReAct 是 2022 年提出的一种提示与循环方式：让模型交替地产出“思考”和“行动”，行动的结果作为观察回灌，直到它能给出答案。名字来自 reasoning（推理）加 acting（行动）。</p>
+<p>它和本书第 01 章讲的 agent loop 是同一件事，唯一的区别是<strong>要求模型把思考写出来</strong>：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/paradigms.py::REACT_SYSTEM"><span class="cls">REACT_SYSTEM</span> <span class="op">=</span> (
+    <span class="str">"每一步先用一两句话写出你的思考（以「思考：」开头），再决定调用哪个工具；"</span>
+    <span class="str">"看到工具结果后继续思考。确定答案后，不再调用工具，直接给出最终回答。"</span>
+)</code></pre></div>
+<p>为什么值得多写这几句思考？因为循环里每一步看到的只有历史：如果历史里只有工具调用和工具结果，模型下一步只能从“刚才发生了什么”重新推断“我在做什么”。把思考写下来，前面的意图就留在了上下文里，后续每一步都能看到。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_paradigms.py::ReactTests.test_thoughts_and_actions_interleave">    <span class="kw">def</span> <span class="fn">test_thoughts_and_actions_interleave</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        llm <span class="op">=</span> <span class="cls">FakeLLM</span>([
+            tool(<span class="str">"search"</span>, <span class="str">"思考：先查一下默认超时是多少。"</span>, q<span class="op">=</span><span class="str">"timeout"</span>),
+            tool(<span class="str">"calc"</span>, <span class="str">"思考：文档说 30 秒，换算成毫秒。"</span>, expr<span class="op">=</span><span class="str">"30*1000"</span>),
+            text(<span class="str">"默认超时是 30000 毫秒。"</span>),
+        ])
+        trace <span class="op">=</span> react(llm, <span class="str">"默认超时是多少毫秒？"</span>, <span class="cls">TOOLS</span>, <span class="cls">SCHEMAS</span>)
+        self.assertEqual(trace.actions, [<span class="str">"search"</span>, <span class="str">"calc"</span>])
+        self.assertEqual(len(trace.thoughts), <span class="num">3</span>)
+        self.assertTrue(trace.thoughts[<span class="num">0</span>].startswith(<span class="str">"思考"</span>))
+        self.assertEqual(trace.answer, <span class="str">"默认超时是 30000 毫秒。"</span>)
+        self.assertEqual(trace.stop, <span class="str">"completed"</span>)</code></pre></div>
+<p>ReAct 的代价要说清楚：</p>
+<ul>
+<li><strong>多花 token</strong>。每轮多写一段思考，思考也会一直留在历史里。</li>
+<li><strong>思考会变成承诺</strong>。模型写下“我先检查配置，再检查代码”，后面即使发现方向不对，也倾向于把这句话执行完。这类现象在有明确计划的任务里更明显。</li>
+<li><strong>轮数不好预估</strong>。它在探索类任务里效率最高（不需要预先知道路怎么走），在步骤明确的任务里反而比直接列计划更慢。</li>
+</ul>
+<p>适合 ReAct 的信号：你不知道答案在第几个文件里；下一步做什么取决于刚才看到的输出；需要边查边判断。</p>
+
+<h2 id="hx-26-s2">Plan-and-Execute：先列计划，再执行</h2>
+<p>和 ReAct 相反的一种摆法：先让模型把完整计划列出来，再一步步执行，每步执行完可以让规划者根据结果调整剩余计划。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/paradigms.py::plan_and_execute"><span class="kw">def</span> <span class="fn">plan_and_execute</span>(planner<span class="op">:</span> <span class="cls">LLM</span>, executor_factory<span class="op">:</span> <span class="cls">Callable</span>[[], <span class="cls">LLM</span>], task<span class="op">:</span> str,
+                     tools<span class="op">:</span> dict[str, <span class="cls">Tool</span>], schemas<span class="op">:</span> list[dict], <span class="op">*</span>,
+                     max_steps<span class="op">:</span> int <span class="op">=</span> <span class="num">10</span>, replan<span class="op">:</span> bool <span class="op">=</span> <span class="kw">True</span>) <span class="op">-&gt;</span> <span class="cls">PlanRun</span><span class="op">:</span>
+    <span class="str">"""先规划、再逐步执行。每执行完一步，可以让规划者根据结果修改剩余计划。
+
+    和 ReAct 的区别：计划是显式的数据，可以在执行前给人看、可以校验、可以在第 n 步时修改；
+    代价是多了规划调用，而且计划可能在第一步就被现实推翻。
+    """</span>
+    run <span class="op">=</span> <span class="cls">PlanRun</span>()
+    plan <span class="op">=</span> [str(s) <span class="kw">for</span> s <span class="kw">in</span> parse_json_list(ask(planner, <span class="cls">PLANNER_SYSTEM</span>, task))]
+    run.plans.append(list(plan))
+    <span class="kw">while</span> plan<span class="op">:</span>
+        <span class="kw">if</span> len(run.steps) <span class="op">&gt;=</span> max_steps<span class="op">:</span>
+            run.stop <span class="op">=</span> <span class="str">"max_steps"</span>
+            <span class="kw">return</span> run
+        step <span class="op">=</span> plan.pop(<span class="num">0</span>)
+        done <span class="op">=</span> <span class="str">"\n"</span>.join(<span class="str">f"- {s}：{r}"</span> <span class="kw">for</span> s, r <span class="kw">in</span> run.steps)
+        prompt <span class="op">=</span> <span class="str">f"总任务：{task}\n已完成：\n{done or '（无）'}\n现在执行这一步：{step}"</span>
+        result <span class="op">=</span> run_agent(executor_factory(), <span class="cls">EXECUTOR_SYSTEM</span>, prompt, tools, schemas, <span class="cls">LoopConfig</span>(max_turns<span class="op">=</span><span class="num">6</span>))
+        run.steps.append((step, result.final_text.strip() <span class="kw">or</span> <span class="str">f"（未完成：{result.stop}）"</span>))
+        <span class="kw">if</span> replan<span class="op">:</span>
+            done <span class="op">=</span> <span class="str">"\n"</span>.join(<span class="str">f"- {s}：{r}"</span> <span class="kw">for</span> s, r <span class="kw">in</span> run.steps)
+            plan <span class="op">=</span> [str(s) <span class="kw">for</span> s <span class="kw">in</span> parse_json_list(ask(
+                planner, <span class="cls">REPLANNER_SYSTEM</span>, <span class="str">f"总任务：{task}\n已完成：\n{done}\n原剩余计划：{json.dumps(plan, ensure_ascii=False)}"</span>))]
+            run.plans.append(list(plan))
+    run.stop <span class="op">=</span> <span class="str">"completed"</span>
+    <span class="kw">return</span> run</code></pre></div>
+<p>它比 ReAct 多出来的东西是<strong>计划本身是一份数据</strong>——可以在执行前展示给人看、可以校验（步骤数、是否有循环依赖）、可以在执行到一半时修改：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_paradigms.py::PlanExecuteTests.test_plan_then_execute_with_replan">    <span class="kw">def</span> <span class="fn">test_plan_then_execute_with_replan</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        planner <span class="op">=</span> <span class="cls">FakeLLM</span>([
+            text(<span class="str">'["列出文件", "统计行数", "写报告"]'</span>),
+            text(<span class="str">'["统计行数", "写报告"]'</span>),
+            text(<span class="str">'["写报告"]'</span>),          <span class="cmt"># 规划者可以根据结果修改剩余计划</span>
+            text(<span class="str">"[]"</span>),
+        ])
+        executor_outputs <span class="op">=</span> iter([<span class="str">"共 3 个文件"</span>, <span class="str">"共 120 行"</span>, <span class="str">"报告已写好"</span>])
+        run <span class="op">=</span> plan_and_execute(planner, <span class="kw">lambda</span><span class="op">:</span> <span class="cls">FakeLLM</span>([text(next(executor_outputs))]), <span class="str">"做个统计"</span>, <span class="cls">TOOLS</span>, <span class="cls">SCHEMAS</span>)
+        self.assertEqual(run.stop, <span class="str">"completed"</span>)
+        self.assertEqual([s <span class="kw">for</span> s, _ <span class="kw">in</span> run.steps], [<span class="str">"列出文件"</span>, <span class="str">"统计行数"</span>, <span class="str">"写报告"</span>])
+        self.assertEqual(len(run.plans), <span class="num">4</span>)</code></pre></div>
+<p>什么时候值得先规划：</p>
+<div class="table-wrap"><table><thead><tr><th>信号</th><th>为什么</th></tr></thead><tbody>
+<tr><td>步骤多（超过五步）且相互关系明确</td><td>计划能帮你（和模型）看到全局，避免走一步看一步导致的返工</td></tr>
+<tr><td>想让人先审一遍方案再动手</td><td>计划是数据，可以直接展示、直接编辑；这是 OpenHarness 的“计划模式”在做的</td></tr>
+<tr><td>步骤之间需要保持一致的约定</td><td>计划里可以写明约定（命名、风格、接口），执行时每一步都能看到</td></tr>
+</tbody></table></div>
+<p>什么时候不值得：步骤少于三步；或者下一步严格取决于刚看到的结果（这时候列出来的计划第一步就会被推翻，白花一次调用和一笔 token）。</p>
+<p>有一个细节容易忽略：<strong>重新规划的频率</strong>。每一步都重新规划最灵活，但每一步都要多一次模型调用；只在失败时重新规划最省，但可能沿着一个错误的计划走很多步。折中做法是：每一步执行完都检查一次“原计划是否还成立”，只有在偏离时才重新规划——labs 的实现里，规划者被明确告知“如果任务已经完成，输出空数组”，这也给了它提前收工的机会。</p>
+
+<h2 id="hx-26-s3">分治：拆开、各自解、合并</h2>
+<p>分治解决的是故事里那种问题：四十八份复盘，每份都要读全文，但主线不需要记住每一份的细节——它只需要每组的一段结论。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/paradigms.py::divide_and_conquer"><span class="kw">def</span> <span class="fn">divide_and_conquer</span>(llm<span class="op">:</span> <span class="cls">LLM</span>, task<span class="op">:</span> str, <span class="op">*</span>, max_depth<span class="op">:</span> int <span class="op">=</span> <span class="num">2</span>, max_children<span class="op">:</span> int <span class="op">=</span> <span class="num">4</span>,
+                       depth<span class="op">:</span> int <span class="op">=</span> <span class="num">0</span>) <span class="op">-&gt;</span> <span class="cls">DacNode</span><span class="op">:</span>
+    <span class="str">"""递归地拆分、求解、合并。
+
+    分治适合「子任务彼此独立」的情况：总结一份很长的文档（按章节）、审查一个大 PR（按文件）、
+    调研一个问题（按方向）。每个子任务在自己的上下文里完成，主上下文只看到子结果。
+    两个必要的上限：递归深度和分支数，否则拆分本身就会失控。
+    """</span>
+    node <span class="op">=</span> <span class="cls">DacNode</span>(task, depth)
+    parts<span class="op">:</span> list[str] <span class="op">=</span> []
+    <span class="kw">if</span> depth <span class="op">&lt;</span> max_depth<span class="op">:</span>
+        parts <span class="op">=</span> [str(p) <span class="kw">for</span> p <span class="kw">in</span> parse_json_list(ask(llm, <span class="cls">SPLIT_SYSTEM</span>, task))][<span class="op">:</span>max_children]
+    <span class="kw">if</span> <span class="kw">not</span> parts<span class="op">:</span>
+        node.result <span class="op">=</span> ask(llm, <span class="cls">SOLVE_SYSTEM</span>, task)
+        <span class="kw">return</span> node
+    node.children <span class="op">=</span> [divide_and_conquer(llm, p, max_depth<span class="op">=</span>max_depth, max_children<span class="op">=</span>max_children, depth<span class="op">=</span>depth <span class="op">+</span> <span class="num">1</span>)
+                     <span class="kw">for</span> p <span class="kw">in</span> parts]
+    pieces <span class="op">=</span> <span class="str">"\n"</span>.join(<span class="str">f"[{c.task}]\n{c.result}"</span> <span class="kw">for</span> c <span class="kw">in</span> node.children)
+    node.result <span class="op">=</span> ask(llm, <span class="cls">MERGE_SYSTEM</span>, <span class="str">f"总任务：{task}\n子任务结果：\n{pieces}"</span>)
+    <span class="kw">return</span> node</code></pre></div>
+<p>它的适用条件很明确：<strong>子任务彼此独立</strong>。四十八份复盘可以按主题分组，组与组之间不需要互相参照；反过来，“把昨天的改动整理成一份发布说明”就不适合拆——每一条改动都可能影响别人怎么理解另一条。</p>
+<p>三个必须设的上限：</p>
+<ul>
+<li><strong>递归深度</strong>。拆出来的子任务还能再拆，不设深度会一直拆下去，每一层都是一次模型调用。</li>
+<li><strong>分支数</strong>。一次拆出二十个分支，合并那一步就要读二十份结果，合并本身又变成了一个新的长任务。</li>
+<li><strong>拆不动的就直接做</strong>。labs 的实现里，模型可以返回空数组表示“这个任务足够小，直接完成”——判断“不需要拆”和判断“怎么拆”同样重要。</li>
+</ul>
+<p>合并是分治最容易被低估的一步，也是它最典型的失败点：故事里两组子代理对“配置错误”和“部署错误”的划分不同，合并出来的清单里同一类问题出现了两次。三个缓解办法：拆分时就把分类标准写清楚（而不是让每个子代理自己决定）；合并时明确要求“发现重复或矛盾要指出来”；或者干脆把合并也当成一个需要判断的子任务，用一次专门的模型调用来做。</p>
+
+<h2 id="hx-26-s4">DAG 规划：有依赖的分层执行</h2>
+<p>分治假设子任务彼此独立。现实中很多任务有依赖关系：“先设计表结构，再写接口，再写页面，最后端到端测试”——接口依赖表结构，端到端测试依赖接口和页面。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/paradigms.py::topo_layers"><span class="kw">def</span> <span class="fn">topo_layers</span>(tasks<span class="op">:</span> list[<span class="cls">DagTask</span>]) <span class="op">-&gt;</span> list[list[str]]<span class="op">:</span>
+    <span class="str">"""按依赖关系分层：同一层的任务互不依赖，可以并行；下一层依赖上一层。
+
+    规划结果来自模型，必须校验：依赖不存在的任务、重复 id、有环，都在执行前报错。
+    """</span>
+    ids <span class="op">=</span> [t.id <span class="kw">for</span> t <span class="kw">in</span> tasks]
+    <span class="kw">if</span> len(set(ids)) <span class="op">!=</span> len(ids)<span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">ValueError</span>(<span class="str">"任务 id 重复"</span>)
+    known <span class="op">=</span> set(ids)
+    <span class="kw">for</span> t <span class="kw">in</span> tasks<span class="op">:</span>
+        missing <span class="op">=</span> [d <span class="kw">for</span> d <span class="kw">in</span> t.deps <span class="kw">if</span> d <span class="kw">not</span> <span class="kw">in</span> known]
+        <span class="kw">if</span> missing<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ValueError</span>(<span class="str">f"任务 {t.id} 依赖了不存在的任务 {missing}"</span>)
+    remaining <span class="op">=</span> {t.id<span class="op">:</span> set(t.deps) <span class="kw">for</span> t <span class="kw">in</span> tasks}
+    layers<span class="op">:</span> list[list[str]] <span class="op">=</span> []
+    <span class="kw">while</span> remaining<span class="op">:</span>
+        ready <span class="op">=</span> sorted(i <span class="kw">for</span> i, deps <span class="kw">in</span> remaining.items() <span class="kw">if</span> <span class="kw">not</span> deps)
+        <span class="kw">if</span> <span class="kw">not</span> ready<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">CycleError</span>(<span class="str">f"依赖有环：{sorted(remaining)}"</span>)
+        layers.append(ready)
+        <span class="kw">for</span> i <span class="kw">in</span> ready<span class="op">:</span>
+            <span class="kw">del</span> remaining[i]
+        <span class="kw">for</span> deps <span class="kw">in</span> remaining.values()<span class="op">:</span>
+            deps.difference_update(ready)
+    <span class="kw">return</span> layers</code></pre></div>
+<p>拓扑分层之后，同一层里的任务互不依赖，可以并行；每一层执行完再进下一层：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_paradigms.py::DagTests.test_each_task_sees_only_its_deps">    <span class="kw">def</span> <span class="fn">test_each_task_sees_only_its_deps</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        seen <span class="op">=</span> {}
+
+        <span class="kw">def</span> <span class="fn">solve</span>(task, inputs)<span class="op">:</span>
+            seen[task.id] <span class="op">=</span> sorted(inputs)
+            <span class="kw">return</span> <span class="str">f"{task.id}-done"</span>
+
+        results, _ <span class="op">=</span> run_dag(self.<span class="cls">TASKS</span>, solve)
+        self.assertEqual(seen[<span class="str">"e2e"</span>], [<span class="str">"api"</span>, <span class="str">"ui"</span>])
+        self.assertEqual(seen[<span class="str">"api"</span>], [<span class="str">"schema"</span>])
+        self.assertEqual(results[<span class="str">"e2e"</span>], <span class="str">"e2e-done"</span>)</code></pre></div>
+<p>两件事值得强调：</p>
+<ul>
+<li><strong>规划结果必须校验</strong>。依赖了不存在的任务、id 重复、依赖成环，这三种错误在模型给出的计划里都可能出现（尤其成环：模型会写出“A 依赖 B，B 依赖 A”这种看起来合理的东西）。校验要在执行前做，报错要具体。</li>
+<li><strong>每个任务只拿到它依赖的结果</strong>，而不是全部已完成的结果。这既省上下文，也避免无关信息干扰判断。labs 测试里 <code class="inl">e2e</code> 只看到 <code class="inl">api</code> 和 <code class="inl">ui</code> 的结果，看不到 <code class="inl">schema</code> 的——因为 <code class="inl">schema</code> 的内容已经体现在接口里了。</li>
+</ul>
+<p>DAG 的代价是“层”的粒度不容易定好：一层里塞十个任务，并行度上去了，但任何一个人的失败都会让整层重来；一层一个任务，就退化成串行。实践中常见的是“层内不超过 3–5 个，且尽量让同层的任务类型相同”（都是读、都是改、都是验证）。</p>
+
+<h2 id="hx-26-s5">Reflexion：做完之后自我反思</h2>
+<p>Reflexion 的思路：第一次尝试失败后，让模型根据失败信息写一段反思，再带着这段反思重做。它的核心不是“反思”这个动作，而是<strong>失败信息从哪里来</strong>：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/paradigms.py::reflexion"><span class="kw">def</span> <span class="fn">reflexion</span>(llm<span class="op">:</span> <span class="cls">LLM</span>, task<span class="op">:</span> str, evaluate<span class="op">:</span> <span class="cls">Callable</span>[[str], tuple[bool, str]], <span class="op">*</span>,
+              max_attempts<span class="op">:</span> int <span class="op">=</span> <span class="num">3</span>) <span class="op">-&gt;</span> list[<span class="cls">Attempt</span>]<span class="op">:</span>
+    <span class="str">"""尝试 → 评审 → 反思 → 带着反思再尝试。
+
+    关键在评审器 evaluate：它必须是**外部的、可验证的**信号（测试是否通过、规则是否满足），
+    而不是让同一个模型自己说「我觉得对了」。没有外部信号的反思，常常只是把错误换个说法重复一遍。
+    反思只保留最近几条，避免它们自己把上下文撑满。
+    """</span>
+    attempts<span class="op">:</span> list[<span class="cls">Attempt</span>] <span class="op">=</span> []
+    reflections<span class="op">:</span> list[str] <span class="op">=</span> []
+    <span class="kw">for</span> _ <span class="kw">in</span> range(max_attempts)<span class="op">:</span>
+        memo <span class="op">=</span> <span class="str">"\n"</span>.join(<span class="str">f"- {r}"</span> <span class="kw">for</span> r <span class="kw">in</span> reflections[<span class="op">-</span><span class="num">3</span><span class="op">:</span>])
+        prompt <span class="op">=</span> task <span class="kw">if</span> <span class="kw">not</span> memo <span class="kw">else</span> <span class="str">f"{task}\n\n之前失败的反思：\n{memo}"</span>
+        output <span class="op">=</span> ask(llm, <span class="cls">ATTEMPT_SYSTEM</span>, prompt)
+        passed, feedback <span class="op">=</span> evaluate(output)
+        attempt <span class="op">=</span> <span class="cls">Attempt</span>(output, passed, feedback)
+        attempts.append(attempt)
+        <span class="kw">if</span> passed<span class="op">:</span>
+            <span class="kw">break</span>
+        attempt.reflection <span class="op">=</span> ask(llm, <span class="cls">REFLECT_SYSTEM</span>, <span class="str">f"任务：{task}\n你的输出：{output}\n评审结果：{feedback}"</span>)
+        reflections.append(attempt.reflection)
+    <span class="kw">return</span> attempts</code></pre></div>
+<p>评审器必须提供<strong>外部的、可验证的</strong>信号：</p>
+<div class="table-wrap"><table><thead><tr><th>评审信号</th><th>例子</th><th>可信度</th></tr></thead><tbody>
+<tr><td>测试结果</td><td>跑一遍测试，哪个用例失败</td><td>最高：客观、可复现</td></tr>
+<tr><td>规则检查</td><td>lint、模板校验、schema 校验</td><td>高</td></tr>
+<tr><td>另一个模型的判断（带明确标准）</td><td>“逐条核对这份清单是否覆盖模板里的五项”</td><td>中：标准要写得具体，否则变成另一个模型的印象</td></tr>
+<tr><td>让同一个模型自评“我觉得对了”</td><td>—</td><td>低：它常常把错误换个说法再说一遍</td></tr>
+</tbody></table></div>
+<p>故事里的第三版就是最好的例子：评审角色拿着他们的故障复盘模板逐条核对，这是“带明确标准的外部判断”，所以那一版能直接用。</p>
+<p>三个实现细节：</p>
+<ul>
+<li><strong>反思要短</strong>。labs 提示里写的是“两三句话，不要写代码”——反思会进入下一次尝试的提示，一篇长反思会把任务本身挤到后面。</li>
+<li><strong>只保留最近几条反思</strong>。labs 只带最后三条。每一条反思都是“这一轮之前失败过”，积累太多会让模型变得过度谨慎。</li>
+<li><strong>尝试次数有上限，而且失败要如实报告</strong>。三次之后还是不过，就把三次的输出和三次的失败原因一起交给人，不要挑一个看起来最像的当成结果。</li>
+</ul>
+
+<h2 id="hx-26-s6">多 agent 编排：协调者与角色</h2>
+<p>最后一种摆法：一个协调者把任务分派给不同角色的 worker，各自完成后由协调者汇总。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="kw">def</span> <span class="fn">orchestrate</span>(coordinator<span class="op">:</span> <span class="cls">LLM</span>, workers<span class="op">:</span> dict[str, <span class="cls">Worker</span>], task<span class="op">:</span> str, ...) <span class="op">-&gt;</span> <span class="cls">OrchestrationRun</span><span class="op">:</span>
+    <span class="str">"""协调者分派、worker 各自完成、协调者汇总。
+
+    每个 worker 有自己的系统提示和工具集（权限按角色收窄，hx-23）。
+    协调者给出的角色名必须在名单里，不在的拒绝并记录——不要让模型临时发明一个角色。
+    """</span></code></pre></div>
+<p>它和第 23 章的子代理有什么区别？子代理是“同一件事、拆给多个平行的执行者”；编排是“不同的事、交给不同能力的人”。前者的差异在于任务，后者的差异在于角色：审查者便宜但严格，测试者只会写测试，文档者只读代码不写代码。</p>
+<p>它的三种典型收益：</p>
+<ul>
+<li><strong>工具集按角色收窄</strong>。审查者只有读权限，它对代码库的任何判断都不会改坏东西；这正是第 23 章“权限只能收窄”的应用。</li>
+<li><strong>视角隔离</strong>。让写代码的和审代码的角色分开，比同一个上下文既当运动员又当裁判更容易发现问题。</li>
+<li><strong>成本优化</strong>。简单角色（改格式、生成文档）用便宜的小模型，判断密集的角色用大模型。</li>
+</ul>
+<p>它的代价也很实在：<strong>汇总成本</strong>。协调者要把各角色的结果读进来汇总，这一步的输入可能比任何单个角色都长。而且角色之间可能给出矛盾的结论——协调者的提示里明确要求“指出它们之间的分歧”，而不是把矛盾抹平，这一点对用户信任很重要。</p>
+<p>labs 的实现里有一个刻意的限制：协调者给出的角色名必须在预设名单里，不在的拒绝并记录。让模型临时发明一个角色（“再加一个 hacker 角色来绕过权限”），本质上是让被管理的对象决定管理结构。</p>
+
+<h2 id="hx-26-s7">怎么选：一个判断流程</h2>
+<p>面对一个任务，可以按这个顺序问自己四个问题：</p>
+<ol>
+<li><strong>这件事有可验证的完成标准吗？</strong>有（测试、校验、模板）→ 优先用 Reflexion，因为你能自动判断做得好不好。没有 → 后面要么依赖人验收，要么把标准写出来。</li>
+<li><strong>它需要分几步、步与步之间有依赖吗？</strong>步骤多但彼此独立 → 分治。步骤多且有依赖 → DAG。步骤少或者下一步取决于刚看到的结果 → ReAct。</li>
+<li><strong>需要不同的视角或不同的工具集吗？</strong>需要 → 多 agent 编排。不需要 → 单 agent 加上第 23 章的子代理就够了。</li>
+<li><strong>整个过程要让人参与吗？</strong>要 → Plan-and-Execute（计划可审）加第 16 章的审批。不要 → 前面几项已经覆盖。</li>
+</ol>
+<div class="table-wrap"><table><thead><tr><th>任务的样子</th><th>建议</th></tr></thead><tbody>
+<tr><td>“这个测试为什么失败”</td><td>ReAct：答案在第几个文件里事先不知道</td></tr>
+<tr><td>“给这个功能写一份实现方案，给我看看”</td><td>Plan-and-Execute：产物就是计划，需要人审</td></tr>
+<tr><td>“把这 200 个文件的日志调用换掉”</td><td>分治 + 子代理：每个文件独立，主线只要结论</td></tr>
+<tr><td>“做数据迁移：先建表、再灌数据、再切读流量”</td><td>DAG：有硬依赖，顺序错不得</td></tr>
+<tr><td>“写一个符合我们规范的模块，规范有 40 页”</td><td>Reflexion：规范检查是可验证的外部信号</td></tr>
+<tr><td>“审一下这个 PR，顺便补测试，再更新文档”</td><td>多 agent 编排：三种角色、三种工具集</td></tr>
+<tr><td>“把邮件收件箱整理一下”</td><td>先别交给 agent，看第 9 节</td></tr>
+</tbody></table></div>
+
+<h2 id="hx-26-s8">范式可以叠加</h2>
+<p>这六种不是单选题。实际系统里常见的是几层叠在一起：</p>
+<ul>
+<li><strong>编排 + 分治</strong>：“审查者”这个角色本身可以把二十个文件拆给二十个子任务。</li>
+<li><strong>计划 + DAG</strong>：先规划出任务清单，再把清单里的依赖关系解析成 DAG 执行。</li>
+<li><strong>ReAct + Reflexion</strong>：循环里每一轮结束都跑一次验证，不过就带着失败信息进入下一轮——这其实是很常见的形态，只是没人叫它 Reflexion。</li>
+<li><strong>任何范式 + 长任务连续性</strong>（第 25 章）：跨天的任务无论用哪种摆法，都需要交接文件；DAG 尤其需要，因为“哪些节点做完了”必须落在文件里。</li>
+</ul>
+<p>叠加时要小心一件事：<strong>上限要按总数算，不能按每层算</strong>。一个“编排 + 分治”的系统里，如果三层各自允许 10 次尝试、5 个子任务，那么最坏情况是 10 × 5 × 5 = 250 次模型调用。第 23 章讲过这个问题，在范式叠加时会更严重。</p>
+<p>labs 的六个函数都留了上限参数，并且在文档里写明每个上限是防什么的。看这些参数怎么设，比看控制流本身更能学到一个真实系统的分寸感。</p>
+
+<h2 id="hx-26-s9">什么时候不该用 agent</h2>
+<p>这一节用否定的方式给整本书收尾。</p>
+<p>范式做得再漂亮，也不改变一个事实：<strong>agent 的优势在于处理事先描述不清楚的任务</strong>。如果一个任务能被完整、无歧义地写成步骤，那么脚本、SQL、构建流水线或者一段普通的代码做这件事，会更快、更便宜、更可靠。用 agent 做这类任务，你是在花模型的价钱买确定性的东西。</p>
+<p>几个明确的“该用脚本而不是 agent”的信号：</p>
+<div class="table-wrap"><table><thead><tr><th>信号</th><th>为什么要用脚本</th></tr></thead><tbody>
+<tr><td>步骤完全固定，每次一样</td><td>写一次脚本就能重复用；用 agent 每次都要重新理解一遍</td></tr>
+<tr><td>需要确定性</td><td>发布、部署、数据迁移这类操作的顺序和边界不该由概率模型决定</td></tr>
+<tr><td>失败代价高且无法重来</td><td>删数据、发消息、转账——这类操作应该由人或者严格校验的代码来做</td></tr>
+<tr><td>输入输出是结构化的</td><td>格式转换、字段映射写正则或 SQL 更准</td></tr>
+<tr><td>任务是“跑一下看结果”</td><td>直接跑，不用经过模型理解一遍</td></tr>
+</tbody></table></div>
+<p>反过来，agent 真正占优的地方：需求描述得含糊、边界要靠探索（“找出这个项目里为什么会有这个奇怪的现象”）；每次输入都不一样、没法写成规则（“把这个 issue 处理掉”）；以及中间结果需要判断才能决定下一步（“这个测试失败是环境问题还是代码问题”）。</p>
+<p>一个实用的组合是：<strong>用 agent 找到该做什么，用脚本去做</strong>。让 agent 分析出“这 200 个文件里，有 37 个需要改”，然后由一段确定的脚本去改这 37 个文件。这样既用上了模型的判断力，又把执行放在了可复核、可重跑的地方。</p>
+
+<h2 id="hx-26-s10">小结</h2>
+<ul>
+<li>范式是 harness 之上的控制流。六种常见摆法：ReAct、Plan-and-Execute、分治、DAG、Reflexion、多 agent 编排。</li>
+<li>选择看三件事：子任务是否独立（分治 / DAG）、有没有可验证的完成标准（Reflexion）、需不需要不同视角（编排）。步骤少或下一步取决于刚才的结果，就用 ReAct。</li>
+<li>Plan-and-Execute 的价值是计划变成可审、可改的数据；代价是多一次调用，而且第一步就可能被推翻。</li>
+<li>分治的两个失败点：合并（重复与矛盾）和上限（深度、分支数）。</li>
+<li>Reflexion 的关键是外部验证信号；让同一个模型自评，通常只是把错误换个说法。</li>
+<li>编排的收益来自角色与工具集的差异，代价是汇总成本和角色间的不一致。</li>
+<li>范式可以叠加，但上限要按总数算。</li>
+<li>能被完整写成步骤的任务，用脚本而不是 agent；最好的组合常常是“agent 判断该做什么，脚本去做”。</li>
+</ul>
+<p>全书到这里结束。从第 00 章的一个循环开始，到最后这一章的控制流，中间多了上下文管理、记忆、安全、韧性、扩展、可观测性和连续性——但最核心的那件事一直没变：<strong>模型负责提出下一步，harness 负责判断这一步能不能做、做了会怎样、做完之后记住什么</strong>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 尾声（虚构）</span>
+<p>那份一页纸的经验清单，阿青最后采用的是第三版的产物——先用分治把四十八份复盘分成六组，每组一个子代理写一段；最后一轮交给评审角色，拿着他们的模板逐条核对，不合格的退回重写。橘子在过程中被打回了两次，改完的版本阿青直接发给了部门。</p>
+<p>老唐把四页白板背面那行字擦掉，重新写了一句：“<strong>先想清楚这活适合怎么摆，再动手</strong>。”</p>
+<p>小满——那个从第二章开始就在旁边看着的实习生——问了一个问题：“那我们以后是不是每写一个功能，都要先把这六种摆法试一遍？”</p>
+<p class="hx-story-say">“不用，”老唐说，“你在心里过一遍就够了：这件事要几步、这几步之间有没有依赖、做完之后你能不能自己验证。答完这三个问题，摆法基本就定了。”</p>
+<p class="hx-story-say">“那要是三个问题都答不上来呢？”</p>
+<p class="hx-story-say">“那就先别写代码，”老唐说，“先把这三件事想明白。”</p>
+<p>橘子还在跑。它的日志里现在有主线、子代理、重试、压缩、审批、拦截、熔断、降级、交接和 span —— 这些东西加在一起，就是这二十六章讲的那一层：模型外面那个让它真的能干活的程序。</p>
+</div>
+</section>

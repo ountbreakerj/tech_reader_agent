@@ -1,0 +1,337 @@
+<section class="chapter" id="ch-hx-24" data-slug="hx-24"><div class="ch-head"><span class="ch-num">第 24 章</span></div><h1 id="hx-24">可观测性与成本</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 24 章（虚构）</span>
+<p>林舟的三个问题，一个都没能从会话日志里直接读出来。</p>
+<p>“这三十多次为什么这么慢”——日志里只有一行“工具结果，耗时”，模型调用和工具调用混在一起，看不出这一轮到底花在哪。<br>
+“钱具体花在哪”——账本上只有一个总数，主线和子代理混在一起，重试和压缩也混在一起。<br>
+“下一周表现变差怎么知道”——没有同一口径的历史数据，只有一堆 JSONL 文件。</p>
+<p>老唐在白板上画了三个框：一个框里写“慢在哪”，一个写“贵在哪”，一个写“整体怎么样”。</p>
+<p class="hx-story-say">“日志是给回放用的，它记的是事实，”他说，“这三个问题要的是另外一套东西：能算的、能比的时间段统计。”</p>
+<p>他们做出来的东西不复杂。第一件，让每一段工作都有开始和结束，并且知道自己的父级——一轮是一个大段，模型调用和每个工具调用是它下面的小段，于是“这一轮的 90 秒里，78 秒花在那个跑测试的工具上”变成一句可以直接说出来的话。</p>
+<p>第二件，把 token 用量按四个桶分开算钱：没命中的输入、输出、缓存读、缓存写——这四个价格差一个数量级，混在一起算，账永远是错的。然后按轮、按模型、按类型（主线、重试、子代理、压缩）分别汇总。第一次看到“这次任务的费用里有 40% 是子代理”，林舟把委派的工具集收窄了一轮。</p>
+<p>第三件，也是他一开始没重视的：<strong>默认不要上报内容</strong>。他们原本把每一次工具的参数和输出都写进了 span，直到阿青问了一句“你们会把这些传到哪里去”。改成只记工具名、耗时、输出长度之后，排查问题确实麻烦了一点，但不再有任何一段用户代码离开这台机器。</p>
+<p>这一章讲这三件事怎么做，以及一条容易忘的原则：观测代码自己出错时，不能让 agent 出错。</p>
+</div>
+<p>第 04 章的会话日志解决的是“能不能回放”：它记录发生过的每一个事实，按顺序、可重放、可恢复。那是正确性的基础设施。这一章处理的是另外三类问题：<strong>慢在哪</strong>（时间花在哪一段工作里）、<strong>贵在哪</strong>（token 花在哪一类请求上）、<strong>整体怎么样</strong>（成功率、轮数、重试次数这些跨会话的指标）。</p>
+<p>这三类问题的共同点是：它们都需要对日志做<strong>聚合</strong>，而不是读某一条。日志是事实来源，而观测是把事实变成可以回答问题的结构。</p>
+
+<h2 id="hx-24-s0">先看全貌：可观测性与成本是什么、管哪些事</h2>
+<p>一句话：可观测性把每一次运行拆成有开始、有结束、有父子关系的片段（span），从中算出时间分布；成本把 token 用量按桶和单价换算成钱，按轮、按模型、按类型汇总。</p>
+<div class="table-wrap"><table><thead><tr><th>问题</th><th>靠什么回答</th><th>典型的看不够就出事的场景</th></tr></thead><tbody>
+<tr><td>慢在哪</td><td>span 树：一轮里模型调用、每个工具、等待审批各占多少</td><td>以为在等模型，其实在等一个卡住的下游 API</td></tr>
+<tr><td>贵在哪</td><td>用量账本：按桶、按轮、按类型</td><td>以为主线贵，其实一半的钱花在子代理和重试上</td></tr>
+<tr><td>整体怎么样</td><td>跨会话指标：成功率、平均轮数、重试率、熔断次数</td><td>表现变差了两周才发现，而且说不清从哪天开始</td></tr>
+</tbody></table></div>
+<p>这一层要管的事：</p>
+<ul>
+<li><strong>span 的结构</strong>：谁是谁的父级、哪些是叶子、为什么父级的耗时不能直接拿来排序。</li>
+<li><strong>用量分桶</strong>：普通输入、输出、缓存读、缓存写，各有各的单价。</li>
+<li><strong>成本归属</strong>：主线、重试、子代理、压缩分别记，否则最贵的部分永远看不见。</li>
+<li><strong>导出</strong>：一行一条 JSON，接得上任何日志系统；失败不影响 agent。</li>
+<li><strong>隐私</strong>：默认只记元信息（工具名、耗时、长度），不记参数和输出全文。</li>
+<li><strong>跨会话指标</strong>：能按天、按版本比较。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>计时</td><td>在每个操作前后打日志算差值</td><td>用带父子关系的 span，嵌套自动成为子级；看“最慢”时只看叶子，父级包含子级没有信息量</td></tr>
+<tr><td>成本</td><td>总 token 乘以一个平均单价</td><td>四个桶分别计价；未知模型直接报错，不按 0 算</td></tr>
+<tr><td>重试 / 子代理 / 压缩</td><td>混进主线的账里</td><td>各自单独一类：这些是典型的隐形开销</td></tr>
+<tr><td>记录内容</td><td>把参数和输出都记下来，方便排查</td><td>默认只记长度和工具名；要记内容必须显式打开，并且让用户知道</td></tr>
+</tbody></table></div>
+<h3 id="hx-24-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript）：采集和上报严格分开：一个包负责从每一条会话事件里采集，另一个包提供上报后端接口，还有一个包实现 OpenTelemetry 上报。它有两条独立的通道——普通事件和会话日志——而且只引入了 OTel 的 logs SDK，没有引入 trace 和 metrics。默认行为是<strong>只在用户主动反馈之后</strong>才上传会话日志，有一个环境变量可以整体关掉上报。另外还有一个基于整份日志的统计投影包，输出会话数、轮数、墙钟时间这类数字。</p>
+<p>它还有一个值得学的细节：流式事件（<code class="inl">agent/assistant-stream</code>）是发出去了但不写进会话日志的；headless 入口把它们打到 stderr，或者用 <code class="inl">--json</code> 逐行输出。也就是说，“给程序看的结构化事件”和“给人看的进度输出”分开，都不污染日志。</p>
+<p><strong>OpenHarness</strong>（Python）：有一个 usage 聚合器，模块自己的说明写得很清楚——它只是简单地累加 input/output token，不做成本核算，也不处理缓存字段。</p>
+<p><strong>learn-claude-code</strong>（教程）：打印每轮的 token 用量，仅此而已。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/observability.py</code>，span 树与导出、按桶计价与账本、跨会话指标，13 条测试。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1、2 节讲 span：结构、最慢的看叶子、以及为什么导出失败不能影响 agent。</li>
+<li>第 3 节讲成本：四个桶、按类型归属、预算。这一节连着第 05 章的用量账本。</li>
+<li>第 4 节讲跨会话指标，第 5 节讲隐私——不记内容这件事，晚做比早做贵得多。</li>
+<li>第 7 节的坑可以当自查清单。</li>
+</ol>
+<p>本章的源码描述来自前面章节已经核对过的笔记；不再逐条标注 <code class="inl">文件:行号</code>。</p></blockquote>
+
+<h2 id="hx-24-s1">span：把一轮拆开</h2>
+<p>一个问题：“这一轮用了 90 秒，时间花在哪？”日志能回答，但要你自己去算——把这一轮的所有事件按时间排开，找出空档。span 把这件事变成结构：每段工作有开始、结束、名字、属性，以及父 span。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/observability.py::Tracer"><span class="kw">class</span> <span class="cls">Tracer</span><span class="op">:</span>
+    <span class="str">"""收集 span。嵌套靠一个栈：with tracer.span(...) 里面再开的 span 自动成为子 span。"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, clock<span class="op">:</span> <span class="cls">Clock</span> <span class="op">=</span> time.monotonic, <span class="op">*</span>, keep_content<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>,
+                 sink<span class="op">:</span> <span class="cls">Callable</span>[[dict[str, <span class="cls">Any</span>]], <span class="kw">None</span>] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self.clock <span class="op">=</span> clock
+        self.keep_content <span class="op">=</span> keep_content
+        self.sink <span class="op">=</span> sink
+        self.spans<span class="op">:</span> list[<span class="cls">Span</span>] <span class="op">=</span> []
+        self._stack<span class="op">:</span> list[<span class="cls">Span</span>] <span class="op">=</span> []
+        self.sink_errors <span class="op">=</span> <span class="num">0</span>
+        self.trace_id <span class="op">=</span> uuid.uuid4().hex[<span class="op">:</span><span class="num">16</span>]
+
+<span class="dec">    @contextmanager</span>
+    <span class="kw">def</span> <span class="fn">span</span>(self, name<span class="op">:</span> str, <span class="op">**</span>attrs<span class="op">:</span> <span class="cls">Any</span>) <span class="op">-&gt;</span> <span class="cls">Iterator</span>[<span class="cls">Span</span>]<span class="op">:</span>
+        parent <span class="op">=</span> self._stack[<span class="op">-</span><span class="num">1</span>].span_id <span class="kw">if</span> self._stack <span class="kw">else</span> <span class="kw">None</span>
+        current <span class="op">=</span> <span class="cls">Span</span>(name, uuid.uuid4().hex[<span class="op">:</span><span class="num">8</span>], parent, self.clock(), attrs<span class="op">=</span>redact(attrs, keep_content<span class="op">=</span>self.keep_content))
+        self._stack.append(current)
+        <span class="kw">try</span><span class="op">:</span>
+            <span class="kw">yield</span> current
+        <span class="kw">except</span> <span class="cls">BaseException</span> <span class="kw">as</span> exc<span class="op">:</span>
+            current.status <span class="op">=</span> <span class="str">"error"</span>
+            current.attrs[<span class="str">"error"</span>] <span class="op">=</span> type(exc).__name__
+            <span class="kw">raise</span>
+        <span class="kw">finally</span><span class="op">:</span>
+            current.end <span class="op">=</span> self.clock()
+            self._stack.pop()
+            self.spans.append(current)
+            self._emit(current)
+
+    <span class="kw">def</span> <span class="fn">_emit</span>(self, span<span class="op">:</span> <span class="cls">Span</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="str">"""导出一条 span。导出失败只计数，不影响 agent：观测不能改变行为。"""</span>
+        <span class="kw">if</span> self.sink <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+            <span class="kw">return</span>
+        <span class="kw">try</span><span class="op">:</span>
+            self.sink(to_record(span, self.trace_id))
+        <span class="kw">except</span> <span class="cls">Exception</span><span class="op">:</span>  <span class="cmt"># noqa: BLE001</span>
+            self.sink_errors <span class="op">+=</span> <span class="num">1</span>
+
+    <span class="kw">def</span> <span class="fn">children</span>(self, span_id<span class="op">:</span> str) <span class="op">-&gt;</span> list[<span class="cls">Span</span>]<span class="op">:</span>
+        <span class="kw">return</span> [s <span class="kw">for</span> s <span class="kw">in</span> self.spans <span class="kw">if</span> s.parent_id <span class="op">==</span> span_id]
+
+    <span class="kw">def</span> <span class="fn">slowest</span>(self, n<span class="op">:</span> int <span class="op">=</span> <span class="num">3</span>, <span class="op">*</span>, leaf_only<span class="op">:</span> bool <span class="op">=</span> <span class="kw">True</span>) <span class="op">-&gt;</span> list[<span class="cls">Span</span>]<span class="op">:</span>
+        <span class="str">"""最慢的几段工作。默认只看叶子 span：父 span 的耗时包含子 span，排在前面没有信息量。"""</span>
+        parents <span class="op">=</span> {s.parent_id <span class="kw">for</span> s <span class="kw">in</span> self.spans}
+        pool <span class="op">=</span> [s <span class="kw">for</span> s <span class="kw">in</span> self.spans <span class="kw">if</span> <span class="kw">not</span> leaf_only <span class="kw">or</span> s.span_id <span class="kw">not</span> <span class="kw">in</span> parents]
+        <span class="kw">return</span> sorted(pool, key<span class="op">=</span><span class="kw">lambda</span> s<span class="op">:</span> s.duration, reverse<span class="op">=</span><span class="kw">True</span>)[<span class="op">:</span>n]</code></pre></div>
+<p>用法就是普通的上下文管理器，嵌套的那一层自动成为子 span：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_observability.py::TracerTests.test_nested_spans_form_a_tree">    <span class="kw">def</span> <span class="fn">test_nested_spans_form_a_tree</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        clock <span class="op">=</span> <span class="cls">FakeClock</span>()
+        tracer <span class="op">=</span> <span class="cls">Tracer</span>(clock)
+        <span class="kw">with</span> tracer.span(<span class="str">"turn"</span>) <span class="kw">as</span> turn<span class="op">:</span>
+            <span class="kw">with</span> tracer.span(<span class="str">"model.call"</span>, model<span class="op">=</span><span class="str">"big-model"</span>)<span class="op">:</span>
+                clock.advance(<span class="num">2</span>)
+            <span class="kw">with</span> tracer.span(<span class="str">"tool.run_tests"</span>)<span class="op">:</span>
+                clock.advance(<span class="num">5</span>)
+        self.assertEqual(turn.duration, <span class="num">7</span>)
+        self.assertEqual([s.name <span class="kw">for</span> s <span class="kw">in</span> tracer.children(turn.span_id)], [<span class="str">"model.call"</span>, <span class="str">"tool.run_tests"</span>])</code></pre></div>
+<p>三个细节：</p>
+<ul>
+<li><strong>异常会被记录并继续抛出</strong>。span 的 <code class="inl">status</code> 变成 <code class="inl">error</code>，属性里带上异常类型。它不吞异常——观测不能改变行为，这是本章第一节就要定下的规则。</li>
+<li><strong>找“最慢”时只看叶子 span</strong>。父 span 的耗时包含子 span，永远排在前面；一条 <code class="inl">turn</code> 的 90 秒，背后是某个 <code class="inl">tool.run_tests</code> 的 78 秒。labs 的 <code class="inl">slowest()</code> 默认过滤掉有子 span 的那些：</li>
+</ul>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/observability.py::Tracer.slowest">    <span class="kw">def</span> <span class="fn">slowest</span>(self, n<span class="op">:</span> int <span class="op">=</span> <span class="num">3</span>, <span class="op">*</span>, leaf_only<span class="op">:</span> bool <span class="op">=</span> <span class="kw">True</span>) <span class="op">-&gt;</span> list[<span class="cls">Span</span>]<span class="op">:</span>
+        <span class="str">"""最慢的几段工作。默认只看叶子 span：父 span 的耗时包含子 span，排在前面没有信息量。"""</span>
+        parents <span class="op">=</span> {s.parent_id <span class="kw">for</span> s <span class="kw">in</span> self.spans}
+        pool <span class="op">=</span> [s <span class="kw">for</span> s <span class="kw">in</span> self.spans <span class="kw">if</span> <span class="kw">not</span> leaf_only <span class="kw">or</span> s.span_id <span class="kw">not</span> <span class="kw">in</span> parents]
+        <span class="kw">return</span> sorted(pool, key<span class="op">=</span><span class="kw">lambda</span> s<span class="op">:</span> s.duration, reverse<span class="op">=</span><span class="kw">True</span>)[<span class="op">:</span>n]</code></pre></div>
+<ul>
+<li><strong>计时用单调时钟</strong>（第 19 章坑六），和超时用的是同一个原则。</li>
+</ul>
+<p>span 的名字要有约定，否则一年后你会在同一个面板上看到 <code class="inl">model_call</code>、<code class="inl">model.call</code>、<code class="inl">llm</code> 三种写法。labs 用的是 <code class="inl">&lt;类别&gt;.&lt;对象&gt;</code>：<code class="inl">turn</code>、<code class="inl">model.call</code>、<code class="inl">tool.read_file</code>、<code class="inl">tool.run_tests</code>、<code class="inl">compaction</code>、<code class="inl">subagent</code>。名字里带上具体对象（工具名），是为了让聚合有意义：把 <code class="inl">tool.run_tests</code> 的耗时加起来，就是这个项目里“跑测试”总共花了多久。</p>
+
+<h2 id="hx-24-s2">导出：失败不能影响 agent</h2>
+<p>span 要能导出去才有用——接日志系统、接追踪后端、或者最简单地写进一个 JSONL 文件。这里有一条容易被忽略的规则：<strong>导出失败只计数，不影响 agent</strong>。磁盘满了、上报端点不通、序列化出错，都不应该让一次正在进行的任务失败。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="kw">def</span> <span class="fn">_emit</span>(self, span<span class="op">:</span> <span class="cls">Span</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+    <span class="str">"""导出一条 span。导出失败只计数，不影响 agent：观测不能改变行为。"""</span>
+    <span class="kw">if</span> self.sink <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">return</span>
+    <span class="kw">try</span><span class="op">:</span>
+        self.sink(to_record(span, self.trace_id))
+    <span class="kw">except</span> <span class="cls">Exception</span><span class="op">:</span>  <span class="cmt"># noqa: BLE001</span>
+        self.sink_errors <span class="op">+=</span> <span class="num">1</span></code></pre></div>
+<p>测试里用一个总是抛异常的 sink，断言 span 照常收集、错误被计数：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_observability.py::TracerTests.test_sink_failure_does_not_break_agent">    <span class="kw">def</span> <span class="fn">test_sink_failure_does_not_break_agent</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">def</span> <span class="fn">broken_sink</span>(record)<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">OSError</span>(<span class="str">"disk full"</span>)
+
+        tracer <span class="op">=</span> <span class="cls">Tracer</span>(<span class="cls">FakeClock</span>(), sink<span class="op">=</span>broken_sink)
+        <span class="kw">with</span> tracer.span(<span class="str">"turn"</span>)<span class="op">:</span>
+            <span class="kw">pass</span>
+        self.assertEqual(tracer.sink_errors, <span class="num">1</span>)
+        self.assertEqual(len(tracer.spans), <span class="num">1</span>)</code></pre></div>
+<p>导出的记录形状尽量贴近 OpenTelemetry 的约定（<code class="inl">trace_id</code>、<code class="inl">span_id</code>、<code class="inl">parent_id</code>、<code class="inl">name</code>、<code class="inl">duration</code>），这样以后换成真正的 OTel 导出器时，下游的查询不用重写。DSH 的做法更彻底：采集和上报分成不同的包，上报后端是一个可替换的接口，默认的后端只在用户反馈后上传，还有一个环境变量可以一次关掉全部上报。它的普通事件和会话日志走两条独立的通道——因为它们的用途不同，采样策略和保留时间也应该不同。</p>
+<p>还有一件事值得在 span 之外单独做：<strong>给人看的进度输出</strong>。DSH 的流式帧事件不写日志，headless 入口把它们打到 stderr 或者用 <code class="inl">--json</code> 逐行输出。分开的好处是：日志保持结构化、可回放；“现在正在读第 7 个文件”这类进度只出现在终端里，不污染日志，也不进上下文。</p>
+
+<h2 id="hx-24-s3">成本：按桶算，按类型归属</h2>
+<p>第 05 章讲过用量有四个桶：普通输入、输出、缓存读、缓存写。第 06 章讲过缓存读的价格通常是普通输入的十分之一左右。这两件事合在一起，意味着一件事：<strong>用一个平均单价乘以总 token，算出来的钱可以差好几倍</strong>。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/observability.py::cost_of"><span class="kw">def</span> <span class="fn">cost_of</span>(usage<span class="op">:</span> <span class="cls">Usage</span>, model<span class="op">:</span> str, prices<span class="op">:</span> dict[str, dict[str, float]] <span class="op">=</span> <span class="cls">DEMO_PRICES</span>) <span class="op">-&gt;</span> float<span class="op">:</span>
+    <span class="str">"""按四个桶各自的单价算钱。未知模型直接报错：静默按 0 算会让账本看起来很便宜。"""</span>
+    <span class="kw">if</span> model <span class="kw">not</span> <span class="kw">in</span> prices<span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">KeyError</span>(<span class="str">f"没有模型 {model!r} 的价格；请在价格表里补上，不要按 0 计"</span>)
+    p <span class="op">=</span> prices[model]
+    <span class="kw">return</span> (usage.input <span class="op">*</span> p[<span class="str">"input"</span>] <span class="op">+</span> usage.output <span class="op">*</span> p[<span class="str">"output"</span>] <span class="op">+</span>
+            usage.cache_read <span class="op">*</span> p[<span class="str">"cache_read"</span>] <span class="op">+</span> usage.cache_write <span class="op">*</span> p[<span class="str">"cache_write"</span>]) <span class="op">/</span> <span class="num">1_000_000</span></code></pre></div>
+<p>有一个细节是刻意的：<strong>未知模型直接报错</strong>。如果按 0 计费，一个模型名字写错的配置会让账单看起来非常便宜，而你不会发现。价格表本身应该来自配置，因为价格会变；labs 里的数字是教学示意。</p>
+<p>比单价更容易做错的是<strong>归属</strong>。一次任务的花费通常分布在四类请求上：</p>
+<div class="table-wrap"><table><thead><tr><th>类型</th><th>什么时候产生</th><th>典型占比（教学示意）</th><th>怎么降</th></tr></thead><tbody>
+<tr><td>主线</td><td>每一轮的模型调用</td><td>最大头，但通常不是唯一的大头</td><td>压缩（07）、卸载（08）、减少轮数</td></tr>
+<tr><td>重试</td><td>第 18 章的退避重试，每次重试都是一次完整计费调用</td><td>故障期间可以到 30% 以上</td><td>错误分类、熔断（20）</td></tr>
+<tr><td>子代理</td><td>第 23 章的每次委派</td><td>批量任务里可能超过一半</td><td>收窄工具集、收紧轮数、别为小任务开子代理</td></tr>
+<tr><td>压缩</td><td>第 07 章的摘要请求</td><td>稳定在 5%–15%</td><td>更好的压缩阈值、更省的摘要模型</td></tr>
+</tbody></table></div>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/observability.py::CostLedger"><span class="dec">@dataclass</span>
+<span class="kw">class</span> <span class="cls">CostLedger</span><span class="op">:</span>
+    <span class="str">"""按轮记账。重试、子代理、压缩各自单独一类：它们是最常见的「隐形开销」。"""</span>
+
+    prices<span class="op">:</span> dict[str, dict[str, float]] <span class="op">=</span> field(default_factory<span class="op">=</span><span class="kw">lambda</span><span class="op">:</span> dict(<span class="cls">DEMO_PRICES</span>))
+    entries<span class="op">:</span> list[<span class="cls">LedgerEntry</span>] <span class="op">=</span> field(default_factory<span class="op">=</span>list)
+    budget<span class="op">:</span> float <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>
+
+    <span class="kw">def</span> <span class="fn">record</span>(self, turn<span class="op">:</span> int, model<span class="op">:</span> str, usage<span class="op">:</span> <span class="cls">Usage</span>, kind<span class="op">:</span> str <span class="op">=</span> <span class="str">"main"</span>) <span class="op">-&gt;</span> <span class="cls">LedgerEntry</span><span class="op">:</span>
+        entry <span class="op">=</span> <span class="cls">LedgerEntry</span>(turn, model, usage, cost_of(usage, model, self.prices), kind)
+        self.entries.append(entry)
+        <span class="kw">return</span> entry
+
+    <span class="kw">def</span> <span class="fn">total</span>(self) <span class="op">-&gt;</span> float<span class="op">:</span>
+        <span class="kw">return</span> sum(e.cost <span class="kw">for</span> e <span class="kw">in</span> self.entries)
+
+    <span class="kw">def</span> <span class="fn">by</span>(self, key<span class="op">:</span> str) <span class="op">-&gt;</span> dict[<span class="cls">Any</span>, float]<span class="op">:</span>
+        out<span class="op">:</span> dict[<span class="cls">Any</span>, float] <span class="op">=</span> {}
+        <span class="kw">for</span> e <span class="kw">in</span> self.entries<span class="op">:</span>
+            k <span class="op">=</span> getattr(e, key)
+            out[k] <span class="op">=</span> out.get(k, <span class="num">0.0</span>) <span class="op">+</span> e.cost
+        <span class="kw">return</span> out
+
+    <span class="kw">def</span> <span class="fn">cache_hit_rate</span>(self) <span class="op">-&gt;</span> float<span class="op">:</span>
+        <span class="str">"""缓存命中占全部输入的比例。分母是 input + cache_read + cache_write。"""</span>
+        u <span class="op">=</span> sum((e.usage <span class="kw">for</span> e <span class="kw">in</span> self.entries), <span class="cls">Usage</span>())
+        denominator <span class="op">=</span> u.input <span class="op">+</span> u.cache_read <span class="op">+</span> u.cache_write
+        <span class="kw">return</span> u.cache_read <span class="op">/</span> denominator <span class="kw">if</span> denominator <span class="kw">else</span> <span class="num">0.0</span>
+
+    <span class="kw">def</span> <span class="fn">over_budget</span>(self) <span class="op">-&gt;</span> bool<span class="op">:</span>
+        <span class="kw">return</span> self.budget <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> self.total() <span class="op">&gt;</span> self.budget
+
+    <span class="kw">def</span> <span class="fn">summary</span>(self) <span class="op">-&gt;</span> str<span class="op">:</span>
+        parts <span class="op">=</span> [<span class="str">f"共 ${self.total():.4f}"</span>]
+        kinds <span class="op">=</span> self.by(<span class="str">"kind"</span>)
+        <span class="kw">for</span> kind <span class="kw">in</span> (<span class="str">"retry"</span>, <span class="str">"subagent"</span>, <span class="str">"compaction"</span>)<span class="op">:</span>
+            <span class="kw">if</span> kinds.get(kind)<span class="op">:</span>
+                parts.append(<span class="str">f"{kind} ${kinds[kind]:.4f}"</span>)
+        parts.append(<span class="str">f"缓存命中率 {self.cache_hit_rate():.0%}"</span>)
+        <span class="kw">if</span> self.budget <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+            parts.append(<span class="str">f"预算 ${self.budget:.2f}"</span> <span class="op">+</span> (<span class="str">"（已超出）"</span> <span class="kw">if</span> self.over_budget() <span class="kw">else</span> <span class="str">""</span>))
+        <span class="kw">return</span> <span class="str">"，"</span>.join(parts)</code></pre></div>
+<p>账本按「轮」记，每一轮结束时打印一次增量。轮级的可见性比会话总数有用得多：当一个任务的总价是 4 美元时，你更想知道的是“第 17 轮花了 1.2 美元”，而不是“总共 4 美元”。第 17 轮发生了什么，日志里通常能直接看到——很可能是一次压缩之后历史变得很长，或者开了五个子代理。</p>
+<p><code class="inl">cache_hit_rate()</code> 是另一个值得长期盯的数字。缓存命中率的突然下降，通常意味着提示的前缀变了：工具列表顺序变了、系统提示里插进了时间戳、Skill 索引的顺序不稳定（第 22 章）。这个数字的下降会直接体现在账单上，而且很难从别的地方看出来。</p>
+
+<h2 id="hx-24-s4">跨会话指标</h2>
+<p>前面两类回答的是“这一次怎么样”。还有一类问题是“最近怎么样”：成功率有没有下降、平均轮数有没有变多、重试是不是变频繁了。这类问题需要同一口径的计数器，并且能按时间比较。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/observability.py::Metrics"><span class="dec">@dataclass</span>
+<span class="kw">class</span> <span class="cls">Metrics</span><span class="op">:</span>
+    <span class="str">"""计数器。跨会话聚合，用来看「整体怎么样」，而不是排查某一次。"""</span>
+
+    counters<span class="op">:</span> dict[str, int] <span class="op">=</span> field(default_factory<span class="op">=</span>dict)
+
+    <span class="kw">def</span> <span class="fn">inc</span>(self, name<span class="op">:</span> str, by<span class="op">:</span> int <span class="op">=</span> <span class="num">1</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self.counters[name] <span class="op">=</span> self.counters.get(name, <span class="num">0</span>) <span class="op">+</span> by
+
+    <span class="kw">def</span> <span class="fn">rate</span>(self, part<span class="op">:</span> str, whole<span class="op">:</span> str) <span class="op">-&gt;</span> float<span class="op">:</span>
+        total <span class="op">=</span> self.counters.get(whole, <span class="num">0</span>)
+        <span class="kw">return</span> self.counters.get(part, <span class="num">0</span>) <span class="op">/</span> total <span class="kw">if</span> total <span class="kw">else</span> <span class="num">0.0</span></code></pre></div>
+<p>值得长期跟踪的指标，按重要性排序：</p>
+<div class="table-wrap"><table><thead><tr><th>指标</th><th>它变差意味着什么</th></tr></thead><tbody>
+<tr><td>任务成功率（按停止原因分组）</td><td>最直接的信号；按 <code class="inl">max_turns</code>、<code class="inl">error_budget</code>、<code class="inl">llm_error</code> 分开看，能直接指向原因</td></tr>
+<tr><td>每任务平均轮数</td><td>上升通常意味着工具或提示变差了，模型在打转</td></tr>
+<tr><td>每任务平均花费</td><td>和上一项一起看：轮数没变但花的钱变多，多半是缓存命中率掉了</td></tr>
+<tr><td>缓存命中率</td><td>前缀稳定性的体检指标（第 06 章）</td></tr>
+<tr><td>重试率、熔断次数</td><td>外部依赖的健康度（第 18、20 章）</td></tr>
+<tr><td>工具错误率（按工具）</td><td>哪个工具最常失败；一个工具错误率突然上升，通常是被改坏了</td></tr>
+<tr><td>人工审批的同意率</td><td>同意率接近 100% 说明审批疲劳（第 16 章）</td></tr>
+</tbody></table></div>
+<p>“按停止原因分组”是其中最有价值的一条。一个笼统的“成功率 82%”几乎不提供信息；把它拆成“12% 撞上轮数上限、4% 撞上错误预算、2% 模型调用失败”，每一个都有明确的下手方向。</p>
+<p>DSH 有一个基于整份日志的统计投影包，输出会话数、轮数、墙钟时间这类数字——它的实现方式和这里说的一样：不是另存一份指标，而是从日志投影出来。日志是唯一的事实来源，指标是可以随时重算的视图。这个选择的好处是：指标口径变了，可以对历史日志重新算一遍，而不需要等到改完才生效。</p>
+
+<h2 id="hx-24-s5">默认不记内容</h2>
+<p>观测最容易踩的坑不是技术问题，是隐私问题。开发阶段最方便的配置是“把参数和输出都记下来”，于是用户仓库里的代码、凭据、聊天内容全部进了 span，然后被上报到一个你未必控制得住的地方。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/observability.py::redact"><span class="kw">def</span> <span class="fn">redact</span>(attrs<span class="op">:</span> dict[str, <span class="cls">Any</span>], <span class="op">*</span>, keep_content<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>) <span class="op">-&gt;</span> dict[str, <span class="cls">Any</span>]<span class="op">:</span>
+    <span class="str">"""去掉可能包含用户内容的字段，只保留长度。keep_content=True 时原样保留（需要用户同意）。"""</span>
+    <span class="kw">if</span> keep_content<span class="op">:</span>
+        <span class="kw">return</span> dict(attrs)
+    out<span class="op">:</span> dict[str, <span class="cls">Any</span>] <span class="op">=</span> {}
+    <span class="kw">for</span> key, value <span class="kw">in</span> attrs.items()<span class="op">:</span>
+        <span class="kw">if</span> any(s <span class="kw">in</span> key.lower() <span class="kw">for</span> s <span class="kw">in</span> <span class="cls">SENSITIVE_KEYS</span>)<span class="op">:</span>
+            out[<span class="str">f"{key}_chars"</span>] <span class="op">=</span> len(str(value))
+        <span class="kw">else</span><span class="op">:</span>
+            out[key] <span class="op">=</span> value
+    <span class="kw">return</span> out</code></pre></div>
+<p>规则很简单：<strong>默认把可能含内容的字段换成长度</strong>。<code class="inl">tool_input</code> 变成 <code class="inl">tool_input_chars: 128</code>，<code class="inl">tool</code>（工具名）这种元信息原样保留。要记全文，必须显式打开，而且这件事应该让用户知道——DSH 的默认后端只在用户主动反馈后才上传会话日志，这是同一个思路的另一种实现。</p>
+<p>“只记长度”会不会让排查变难？会。但换来的是：你可以放心地把 span 发到自己的日志服务上、可以放心地截图给别人看、可以让新人入职第一天就打开追踪。真要排查某一次具体的内容，会话日志里本来就有（第 04 章），而它是本地的、可控的。</p>
+<p>还有一类字段需要小心：<strong>文件路径</strong>。它不算内容，但是元信息里隐私性最高的：“用户正在修哪个文件” “项目叫什么名字”都能从路径看出来。合理的折中是记录相对工作区的路径，或者只记顶层目录名。</p>
+
+<h2 id="hx-24-s6">观测接进组装版</h2>
+<p>第 25 章的 <code class="inl">MiniHarness</code> 里，span 是这样挂上去的：</p>
+<div class="table-wrap"><table><thead><tr><th>位置</th><th>span 名</th><th>属性</th></tr></thead><tbody>
+<tr><td>一次用户输入的处理</td><td><code class="inl">turn</code></td><td>—</td></tr>
+<tr><td>一次模型调用（含重试）</td><td><code class="inl">model.call</code></td><td>模型名、重试次数（从第 18 章的执行结果里取）</td></tr>
+<tr><td>一次工具调用</td><td><code class="inl">tool.&lt;name&gt;</code></td><td>工具名、是否出错、输出长度</td></tr>
+</tbody></table></div>
+<p>注意 <code class="inl">model.call</code> 的 span 包住的是<strong>整个重试序列</strong>，而不是单次请求。这样“最慢的模型调用”回答的是“等模型这件事总共花了多久”，正好是用户感受到的时间。如果只包住单次请求，一次退避重试会表现为几个零散的慢 span，加不起来。</p>
+<p>成本记账的位置在模型调用成功之后：拿到 <code class="inl">usage</code>，按四桶归一化（第 05 章的 <code class="inl">normalize_usage</code>），按类型记进账本。重试的用法要单独记一笔——DSH 的用量投影里，一次重试算作第二次计费调用；如果只记成功的那一次，账面会比实际低。</p>
+
+<h2 id="hx-24-s7">坑与失败案例</h2>
+<h3 id="hx-24-s7-1">坑一：用平均单价算钱</h3>
+<ul>
+<li><strong>触发条件</strong>：总 token 乘以一个单价，不分桶。</li>
+<li><strong>后果</strong>：命中缓存的场景下严重高估，长上下文场景下可能低估；两种误差都会让成本优化的方向判错。</li>
+<li><strong>怎么防</strong>：四个桶分别计价；价格表来自配置；未知模型报错而不是按 0 算。</li>
+</ul>
+<h3 id="hx-24-s7-2">坑二：重试、子代理、压缩不单独记账</h3>
+<ul>
+<li><strong>触发条件</strong>：所有模型调用记在同一个池子里。</li>
+<li><strong>后果</strong>：这三个最容易出问题的部分永远看不见。故事里“一半的钱花在子代理上”这件事，混账是看不出来的。</li>
+<li><strong>怎么防</strong>：按类型记（主线 / 重试 / 子代理 / 压缩），每次汇总时分别列出。</li>
+</ul>
+<h3 id="hx-24-s7-3">坑三：观测代码把 agent 拖垮</h3>
+<ul>
+<li><strong>触发条件</strong>：每产生一条 span 就同步写文件、或者同步调用一个上报接口；上报接口超时没有上限。</li>
+<li><strong>后果</strong>：一次任务变慢几十秒甚至卡住；磁盘写满让整个任务失败。</li>
+<li><strong>怎么防</strong>：导出失败只计数；上报要异步、要有超时、要有队列上限，满了就丢 span 而不是阻塞真实工作。</li>
+</ul>
+<h3 id="hx-24-s7-4">坑四：span 里记了内容全文</h3>
+<ul>
+<li><strong>触发条件</strong>：默认把工具参数和输出写进 span，并且导到外部系统。</li>
+<li><strong>后果</strong>：用户的代码和凭据离开了用户的机器；一次误操作就能把私密内容发给第三方；合规上说不清。</li>
+<li><strong>怎么防</strong>：默认只记长度和元信息；要记内容显式打开并告知用户；路径这类元信息也要考虑。</li>
+</ul>
+<h3 id="hx-24-s7-5">坑五：只看总耗时，不看分布</h3>
+<ul>
+<li><strong>触发条件</strong>：监控上只有“平均任务耗时”这一个数字。</li>
+<li><strong>后果</strong>：平均值被大量快任务拉低，掩盖了那 5% 卡住两分钟的任务；而用户抱怨的恰恰是后者。</li>
+<li><strong>怎么防</strong>：看分位数，也看最慢的叶子 span；把“哪一类工作最慢”暴露出来。</li>
+</ul>
+<h3 id="hx-24-s7-6">坑六：指标口径变来变去</h3>
+<ul>
+<li><strong>触发条件</strong>：每一版实现都顺手改一下统计口径（这次算不算重试？子代理算不算一个任务？）。</li>
+<li><strong>后果</strong>：趋势图看不出趋势，只看出改版；明明变好了，图上显示变差了。</li>
+<li><strong>怎么防</strong>：指标从日志投影出来，口径定义写进代码注释；改口径时对历史日志重算，而不是让断层留在图上。</li>
+</ul>
+
+<h2 id="hx-24-s8">多仓库取舍对比</h2>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th><th>labs</th></tr></thead><tbody>
+<tr><td>采集与上报</td><td>分开：采集包 + 上报后端接口 + OTel 实现；普通事件与会话日志两条通道</td><td>无</td><td>无</td><td>span 收集 + 可注入的 sink</td></tr>
+<tr><td>上报内容</td><td>默认只在用户反馈后上传；有环境变量整体关闭</td><td>—</td><td>—</td><td>默认只记长度和元信息，内容需显式开启</td></tr>
+<tr><td>追踪 SDK</td><td>只引入 OTel logs，没有 trace 和 metrics</td><td>—</td><td>—</td><td>自研 span，导出格式贴近 OTel</td></tr>
+<tr><td>成本</td><td>用量投影：重试算第二次计费调用</td><td>只累加 input/output，不做成本核算</td><td>打印每轮 token</td><td>四桶计价 + 按类型归属 + 预算</td></tr>
+<tr><td>统计</td><td>基于整份日志的统计投影（会话数、轮数、墙钟时间）</td><td>无</td><td>无</td><td>跨会话计数器</td></tr>
+<tr><td>适合场景</td><td>要上报、要合规、要多部署形态统一观测</td><td>本地看用量</td><td>教学</td><td>理解 span、分桶计价与隐私默认值</td></tr>
+</tbody></table></div>
+<p>DSH 的两条通道（普通事件与会话日志）值得单独说一句：会话日志是完整、有序、可回放的事实；普通事件是给监控用的、可以采样、可以丢。混成一条通道的话，你要么丢掉可回放性，要么让监控数据里塞满不该上传的内容。分开之后，两者的保留策略和隐私策略都可以各自定。</p>
+
+<h2 id="hx-24-s9">小结</h2>
+<ul>
+<li>日志回答“发生了什么”，span 回答“慢在哪”，账本回答“贵在哪”，计数器回答“最近怎么样”。</li>
+<li>span 要有父子关系；找最慢时只看叶子；计时用单调时钟；名字要有约定，带上具体对象名。</li>
+<li>导出失败只计数，绝不影响 agent；上报要异步、有超时、有队列上限。</li>
+<li>成本按四个桶分别计价；未知模型报错；按主线 / 重试 / 子代理 / 压缩分别归属。缓存命中率是前缀稳定性的体检指标。</li>
+<li>指标从日志投影出来，口径写进代码；成功率按停止原因分组才有用。</li>
+<li>默认不记内容，只记长度和元信息；要记全文必须显式打开。</li>
+</ul>
+<p>部件都齐了。下一章把它们组装成一个能跑的整体，并且处理最后一个问题：一个任务跑不完，下一班人（下一个会话）怎么接上。继续读：<a href="#hx-25">组装 mini-harness 与长任务连续性</a>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>装上 span 之后，那三十多次“用了七八轮”的委派有了答案：其中二十二次的子代理时间几乎全花在<strong>等一个内部文档搜索的 MCP 调用</strong>上，每次二十多秒。问题不在子代理，在那个服务；他们把它挪到了本地缓存之后，那些委派从七八轮掉到了两三轮的等待。</p>
+<p>账本上的发现更直接：主线占 41%，子代理占 38%，重试占 14%，压缩占 7%。重试那 14% 全部来自同一天的下午——那正是厂商故障、熔断器还没装上的那次。</p>
+<p>阿青看到 span 里不记内容，问了一句他们能不能也拿到这个数据。老唐说可以，只记工具名和耗时，阿青那边拿去做他们自己的看板。</p>
+<p>一切看起来都齐了。然后阿青问了一个谁都没想过的问题：“我周五下班前让它改一个模块，它改到一半，改了三个文件，测试还没跑。我关掉终端走了。周一早上我打开它，它知道自己在干什么吗？”</p>
+<p>林舟打开那个会话的日志，答案是不会。历史在日志里，但新开一个会话时，橘子只收到一条空白的“你好”。</p>
+<p class="hx-story-say">“你造了一堆部件，”老唐说，“现在把它们装成一台机器，然后回答阿青的问题。”</p>
+<p>下一章：<a href="#hx-25">组装 mini-harness 与长任务连续性</a>。</p>
+</div>
+</section>

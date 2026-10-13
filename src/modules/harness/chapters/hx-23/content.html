@@ -1,0 +1,275 @@
+<section class="chapter" id="ch-hx-23" data-slug="hx-23"><div class="ch-head"><span class="ch-num">第 23 章</span></div><h1 id="hx-23">子代理与 PTC</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 23 章（虚构）</span>
+<p>二百多个模块，林舟试过让橘子自己硬扛：读三十个文件，改十几个，压缩一次上下文，然后忘掉自己改到哪了。第三次压缩之后，橘子开始重复修改已经改过的文件，还漏掉了两个。</p>
+<p>老唐的办法是把主线掏空。主线不再读文件、不再改代码，它只做一件事：开一张清单，然后一个一个地派活。</p>
+<p>“模块 <code class="inl">a17</code> 里的日志调用要换成新的写法，这是两个接口的对照表，改完跑一下这个模块的测试，回来告诉我三件事：改了几个调用、测试过了没有、有没有你拿不准的地方。”</p>
+<p>子代理在自己的上下文里读完那个文件、找到所有调用点、改掉、跑测试，然后只回一句话：“改了 4 个调用，测试通过，其中一处的日志级别我没把握，原来是 INFO，我按对照表改成了 WARNING。”</p>
+<p>主线收到这句话，把 <code class="inl">a17</code> 标记成完成，接着派 <code class="inl">a18</code>。二百多个模块，主线的上下文从头到尾只装了两百多条一句话的汇报。</p>
+<p>第一次尝试时出了两个问题。一是子代理请求了一个主线没有的工具，代码直接抛了异常，整个任务停在那里——这件事提醒林舟一个原则：<strong>委派只能收窄权限，不能扩大</strong>。二是子代理太负责了：它觉得顺便把同一个模块里的另一个问题也修了比较好，于是主线收到的汇报里混进了一处不在清单上的改动。第三个问题最隐蔽：有几个模块，子代理明明没改成功（它说“测试通过”，但那个模块根本没有测试文件），主线照单全收了——因为汇报里没写“这个模块没有测试”。</p>
+<p>后来老唐加了一句要求：“汇报里必须写清楚你验证的方式。没跑测试就说没跑。”</p>
+<p>这一章讲两种把工作移出主上下文的方式：子代理（交给另一个 agent）和 PTC（交给一段程序）。它们解决的是同一个问题——主线上下文是最贵的资源，中间过程不该留在里面——但适用的场景不同。</p>
+</div>
+<p>上下文是 agent 最稀缺的资源。读进来的每一份文件、每一次搜索结果、每一次失败的尝试，都会一直留在历史里，参与之后每一轮请求（第 05 章），直到被压缩、被卸载，或者再也放不下。</p>
+<p>第 07、08 章处理的是“已经进了上下文的东西怎么办”。这一章处理的是另一个方向：<strong>从一开始就不要让它进来</strong>。二百个模块的细节，主线不需要知道；它只需要知道每个模块改完没有、对不对。</p>
+
+<h2 id="hx-23-s0">先看全貌：子代理与 PTC 是什么、管哪些事</h2>
+<p>一句话：子代理是启动一个新的 agent 循环来完成一个子任务，只有结论回到主线；PTC 是让模型写一段程序，程序在沙箱里批量调用工具，只有程序的输出回到主线。</p>
+<div class="table-wrap"><table><thead><tr><th></th><th>子代理</th><th>PTC</th></tr></thead><tbody>
+<tr><td>执行者</td><td>另一个模型循环</td><td>一段程序（模型写的）</td></tr>
+<tr><td>适合</td><td>需要判断、需要多轮探索的子任务</td><td>重复、机械、工具调用次数多的子任务</td></tr>
+<tr><td>上下文</td><td>自己的完整上下文，主线看不到中间过程</td><td>没有上下文，只有程序的变量</td></tr>
+<tr><td>成本</td><td>每个子任务一次以上的模型调用</td><td>一次模型调用（写程序）+ 一次执行</td></tr>
+<tr><td>确定性</td><td>低：子代理的判断可能和主线不一致</td><td>高：同一段程序每次执行的结果一样</td></tr>
+</tbody></table></div>
+<p>这一层要管的事：</p>
+<ul>
+<li><strong>权限收窄</strong>：子代理能用哪些工具、子代理能不能再派子代理。</li>
+<li><strong>任务描述</strong>：子代理看不到主线的上下文，任务描述就是它的全部信息。</li>
+<li><strong>结果回传</strong>：只回结论，连同“我是怎么验证的”一起回。</li>
+<li><strong>上限</strong>：轮数、深度、工具调用次数、输出长度。</li>
+<li><strong>PTC 的沙箱</strong>：程序在哪跑、能用哪些工具、调用次数上限。</li>
+<li><strong>成本归属</strong>：子代理和 PTC 的用量算在谁头上（第 24 章的账本）。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>子代理的工具</td><td>继承父级的全部工具</td><td>由父级预先指定，必须是父级工具的子集；请求了父级没有的工具直接报错，不静默忽略</td></tr>
+<tr><td>嵌套委派</td><td>子代理也能再派子代理</td><td>默认关掉；要开就设最大深度，它是成本失控最主要的来源</td></tr>
+<tr><td>回传什么</td><td>把子代理的完整对话带回来</td><td>只回结论 + 验证方式 + 拿不准的地方，并带上用了多少轮、多少次工具调用</td></tr>
+<tr><td>PTC 程序在哪跑</td><td>在 harness 进程里直接执行</td><td>在沙箱里跑（第 15 章）；执行前静态检查，工具调用次数和输出长度都有上限</td></tr>
+</tbody></table></div>
+<h3 id="hx-23-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript）：委派是一等公民，有专门的子代理包，把它称为“委派接缝”。它有两种启动方式：<strong>spawn</strong>（在进程内新建子代理，只带任务描述）和 <strong>fork</strong>（继承父代理的历史，日志前缀也继承）。fork 不选模型，注释里写明理由：继承下来的历史才可能命中同一份 KV 缓存。子代理的系统提示说明注册在自己的子代理作用域里，不污染父级。主线结束前会等待所有子代理结束。</p>
+<p>PTC 在 DSH 里是工具展示模式的一种（<code class="inl">native</code> / <code class="inl">ptc</code>）：切到 PTC 后，模型看到的不再是一个个工具，而是一个保留名 <code class="inl">run_code</code>，在它写的程序里嵌套调用其他工具。它有一层独立的有界分发池，默认最多 10 个并行子调用；必须有沙箱策略才能启用，运行时是一个受限的 Node 子进程；PTC 子调用的纯文本结果走一条只写日志的卸载路径（第 08 章），给模型看的那份仍然受预算约束。</p>
+<p><strong>OpenHarness</strong>（Python）：没有子代理和 PTC。它的“委派”是任务级的：把一件工作切成几个步骤，由同一个循环依次完成。</p>
+<p><strong>learn-claude-code</strong>（教程）：没有子代理；它的集成章节把多个功能塞进一个循环，属于“什么都自己做”。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/delegation.py</code>，权限收窄与深度限制、结论回传、PTC 程序的静态检查与受限执行，17 条测试。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1–3 节讲子代理：什么时候值得开、权限怎么收窄、任务怎么描述、结论怎么回。</li>
+<li>第 4–5 节讲 PTC：协议形状、程序的静态检查与执行边界。</li>
+<li>第 6 节把两者和前面的章节接起来（尤其第 15 章的沙箱和第 24 章的成本）。</li>
+<li>第 8 节的坑大部分来自故事里的三次翻车。</li>
+</ol>
+<p>本章的源码描述来自前面章节已经核对过的笔记；不再逐条标注 <code class="inl">文件:行号</code>。</p></blockquote>
+
+<h2 id="hx-23-s1">什么时候值得开子代理</h2>
+<p>子代理不是免费的：每个子代理要调用一次以上的模型，而且它对任务的理解完全来自你写的那段任务描述。值得开的场景：</p>
+<div class="table-wrap"><table><thead><tr><th>场景</th><th>为什么适合</th></tr></thead><tbody>
+<tr><td>批量处理同类型的项</td><td>每个模块、每个文件独立处理，中间过程互不相关，主线只需要结论</td></tr>
+<tr><td>需要大量搜索/阅读才能得出结论</td><td>读几十个文件才回答一个问题，读的过程对主线毫无价值</td></tr>
+<tr><td>需要另一种视角</td><td>让一个子代理专门找问题（代码审查），另一个专门验证（写测试），比同一个上下文既当运动员又当裁判更有效</td></tr>
+<tr><td>任务可以并行</td><td>几个子代理同时跑不同的模块</td></tr>
+</tbody></table></div>
+<p>不值得开的场景：</p>
+<ul>
+<li><strong>一步就能做完的事</strong>。“读一下这个文件告诉我第 10 行是什么”——主线自己读一次更便宜。</li>
+<li><strong>需要主线上下文的任务</strong>。“按我们刚才讨论的思路改一下这里”——子代理看不到“刚才讨论的”，你得把上下文重新写进任务描述，成本可能比主线自己做还高。</li>
+<li><strong>需要频繁来回的任务</strong>。子代理只能回一次结论，如果任务需要你和它商量三轮，沟通成本会吃掉全部收益。</li>
+</ul>
+<p>判断标准可以简化成一句话：<strong>如果这件事的“过程”对主线没有价值，而“结论”对主线有价值，就值得开子代理。</strong></p>
+
+<h2 id="hx-23-s2">权限只能收窄，不能扩大</h2>
+<p>这是委派最重要的规则：子代理的工具集必须是父级工具集的子集。理由很直接——如果子代理能拿到父级没有的工具，那么任何被权限规则挡住的调用，都可以通过“开一个子代理去做”绕过去。第 13 章辛苦建立的边界会在一行代码里失效。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/delegation.py::Delegator.narrowed_tools">    <span class="kw">def</span> <span class="fn">narrowed_tools</span>(self, spec<span class="op">:</span> <span class="cls">SubagentSpec</span>) <span class="op">-&gt;</span> dict[str, <span class="cls">Tool</span>]<span class="op">:</span>
+        <span class="str">"""子代理的工具只能是父级工具的子集。请求了父级没有的工具，直接报错而不是忽略。"""</span>
+        missing <span class="op">=</span> [name <span class="kw">for</span> name <span class="kw">in</span> spec.tools <span class="kw">if</span> name <span class="kw">not</span> <span class="kw">in</span> self.parent_tools]
+        <span class="kw">if</span> missing<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">DelegationError</span>(<span class="str">f"子代理请求了父级没有的工具：{missing}；权限只能收窄，不能扩大"</span>)
+        tools <span class="op">=</span> {name<span class="op">:</span> self.parent_tools[name] <span class="kw">for</span> name <span class="kw">in</span> spec.tools}
+        <span class="cmt"># 默认不让子代理再委派：嵌套深度失控是最常见的成本事故</span>
+        <span class="kw">if</span> <span class="str">"delegate"</span> <span class="kw">in</span> tools <span class="kw">and</span> self.depth <span class="op">+</span> <span class="num">1</span> <span class="op">&gt;=</span> self.max_depth<span class="op">:</span>
+            <span class="kw">del</span> tools[<span class="str">"delegate"</span>]
+        <span class="kw">return</span> tools</code></pre></div>
+<p>两个细节值得注意：</p>
+<ul>
+<li><strong>请求父级没有的工具时报错，而不是忽略</strong>。静默忽略会让子代理以为自己有某个能力，去<a>做一件做不到的事</a>，最后交回一个看起来很正常的错误结论。报错能让写委派逻辑的人当场发现问题。</li>
+<li><strong>默认去掉“委派”工具</strong>。子代理再派子代理会让深度和成本同时爆炸：一层 3 个，两层 9 个，三层 27 个，而且每层都要独立调用模型。labs 的默认最大深度是 1（只能派一层），去掉的就是子代理手里的那个 <code class="inl">delegate</code>。</li>
+</ul>
+<p>工具集由父级预先定好，模型不能在调用时自己挑：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/delegation.py::delegate_tool"><span class="kw">def</span> <span class="fn">delegate_tool</span>(delegator<span class="op">:</span> <span class="cls">Delegator</span>, allowed<span class="op">:</span> tuple[str, ...], max_turns<span class="op">:</span> int <span class="op">=</span> <span class="num">8</span>) <span class="op">-&gt;</span> <span class="cls">Tool</span><span class="op">:</span>
+    <span class="str">"""把委派包装成父级的一个工具：模型调用 delegate({"task": ...})。
+
+    子代理可用的工具由父级预先定好（allowed），模型不能在调用时自己挑——
+    否则模型可以给子代理授予它自己本来不该用的组合。
+    """</span>
+
+    <span class="kw">def</span> <span class="fn">handler</span>(args<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> str<span class="op">:</span>
+        task <span class="op">=</span> str(args.get(<span class="str">"task"</span>, <span class="str">""</span>)).strip()
+        <span class="kw">if</span> <span class="kw">not</span> task<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"Error: delegate 需要一个非空的 task"</span>
+        <span class="kw">try</span><span class="op">:</span>
+            report <span class="op">=</span> delegator.run(<span class="cls">SubagentSpec</span>(task<span class="op">=</span>task, tools<span class="op">=</span>allowed, max_turns<span class="op">=</span>max_turns))
+        <span class="kw">except</span> <span class="cls">DelegationError</span> <span class="kw">as</span> exc<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">f"Error: {exc}"</span>
+        <span class="kw">return</span> report.as_tool_result()
+
+    <span class="kw">return</span> handler</code></pre></div>
+<p>模型只提供任务描述，工具集是代码里定的。如果让模型自己为每个子任务挑工具，它迟早会挑出一个父级本来就不该用的组合（“给这个子代理加上写文件的权限，方便它顺手修好”）。</p>
+<blockquote><p><strong>和 hooks 的关系</strong>：第 21 章的 hooks 对子代理同样要生效。一个常见的疏漏是子代理走了一条简化的执行路径，跳过了权限检查和 hook。DSH 的做法是让子代理用同一套工具运行时，所以 <code class="inl">pre_tool_use</code> 之类的守卫对子代理一样生效。“部署前必须通知值班群”这条规则，不能因为这次部署是子代理发起的就失效。</p></blockquote>
+
+<h2 id="hx-23-s3">任务描述与结论回传</h2>
+<p>子代理看不到主线的历史（spawn 模式），所以任务描述就是它知道的全部。一份好的任务描述包含四件事：</p>
+<div class="table-wrap"><table><thead><tr><th>要素</th><th>例子</th><th>缺了会怎样</th></tr></thead><tbody>
+<tr><td>做什么</td><td>把 <code class="inl">a17.py</code> 里的日志调用换成新写法</td><td>子代理自己猜目标，可能猜得很大</td></tr>
+<tr><td>依据</td><td>这是两个接口的对照表：……</td><td>子代理按自己的理解改，风格和主线不一致</td></tr>
+<tr><td>边界</td><td>只改这个文件，不要改别的</td><td>顺手更新了文档、改了两个测试——故事里的第二个问题</td></tr>
+<tr><td>验证与汇报格式</td><td>跑这个模块的测试；汇报改了几个调用、测试结果、拿不准的地方</td><td>收到一句“已改完”，无法判断真假</td></tr>
+</tbody></table></div>
+<p>第四项最容易被省，也最重要。故事里“子代理说测试通过，但那个模块根本没有测试文件”的问题，根源是任务描述没有规定汇报格式。</p>
+<p>结论回传的格式，labs 里是这样的：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/delegation.py::SubagentReport.as_tool_result">    <span class="kw">def</span> <span class="fn">as_tool_result</span>(self) <span class="op">-&gt;</span> str<span class="op">:</span>
+        status <span class="op">=</span> <span class="str">"完成"</span> <span class="kw">if</span> self.ok <span class="kw">else</span> <span class="str">f"未完成（{self.stop}）"</span>
+        <span class="kw">return</span> (<span class="str">f"[子代理{status}，用了 {self.turns} 轮、{self.tool_calls} 次工具调用]\n"</span>
+                <span class="str">f"{self.summary or '（子代理没有给出结论）'}"</span>)</code></pre></div>
+<p>汇报里带上轮数和工具调用次数，有两个用处。一是主线能判断这个结论的可靠性：一个只用了 2 轮就交回结论的子代理，很可能没有真的去验证。二是成本可见：第 24 章的账本按 <code class="inl">subagent</code> 单独记一笔，你能看到“这次任务的钱有一半花在子代理上”。</p>
+<p>结论本身要截断（labs 默认 4000 字符）。一个子代理如果回了三万字，主线上下文该占的位还是占了，委派的意义就没了。截断时要在结尾写明“已截断”，让主线知道去找完整内容。</p>
+<p><strong>fork 模式</strong>是另一种选择：子代理继承父代理的历史。DSH 的 fork 连日志前缀一起继承，而且不重新选模型——注释里写明，继承下来的历史才有机会命中同一份 KV 缓存。fork 适合“在现有上下文的基础上换个角度想”的任务；spawn 适合“和主线上下文无关的独立任务”。labs 的 fork 教学版把父级历史压成一段背景说明，真实实现会原样复用历史前缀：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_delegation.py::SubagentRunTests.test_fork_carries_background">    <span class="kw">def</span> <span class="fn">test_fork_carries_background</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        seen <span class="op">=</span> {}
+
+        <span class="kw">def</span> <span class="fn">capture</span>(messages)<span class="op">:</span>
+            seen[<span class="str">"first"</span>] <span class="op">=</span> messages[<span class="num">0</span>][<span class="str">"content"</span>]
+            <span class="kw">return</span> <span class="cls">AssistantTurn</span>(text<span class="op">=</span><span class="str">"ok"</span>)
+
+        d <span class="op">=</span> <span class="cls">Delegator</span>(<span class="kw">lambda</span><span class="op">:</span> <span class="cls">FakeLLM</span>([capture]), <span class="cls">PARENT_TOOLS</span>)
+        d.run(<span class="cls">SubagentSpec</span>(<span class="str">"继续"</span>, (<span class="str">"read_file"</span>,), mode<span class="op">=</span><span class="str">"fork"</span>),
+              parent_messages<span class="op">=</span>[{<span class="str">"role"</span><span class="op">:</span> <span class="str">"user"</span>, <span class="str">"content"</span><span class="op">:</span> <span class="str">"我们在迁移到 pytest"</span>}])
+        self.assertIn(<span class="str">"迁移到 pytest"</span>, seen[<span class="str">"first"</span>])</code></pre></div>
+
+<h2 id="hx-23-s4">PTC：让模型写程序批量调用工具</h2>
+<p>子代理解决的是“需要判断的子任务”。还有一类任务不需要判断，只是<strong>重复</strong>：把 50 个文件都读一遍，各取一行；对 200 条记录逐个查一次；在 30 个文件里找同一个模式。</p>
+<p>用工具调用做这件事，成本是两样东西的乘积：轮数（50 次工具调用至少要几十轮）和上下文（50 份完整结果都要进上下文）。用 PTC 做，模型写一段程序，程序在沙箱里跑，只有程序的输出回到上下文——一轮，一份汇总。</p>
+<div class="table-wrap"><table><thead><tr><th></th><th>逐个工具调用</th><th>一段 PTC 程序</th></tr></thead><tbody>
+<tr><td>模型调用轮数</td><td>N+1</td><td>1（写程序）+ 可能 1 轮收尾</td></tr>
+<tr><td>进入上下文的</td><td>N 份完整结果</td><td>1 份程序输出</td></tr>
+<tr><td>中途可以改主意</td><td>可以</td><td>不行：程序写完就一次跑完</td></tr>
+<tr><td>确定性</td><td>取决于模型每次怎么调</td><td>同一段程序结果一致</td></tr>
+<tr><td>出错处理</td><td>模型看到错误自己调整</td><td>程序里的 try，或者整段失败重来</td></tr>
+</tbody></table></div>
+<p>labs 用一个受限的 Python 子集演示这件事。程序里通过 <code class="inl">call(name, **args)</code> 调工具，通过 <code class="inl">emit(text)</code> 输出：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_delegation.py::ProgramTests.test_batch_reads_return_only_summary">    <span class="kw">def</span> <span class="fn">test_batch_reads_return_only_summary</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        program <span class="op">=</span> (
+            <span class="str">"names = call('list_files').split('\\n')\n"</span>
+            <span class="str">"for n in names:\n"</span>
+            <span class="str">"    text = call('read_file', path=n)\n"</span>
+            <span class="str">"    line = [l for l in text.split('\\n') if l.startswith('VERSION')][0]\n"</span>
+            <span class="str">"    emit(n, line)\n"</span>
+        )
+        result <span class="op">=</span> run_program(program, {<span class="str">"list_files"</span><span class="op">:</span> list_files, <span class="str">"read_file"</span><span class="op">:</span> read_file})
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(len(result.calls), <span class="num">21</span>)
+        self.assertEqual(result.output.count(<span class="str">"VERSION"</span>), <span class="num">20</span>)
+        <span class="cmt"># 对比：逐个工具调用时，20 份完整文件都会进上下文</span>
+        per_call <span class="op">=</span> context_cost([read_file({<span class="str">"path"</span><span class="op">:</span> p}) <span class="kw">for</span> p <span class="kw">in</span> <span class="cls">FILES</span>])
+        self.assertLess(len(result.output) <span class="op">*</span> <span class="num">10</span>, per_call)</code></pre></div>
+<p>测试里最后两行值得看：这段程序调用了 21 次工具，产生的输出只有每个文件的一行；如果逐个工具调用，20 份完整文件（每份两百多行）都会进上下文。差距是几个数量级——这就是 PTC 的全部价值。</p>
+
+<h2 id="hx-23-s5">PTC 的边界：沙箱、静态检查、上限</h2>
+<p>让模型写程序然后执行，是这套机制里最需要小心的一步。三条边界缺一不可。</p>
+<p><strong>第一，程序必须在沙箱里跑。</strong>DSH 的 <code class="inl">run_code</code> 明确要求沙箱策略才能启用，运行时是一个受限的 Node 子进程；它的嵌套工具调用有独立的并行上限（默认 10）。这是第 15 章讲的“能力边界”，也是 PTC 唯一可靠的安全保证。</p>
+<p><strong>第二，执行前做静态检查。</strong>labs 的检查只允许一个很小的 Python 子集：没有 import、没有函数定义、没有 while、不能访问下划线开头的属性、不能用双下划线的名字：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/delegation.py::check_program"><span class="kw">def</span> <span class="fn">check_program</span>(source<span class="op">:</span> str) <span class="op">-&gt;</span> ast.<span class="cls">Module</span><span class="op">:</span>
+    <span class="str">"""静态检查：只允许一个很小的 Python 子集。没有 import、没有 def、没有属性私有名、没有 while。
+
+    这不是安全边界（真实的 PTC 必须在沙箱进程里跑，见 hx-15）；它的作用是让教学版
+    在同一个进程里运行时，不至于一段程序就能读写任意文件。
+    """</span>
+    <span class="kw">try</span><span class="op">:</span>
+        tree <span class="op">=</span> ast.parse(source, mode<span class="op">=</span><span class="str">"exec"</span>)
+    <span class="kw">except</span> <span class="cls">SyntaxError</span> <span class="kw">as</span> exc<span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">ProgramRejected</span>(<span class="str">f"语法错误：{exc.msg}（第 {exc.lineno} 行）"</span>) <span class="kw">from</span> exc
+    <span class="kw">for</span> node <span class="kw">in</span> ast.walk(tree)<span class="op">:</span>
+        <span class="kw">if</span> <span class="kw">not</span> isinstance(node, <span class="cls">ALLOWED_NODES</span>)<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ProgramRejected</span>(<span class="str">f"不允许的语法：{type(node).__name__}"</span>)
+        <span class="kw">if</span> isinstance(node, ast.<span class="cls">Attribute</span>) <span class="kw">and</span> node.attr.startswith(<span class="str">"_"</span>)<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ProgramRejected</span>(<span class="str">f"不允许访问私有属性 {node.attr}"</span>)
+        <span class="kw">if</span> isinstance(node, ast.<span class="cls">Name</span>) <span class="kw">and</span> node.id.startswith(<span class="str">"__"</span>)<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">ProgramRejected</span>(<span class="str">f"不允许的名字 {node.id}"</span>)
+    <span class="kw">return</span> tree</code></pre></div>
+<p>必须说清楚：<strong>静态检查不是安全边界</strong>。Python 的语言特性太多，想靠黑名单拦住所有逃逸路径是不现实的（<code class="inl">().__class__</code> 这类路径是经典例子，labs 用“禁止下划线开头的属性名”粗暴地挡住它，但同类路径还有别的）。它在这里的作用是让教学版在同一进程里跑的时候不至于太危险，以及在程序明显不合规时给出清楚的错误。真正的隔离要在沙箱进程里（第 15 章第 6 节讲过进程内沙箱挡不住什么）。</p>
+<p><strong>第三，工具调用次数和输出长度都有上限。</strong></p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_delegation.py::ProgramTests.test_call_budget">    <span class="kw">def</span> <span class="fn">test_call_budget</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        result <span class="op">=</span> run_program(<span class="str">"for i in range(100):\n    call('list_files')"</span>, {<span class="str">"list_files"</span><span class="op">:</span> list_files}, max_calls<span class="op">=</span><span class="num">5</span>)
+        self.assertFalse(result.ok)
+        self.assertEqual(len(result.calls), <span class="num">5</span>)</code></pre></div>
+<p>程序是一个循环，一个写错的循环能把 200 个文件读成 200 万次。上限是成本保护，不是安全措施。工具白名单同样重要：只有父级显式交给 PTC 的工具，程序里才调得到——DSH 的嵌套调用走的是同一套工具运行时，所以权限、超时、卸载对它们一样生效。</p>
+
+<h2 id="hx-23-s6">把两件事接回前面的章节</h2>
+<div class="table-wrap"><table><thead><tr><th>机制</th><th>子代理</th><th>PTC</th></tr></thead><tbody>
+<tr><td>权限（13）</td><td>工具集是父级的子集；走同一套规则</td><td>工具白名单由父级给定；嵌套调用走同一套规则</td></tr>
+<tr><td>沙箱（15）</td><td>子代理的工具调用走同一个执行入口</td><td>程序必须在沙箱里跑，必须有沙箱策略</td></tr>
+<tr><td>超时（19）</td><td>整轮预算从父级派生：父级快没时间了，就不要开新的子代理</td><td>整段程序有执行超时；单次工具调用仍走各自的预算</td></tr>
+<tr><td>熔断（20）</td><td>所有子代理共用一个依赖的熔断器，一个挂了大家都受益</td><td>同上</td></tr>
+<tr><td>卸载（08）</td><td>子代理的中间结果根本没进主线上下文</td><td>只有 <code class="inl">emit</code> 的内容进上下文</td></tr>
+<tr><td>成本（24）</td><td>按 <code class="inl">subagent</code> 单独记账</td><td>按 <code class="inl">ptc</code> 单独记账，工具调用次数也是指标</td></tr>
+</tbody></table></div>
+<p>有一个容易忽略的交互：<strong>子代理和 PTC 都会让循环的“轮数上限”失去意义</strong>。主线的 <code class="inl">max_turns</code> 是 20，但每个子代理自己还能跑 8 轮，一层 3 个子代理就是 24 轮。所以上限必须按层设置，而且要按“总预算”而不是“每层预算”来算：主线应该知道自己这一轮已经派出去多少子代理，并据此收紧后面的委派。</p>
+<p>DSH 在这一层的一个做法值得借鉴：主线在结束前会等待所有子代理结束（<code class="inl">waitForChildren</code>），而不是让它们变成孤儿进程。否则主线给出“任务完成”时，几个子代理可能还在改文件——这类竞态很难复现，也很难排查。</p>
+
+<h2 id="hx-23-s7">坑与失败案例</h2>
+<h3 id="hx-23-s7-1">坑一：子代理拿到了父级没有的权限</h3>
+<ul>
+<li><strong>触发条件</strong>：委派时把工具集写成“全部工具”，或者让模型自己指定子代理的工具。</li>
+<li><strong>后果</strong>：所有权限规则都可以通过“开个子代理”绕过。第 13 章建立的边界完全失效。</li>
+<li><strong>怎么防</strong>：工具集由父级预先定义，必须是父级工具的子集；请求父级没有的工具直接报错。</li>
+</ul>
+<h3 id="hx-23-s7-2">坑二：嵌套委派失控</h3>
+<ul>
+<li><strong>触发条件</strong>：子代理也有 <code class="inl">delegate</code> 工具，且没有深度限制。</li>
+<li><strong>后果</strong>：一层 3 个，两层 9 个，三层 27 个；每个都有自己的上下文和模型调用，成本成指数增长，而且很难在日志里看清发生了什么。</li>
+<li><strong>怎么防</strong>：默认不给子代理委派能力；要开就设最大深度，并把深度写进子代理的系统提示。</li>
+</ul>
+<h3 id="hx-23-s7-3">坑三：子代理超范围作业</h3>
+<ul>
+<li><strong>触发条件</strong>：任务描述没有写边界，子代理顺手改了清单之外的东西。</li>
+<li><strong>后果</strong>：主线按清单验收，那些额外改动没人审查；如果它们是错的，问题会在很久以后才暴露。</li>
+<li><strong>怎么防</strong>：任务描述里写清范围；要求汇报“改了哪些文件”；主线对清单之外的改动要么复核要么回滚。</li>
+</ul>
+<h3 id="hx-23-s7-4">坑四：把子代理的结论当事实</h3>
+<ul>
+<li><strong>触发条件</strong>：子代理说“测试通过”，主线直接采信。</li>
+<li><strong>后果</strong>：故事里那种“模块根本没有测试文件”的情况会被当成通过；错误被静默地传递到下一步，最后在集成时爆发。</li>
+<li><strong>怎么防</strong>：任务描述规定汇报格式（验证方式必填）；汇报里带上轮数和工具调用次数；对关键结论，主线自己跑一次验证命令。</li>
+</ul>
+<h3 id="hx-23-s7-5">坑五：PTC 程序在 harness 进程里直接执行</h3>
+<ul>
+<li><strong>触发条件</strong>：为了省事，用 <code class="inl">exec</code> 在主进程里跑模型写的程序，只靠一个黑名单做检查。</li>
+<li><strong>后果</strong>：一段程序就能读凭据、删文件、开网络连接，前面所有章节的保护全部绕过。</li>
+<li><strong>怎么防</strong>：程序在沙箱里跑；静态检查只是第一道过滤，不是边界；工具调用走白名单和次数上限。</li>
+</ul>
+<h3 id="hx-23-s7-6">坑六：子代理的结果没有回传格式，主线无法判断</h3>
+<ul>
+<li><strong>触发条件</strong>：只要求“返回结果”，没有规定格式。</li>
+<li><strong>后果</strong>：有的子代理回三段话，有的回一个表格，有的把整个文件内容贴回来。主线要么解析不了，要么被一份巨额结果撑爆上下文。</li>
+<li><strong>怎么防</strong>：任务描述里给出汇报格式模板；回传内容截断；报告带元信息（轮数、工具调用次数、是否验证）。</li>
+</ul>
+
+<h2 id="hx-23-s8">多仓库取舍对比</h2>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th><th>labs</th></tr></thead><tbody>
+<tr><td>子代理</td><td>有专门的子代理包；spawn 与 fork 两种启动方式；fork 复用历史以命中缓存</td><td>无</td><td>无</td><td>有：权限收窄、深度限制、结论回传</td></tr>
+<tr><td>子代理上下文</td><td>spawn 只带任务；fork 继承父级历史</td><td>—</td><td>—</td><td>spawn 只带任务；fork 把父级历史压成背景（教学版）</td></tr>
+<tr><td>结束处理</td><td>主线等待所有子代理结束</td><td>—</td><td>—</td><td>主线同步等待（教学版是顺序执行）</td></tr>
+<tr><td>PTC</td><td>工具展示模式之一：保留名 <code class="inl">run_code</code>，并行子调用默认上限 10，强制沙箱策略，受限 Node 子进程</td><td>无</td><td>无</td><td>受限 Python 子集 + 静态检查 + 调用/输出上限</td></tr>
+<tr><td>PTC 的权限</td><td>嵌套调用走同一套工具运行时，权限/超时/卸载同样生效</td><td>—</td><td>—</td><td>工具白名单由父级给定</td></tr>
+<tr><td>适合场景</td><td>需要并行子任务、且要让委派复用缓存的产品</td><td>单线任务</td><td>教学</td><td>理解委派的边界与回传格式</td></tr>
+</tbody></table></div>
+<p>DSH 的 fork 设计里有一个值得单独记住的原则：<strong>为了缓存而设计的继承</strong>。子代理不重新选模型、继承历史前缀，都是为了让它的第一次请求能命中父级已经建立的前缀缓存（第 06 章）。这提醒我们，委派的设计不只有“权限”和“上下文”两个维度，还有“缓存”——一个不考虑缓存的委派实现，会让每一次子任务都从零开始计费。</p>
+
+<h2 id="hx-23-s9">小结</h2>
+<ul>
+<li>委派的价值是把中间过程挡在主线上上下文之外；不值得为“一步能做完”或“需要主线上下文”的任务开子代理。</li>
+<li>权限只能收窄：工具集由父级给定、必须是子集、请求越权直接报错；嵌套委派默认关掉。</li>
+<li>任务描述要写全四件事：做什么、依据、边界、验证与汇报格式。</li>
+<li>结论回传只带结论、验证方式、拿不准的地方，加上轮数与工具调用次数；长度要截断。</li>
+<li>PTC 适合重复、机械、调用次数多的任务；程序必须在沙箱里跑，静态检查不是边界，调用次数与输出长度都要有上限。</li>
+<li>子代理和 PTC 都会让“轮数上限”失去意义：上限要按总预算算，主线结束前要等所有子代理结束。</li>
+</ul>
+<p>到这里，一个完整的 harness 已经能跑起来，而且能扩展、能委派。剩下的问题是：跑到生产里之后，你怎么知道它慢在哪、贵在哪、什么时候开始变差。继续读：<a href="#hx-24">可观测性与成本</a>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>二百多个模块的迁移，主线派了二百多次活，自己只保留了每次的一句话汇报，整个过程的上下文从头到尾没超过两万 token。跑完的那天，林舟把所有子代理的汇报导出来，做了一件他以前不敢想的事：抽了二十个模块，自己跑了一遍测试。</p>
+<p>十九个和汇报一致。第二十个，子代理说“改动完成，无测试文件，未验证”，主线把它标成了“需要人工确认”——那一个模块的日志调用确实改对了，但顺手多加了一行错误处理，没人注意。</p>
+<p>他顺手看了一眼这次的账单，发现一件事：费用的大头不在主线，在子代理。二百多次委派里，有三十多次的子代理用了七八轮才得出结论，而其中有一半的模块其实只改一两行。他翻到第 24 章的笔记，写了三个问题：这三十多次为什么这么慢？钱具体花在哪？如果下一周表现变差了，怎么知道是从哪一天开始的？</p>
+<p class="hx-story-say">“你现在有日志，”老唐说，“但日志回答的是‘发生了什么’。你问的是另外三个问题。”</p>
+<p>下一章：<a href="#hx-24">可观测性与成本</a>。</p>
+</div>
+</section>

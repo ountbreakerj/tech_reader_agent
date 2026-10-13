@@ -1,0 +1,290 @@
+<section class="chapter" id="ch-hx-25" data-slug="hx-25"><div class="ch-head"><span class="ch-num">第 25 章</span></div><h1 id="hx-25">组装 mini-harness 与长任务连续性</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 25 章（虚构）</span>
+<p>阿青的问题是这样的：周五下班前她让橘子改一个模块，改到一半，改了三个文件，测试还没跑，她关掉终端走了。周一早上她重新打开，橘子问她：“有什么可以帮你的吗？”</p>
+<p>日志里什么都有。但那是一份<strong>记录</strong>，不是一份<strong>交接</strong>。记录回答“发生过什么”，交接回答“现在是什么状态、接下来该做什么”。</p>
+<p>林舟的第一版答案是“把上周的历史加载进来”。试了一次就放弃了：那个任务的历史有六万多 token，加载进来要花二十多秒和一笔不小的钱，而且模型读完之后还是会问“你想让我做什么”。</p>
+<p>老唐让他换一个角度想：“人是怎么交接的？下班前你在群里说一句：今天改了哪三个文件、改到哪一步、下一步跑那个模块的测试、有个地方拿不准。周一早上接手的人先跑一遍测试看看当前状态，然后接着干。”</p>
+<p>他们把橘子改成：一天结束前（或者任务告一段落时），写一份交接——目标、已完成、下一步、拿不准的地方、开工前该跑哪些验证命令；周一早上新会话开始时，读这份交接，并且<strong>先跑验证命令</strong>确认当前状态和交接里写的一致，再动手。</p>
+<p>第一次试用就抓住了一个问题：交接里写“已改 a17、a18、a19，测试通过”，但验证命令跑下来发现 <code class="inl">a18</code> 的测试是失败的——因为周五下班后有人从主干合了一个改动进来。如果没有那一步验证，橘子会从“全都通过了”这个错误前提上继续往下做。</p>
+<p>这一章做两件事：把前面二十四章的部件装成一台能跑的机器，以及回答“一个任务跑不完怎么办”——答案是<strong>让状态活在仓库里，而不是活在对话历史里</strong>。</p>
+</div>
+<p>前面每一章都只实现了一个部件，而且刻意让它能单独读懂：循环、注册表、执行管线、日志、预算、缓存、压缩、卸载、记忆、检索、权限、解析、沙箱、审批、注入、重试、超时、熔断、hooks、Skill 与 MCP、委派与 PTC、可观测性。这一章把它们接起来，重点是<strong>顺序</strong>：每一层放在哪、谁包着谁、谁在谁之前。</p>
+<p>然后是最后一件没解决的事：连续性。一个要跑几天的任务，不可能一口气跑完；会话会结束、进程会被杀、用户会去睡觉。恢复靠什么？</p>
+
+<h2 id="hx-25-s0">先看全貌：组装与连续性是什么、管哪些事</h2>
+<p>一句话：组装是按正确的顺序把各章的部件串成一个能跑的整体；长任务连续性是指一个跨多个会话的任务，靠仓库里的工件（进度、决策、交接）而不是靠对话历史接上。</p>
+<p>这一层的重点：</p>
+<ul>
+<li><strong>顺序</strong>：一次工具调用和一次模型调用分别经过哪些层，谁包着谁。</li>
+<li><strong>停止原因</strong>：一次运行为什么结束，每种原因对应什么处置。</li>
+<li><strong>工件</strong>：进度文件、决策文件、交接文件分别记什么，谁写谁读。</li>
+<li><strong>开工验证</strong>：新会话开始时先验证状态，再干活。</li>
+<li><strong>压缩与重置的取舍</strong>：什么时候压缩现有历史，什么时候干脆从头开始。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>层与层的顺序</td><td>按写的顺序随手嵌套</td><td>熔断在重试外面、重试在模型外面、整轮截止时刻在最外面；hooks 在执行前后、权限在校验之后</td></tr>
+<tr><td>停止原因</td><td>一个布尔值“成功 / 失败”</td><td>区分完成、轮数上限、时间超限、熔断、模型错误、错误预算、被拦截；每种给不同的下一步</td></tr>
+<tr><td>跨会话恢复</td><td>加载上一次的完整历史</td><td>写一份交接：目标、已完成、下一步、未决问题、验证命令；新会话读交接并先跑验证</td></tr>
+<tr><td>状态放哪</td><td>放在对话历史里</td><td>放在仓库里的文件里：历史会被压缩、会被截断、会随进程消失，文件不会</td></tr>
+</tbody></table></div>
+<h3 id="hx-25-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript）：整份 harness 就是以“组装”的形式存在的——每个能力都是一个包，由若干装配文件把它们组合起来（基础的、headless 的、各运行形态各一套）。会话日志是唯一的事实来源，投影从日志里算出来，子代理结束时主线会等待它们，恢复靠日志重放。</p>
+<p><strong>OpenHarness</strong>（Python）：单体工程，各部件在同一个进程里按调用顺序串起来；恢复靠会话文件。</p>
+<p><strong>learn-harness-engineering</strong>（讲义）：这一层讲得最清楚。它的第五讲讲长任务为什么会失去连续性，列出三个具体的失效模式——重建成本、上下文焦虑、漂移（Drift）；给出的对策是仓库里的工件：进度文件、决策文件，以及“上班 / 下班”两套固定动作（会话开始时读状态并验证，会话结束前写进度和决策）。讲义里明确标注它的数字是教学默认值。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/assembly.py</code>，<code class="inl">MiniHarness</code> 把第 01–24 章的部件按顺序串起来，外加交接文件的读写与校验，14 条测试。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1 节给出完整的调用顺序，这是本章的骨架，值得对照 labs 的代码读一遍。</li>
+<li>第 2 节讲停止原因；第 3 节讲组装版为什么故意做得小（它的用途是看清接口）。</li>
+<li>第 4–6 节讲连续性：三个失效模式、三类工件、开工与收工的动作。第 6 节最重要。</li>
+<li>第 8 节的坑可以当自查清单；第 9 节是全书的收束。</li>
+</ol>
+<p>本章的源码描述来自前面章节已经核对过的笔记；不再逐条标注 <code class="inl">文件:行号</code>。</p></blockquote>
+
+<h2 id="hx-25-s1">调用顺序</h2>
+<p>先看一次模型调用的完整路径，由外到内：</p>
+<div class="table-wrap"><table><thead><tr><th>层</th><th>做什么</th><th>章</th><th>放在这一层的理由</th></tr></thead><tbody>
+<tr><td>整轮截止时刻</td><td>这一轮总共能花多久</td><td>19</td><td>所有内层从它派生，它是最外层的约束</td></tr>
+<tr><td>熔断器</td><td>依赖持续失败时直接拒绝</td><td>20</td><td>在重试外面：断开时连重试都不做</td></tr>
+<tr><td>重试</td><td>临时故障退避重试</td><td>18</td><td>包住单次请求；一次“带重试的调用”作为一次结果计入熔断器</td></tr>
+<tr><td>单次请求（含流式空闲超时）</td><td>不回来的请求变成可处理的失败</td><td>19</td><td>最内层，贴着网络</td></tr>
+<tr><td>模型适配器</td><td>厂商格式转换</td><td>00</td><td>—</td></tr>
+</tbody></table></div>
+<p>再看一次工具调用，由外到内：</p>
+<div class="table-wrap"><table><thead><tr><th>层</th><th>做什么</th><th>章</th><th>放在这一层的理由</th></tr></thead><tbody>
+<tr><td>工具超时</td><td>包住整个调用</td><td>19</td><td>超时属于执行，不属于判定</td></tr>
+<tr><td>hooks（执行前）</td><td>观察、改参数、拦截</td><td>21</td><td>在权限判定之前：hook 可能改参数，权限要看最终参数</td></tr>
+<tr><td>参数校验</td><td>schema 校验</td><td>02</td><td>权限谓词要读参数，参数必须是形状正确的</td></tr>
+<tr><td>权限规则</td><td>allow / deny / ask</td><td>13</td><td>校验之后、执行之前</td></tr>
+<tr><td>审批</td><td>ask 时问人</td><td>16</td><td>权限判定之后</td></tr>
+<tr><td>沙箱执行</td><td>限定目录、环境、资源</td><td>15</td><td>最后一道，贴着实际执行</td></tr>
+<tr><td>hooks（执行后）</td><td>改输出、追加上下文</td><td>21</td><td>执行之后，结果已是事实</td></tr>
+<tr><td>输出卸载</td><td>超长输出落盘，只留摘要</td><td>08</td><td>在进上下文之前</td></tr>
+</tbody></table></div>
+<p>labs 的组装版把这条链写成了一个方法，可以对照着读：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/assembly.py::MiniHarness._run_tool">    <span class="kw">def</span> <span class="fn">_run_tool</span>(self, call_id<span class="op">:</span> str, name<span class="op">:</span> str, args<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> tuple[str, bool, list[str]]<span class="op">:</span>
+        <span class="kw">with</span> self.tracer.span(<span class="str">f"tool.{name}"</span>, tool<span class="op">=</span>name)<span class="op">:</span>
+            pre <span class="op">=</span> self.hooks.dispatch(<span class="cls">PRE_TOOL</span>, {<span class="str">"tool_name"</span><span class="op">:</span> name, <span class="str">"tool_input"</span><span class="op">:</span> args})
+            <span class="kw">if</span> pre.blocked<span class="op">:</span>
+                <span class="kw">return</span> <span class="str">f"Error: 被 hook {pre.blocked_by} 拒绝：{pre.reason}"</span>, <span class="kw">True</span>, pre.contexts
+            args <span class="op">=</span> pre.payload.get(<span class="str">"tool_input"</span>, args)
+            <span class="kw">if</span> self.permissions <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+                decision <span class="op">=</span> self.permissions.decide(name, args)
+                <span class="kw">if</span> decision.outcome <span class="op">!=</span> <span class="cls">ALLOW</span><span class="op">:</span>
+                    <span class="cmt"># 组装版没有审批界面：ask 按无通道处理（hx-16 的 fail-closed）</span>
+                    verb <span class="op">=</span> <span class="str">"拒绝"</span> <span class="kw">if</span> decision.outcome <span class="op">==</span> <span class="cls">DENY</span> <span class="kw">else</span> <span class="str">"需要人工确认，当前无审批通道，按拒绝处理"</span>
+                    <span class="kw">return</span> <span class="str">f"Error: 权限规则 {decision.rule or '默认策略'} {verb}：{decision.reason}"</span>, <span class="kw">True</span>, pre.contexts
+            output <span class="op">=</span> self.registry.call(name, args)      <span class="cmt"># 内部做参数校验，失败返回 Error 文本</span>
+            is_error <span class="op">=</span> output.startswith(<span class="str">"Error:"</span>)
+            post <span class="op">=</span> self.hooks.dispatch(<span class="cls">POST_TOOL</span>, {<span class="str">"tool_name"</span><span class="op">:</span> name, <span class="str">"tool_input"</span><span class="op">:</span> args,
+                                                   <span class="str">"tool_output"</span><span class="op">:</span> output, <span class="str">"is_error"</span><span class="op">:</span> is_error})
+            <span class="kw">return</span> str(post.payload.get(<span class="str">"tool_output"</span>, output)), is_error, pre.contexts <span class="op">+</span> post.contexts</code></pre></div>
+<p>两条容易搞反的顺序，在组装时值得专门确认一次：</p>
+<ul>
+<li><strong>hooks 在权限之前还是之后？</strong>labs 放在之前，理由是 hook 可以修改参数（比如规范化路径），权限应该对最终参数做判断。如果放在之后，一个 hook 把 <code class="inl">../etc/passwd</code> 改成别的路径，权限判定就基于了一个过期的值。反过来的考虑也有道理：先让权限拒绝掉明显不该做的调用，省掉一次 hook 启动开销。两种都成立，关键是<strong>写清楚</strong>，并且不要在同一层既改参数又依赖参数。</li>
+<li><strong>审批在权限之前还是之后？</strong>必须在之后（第 16 章）：规则拒绝的调用不应该交给人去特批，否则规则就不再是边界。</li>
+</ul>
+<p>组装版里还有一处是刻意简化的：<code class="inl">ask</code> 被当成“无审批通道”处理，直接拒绝。这是第 16 章的 fail-closed 默认值，也提醒了一件事——一个没有审批界面的 harness，它的权限规则实际上只有 allow 和 deny 两种结果。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_assembly.py::HarnessTests.test_ask_without_channel_fails_closed">    <span class="kw">def</span> <span class="fn">test_ask_without_channel_fails_closed</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        engine <span class="op">=</span> <span class="cls">PermissionEngine</span>(default_rules(self.root))
+        h <span class="op">=</span> self.harness([call(<span class="str">"write_file"</span>, path<span class="op">=</span><span class="str">"b.py"</span>, content<span class="op">=</span><span class="str">"x"</span>), done()], permissions<span class="op">=</span>engine)
+        report <span class="op">=</span> h.run(<span class="str">"写个文件"</span>)
+        self.assertIn(<span class="str">"无审批通道"</span>, report.messages[<span class="num">2</span>][<span class="str">"content"</span>][<span class="num">0</span>][<span class="str">"content"</span>])</code></pre></div>
+
+<h2 id="hx-25-s2">停止原因</h2>
+<p>循环为什么停下来，比“成功还是失败”丰富得多。组装版区分七种：</p>
+<div class="table-wrap"><table><thead><tr><th>停止原因</th><th>含义</th><th>合理的下一步</th></tr></thead><tbody>
+<tr><td><code class="inl">completed</code></td><td>模型给出最终回答，且没有 hook 要求继续</td><td>结束</td></tr>
+<tr><td><code class="inl">max_turns</code></td><td>撞上轮数上限</td><td>多半是任务太大或模型在打转；让人看一眼</td></tr>
+<tr><td><code class="inl">timeout</code></td><td>整轮时间预算用完</td><td>停下来总结已完成的部分和剩下的工作</td></tr>
+<tr><td><code class="inl">circuit_open</code></td><td>模型依赖已熔断</td><td>不要重试，等冷却或换模型（第 20 章的降级链）</td></tr>
+<tr><td><code class="inl">llm_error</code></td><td>重试耗尽后仍失败</td><td>告诉用户失败类型和尝试次数</td></tr>
+<tr><td><code class="inl">error_budget</code></td><td>工具连续失败达到上限</td><td>检查工具或参数；这也是“打转”的信号</td></tr>
+<tr><td><code class="inl">blocked</code></td><td>用户输入或某个调用被 hook 拦截</td><td>把拦截理由给用户</td></tr>
+<tr><td><code class="inl">max_tokens</code> / <code class="inl">refusal</code></td><td>模型自己的停止原因</td><td>前者要续写（第 01 章），后者要换问法或告诉用户</td></tr>
+</tbody></table></div>
+<p>把它们分开的价值，在可观测性那一章已经说过一次：一个笼统的“成功率 82%”没有信息量，拆成“12% 撞上轮数上限、4% 撞上错误预算”就能直接指向原因。这里加一句：<strong>停止原因也是给用户的</strong>。用户看到“橘子跑完了但只做了一半”，和看到“橘子跑到了 20 轮上限，通常意味着任务太大，建议拆成几步”，两种体验完全不同。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_assembly.py::HarnessTests.test_error_budget">    <span class="kw">def</span> <span class="fn">test_error_budget</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        script <span class="op">=</span> [call(<span class="str">"read_file"</span>, path<span class="op">=</span><span class="str">f"missing{i}.py"</span>) <span class="kw">for</span> i <span class="kw">in</span> range(<span class="num">5</span>)]
+        h <span class="op">=</span> self.harness(script, config<span class="op">=</span><span class="cls">HarnessConfig</span>(max_consecutive_errors<span class="op">=</span><span class="num">2</span>))
+        <span class="cmt"># registry.call 对不存在的文件返回 "Error: 没有 ..."，计入连续错误</span>
+        self.assertEqual(h.run(<span class="str">"读一堆不存在的文件"</span>).stop, <span class="str">"error_budget"</span>)</code></pre></div>
+
+<h2 id="hx-25-s3">组装版刻意没做的事</h2>
+<p><code class="inl">MiniHarness</code> 只有两百来行，它不做这些事：</p>
+<div class="table-wrap"><table><thead><tr><th>没做的</th><th>为什么</th><th>要做的话去哪一章</th></tr></thead><tbody>
+<tr><td>并行执行工具</td><td>顺序执行更容易看清每一层的顺序</td><td>03（执行管线与并发）</td></tr>
+<tr><td>插话（运行中追加用户输入）</td><td>会引入一整套并发与优先级问题</td><td>01（DSH 的 turn 续延长机制）</td></tr>
+<tr><td>压缩与卸载</td><td>需要历史达到一定规模才用得上</td><td>07、08</td></tr>
+<tr><td>子代理与 PTC</td><td>会掩盖工具调用的路径</td><td>23</td></tr>
+<tr><td>审批界面</td><td>需要一个前端</td><td>16</td></tr>
+</tbody></table></div>
+<p>组装版的价值是<strong>看清接口</strong>：你能在一个文件里看到模型调用怎么被熔断包住、工具调用怎么被 hooks 包住、以及每一步怎么写日志和 span。真实项目不会用这个组装版，但可以拿它对照自己的顺序。</p>
+<p>如果要往一个真实项目迁移，建议的顺序是：先照组装版把顺序理清，再把并行（第 03 章）加回来，然后加压缩与卸载，最后加委派。反过来做（先上子代理和并行）最常见，也最容易把顺序问题埋进去——出问题时你分不清是并行导致的还是层序导致的。</p>
+
+<h2 id="hx-25-s4">长任务为什么会失去连续性</h2>
+<p>阿青的问题不是橘子特有的。learn-harness-engineering 的讲义把它拆成三个具体的失效模式：</p>
+<div class="table-wrap"><table><thead><tr><th>失效模式</th><th>表现</th><th>根因</th></tr></thead><tbody>
+<tr><td>重建成本</td><td>新会话要花很久才进入状态：重新读文件、重新理解代码结构、重新发现上次的结论</td><td>状态只存在于上一个会话的对话历史里，新会话拿不到</td></tr>
+<tr><td>上下文焦虑</td><td>任务快做完时，历史越来越长，模型开始担心放不下，于是草草收尾或者反复压缩</td><td>把所有细节都堆在同一个上下文里</td></tr>
+<tr><td>漂移</td><td>做了几步之后方向偏了，而且没人（包括模型自己）注意到</td><td>缺少一份显式的“目标与当前进度”，只有一长串对话</td></tr>
+</tbody></table></div>
+<p>讲义还指出一个关键的区别：<strong>压缩与重置不是一回事</strong>。压缩（第 07 章）保留历史的形状，丢掉细节；重置丢掉全部历史，从头开始，只依赖仓库里的工件。压缩丢的是“为什么”——为什么当初这么选、哪些方案试过不行；如果这些没有写进决策文件，压缩之后就永久丢失了。所以：</p>
+<ul>
+<li><strong>能写进文件的不留在对话里</strong>：目标、进度、决策、未决问题。</li>
+<li><strong>需要推理过程的才留在对话里</strong>：当前的探索、正在写的代码、刚读到的内容。</li>
+<li><strong>压缩之后要重建的</strong>：把任务表和进度重新放回运行时上下文（第 09 章的做法），而不是指望摘要记得住。</li>
+</ul>
+
+<h2 id="hx-25-s5">三类工件</h2>
+<p>状态要有地方放。labs 用了三个文件：</p>
+<div class="table-wrap"><table><thead><tr><th>文件</th><th>写什么</th><th>谁写</th><th>谁读</th></tr></thead><tbody>
+<tr><td><code class="inl">PROGRESS.md</code></td><td>每个阶段的进度：做了什么、下一步</td><td>每次收工追加一段</td><td>新会话开始时读</td></tr>
+<tr><td><code class="inl">DECISIONS.md</code></td><td>每个设计决策：决定了什么、为什么</td><td>做出决策时追加</td><td>后人（包括未来的模型）需要知道“为什么”时</td></tr>
+<tr><td><code class="inl">.harness/handoff.json</code></td><td>结构化交接：目标、已完成、下一步、未决问题、验证命令</td><td>会话结束前写</td><td>下一个会话开始时读</td></tr>
+</tbody></table></div>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/assembly.py::Handoff"><span class="dec">@dataclass</span>
+<span class="kw">class</span> <span class="cls">Handoff</span><span class="op">:</span>
+    <span class="str">"""一次会话结束时留给下一次会话的东西。字段刻意少：多了没人写，也没人读。"""</span>
+
+    goal<span class="op">:</span> str
+    done<span class="op">:</span> list[str]
+    next_steps<span class="op">:</span> list[str]
+    open_questions<span class="op">:</span> list[str] <span class="op">=</span> field(default_factory<span class="op">=</span>list)
+    verify<span class="op">:</span> list[str] <span class="op">=</span> field(default_factory<span class="op">=</span>list)        <span class="cmt"># 下一次开工前先跑的验证命令</span>
+    updated_at<span class="op">:</span> str <span class="op">=</span> <span class="str">""</span>
+
+    <span class="kw">def</span> <span class="fn">validate</span>(self) <span class="op">-&gt;</span> list[str]<span class="op">:</span>
+        problems <span class="op">=</span> []
+        <span class="kw">if</span> <span class="kw">not</span> self.goal.strip()<span class="op">:</span>
+            problems.append(<span class="str">"缺少目标"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> self.next_steps<span class="op">:</span>
+            problems.append(<span class="str">"没有写下一步：下一个会话会从头摸索"</span>)
+        <span class="kw">if</span> <span class="kw">not</span> self.verify<span class="op">:</span>
+            problems.append(<span class="str">"没有写验证命令：下一个会话无法确认当前状态是不是好的"</span>)
+        <span class="kw">return</span> problems</code></pre></div>
+<p>字段刻意少。<strong>交接文件最怕的是字段太多</strong>：字段一多，写的时候会挑几个填，读的时候要处理缺字段，最后没人相信它。labs 的校验只强制三件事：有目标、有下一步、有验证命令。第三项是最容易被省、也最有价值的一项：没有验证命令，下一个会话就只能相信交接里写的“测试通过”。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="kw">def</span> <span class="fn">write_handoff</span>(workdir<span class="op">:</span> str, handoff<span class="op">:</span> <span class="cls">Handoff</span>, <span class="op">*</span>, now<span class="op">:</span> str <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> list[str]<span class="op">:</span>
+    <span class="str">"""会话结束前（「下班」）调用：写交接文件，同时把进度追加到 PROGRESS.md。"""</span>
+    problems <span class="op">=</span> handoff.validate()
+    ...
+    tmp <span class="op">=</span> target.with_suffix(<span class="str">".tmp"</span>)
+    tmp.write_text(json.dumps(handoff.__dict__, ensure_ascii<span class="op">=</span><span class="kw">False</span>, indent<span class="op">=</span><span class="num">2</span>), encoding<span class="op">=</span><span class="str">"utf-8"</span>)
+    tmp.replace(target)      <span class="cmt"># 原子替换：进程中途被杀，也不会留下半个交接文件</span></code></pre></div>
+<p>原子替换这一个细节值得说明：写交接的时机恰好是“会话要结束了”，进程随时可能被杀。直接覆盖写，一旦在写的中途被杀，留下的是一个坏掉的交接文件，下一个会话读它的时候会崩。先写临时文件再原子替换，保证读到的要么是旧的完整版，要么是新的完整版。</p>
+<p>为什么交接要写进仓库，而不是只存在会话日志里？因为<strong>接手的不一定是同一个 harness</strong>：可能是另一个 CLI、另一个模型、或者是周一早上的阿青本人。放在仓库里、格式是普通文本和 JSON，谁都能读。</p>
+
+<h2 id="hx-25-s6">上班与下班</h2>
+<p>把这件事做成两个固定动作，比“记得写交接”可靠得多。</p>
+<p><strong>收工（会话结束前）：</strong></p>
+<ol>
+<li>跑一遍验证命令，确认真实状态（而不是凭记忆写“测试通过”）。</li>
+<li>写交接：目标、已完成、下一步、未决问题、验证命令。</li>
+<li>把“为什么这么选”写进决策文件。</li>
+<li>清理：临时文件、没用的分支、后台进程。</li>
+</ol>
+<p><strong>开工（新会话开始时）：</strong></p>
+<ol>
+<li>读交接和进度文件。</li>
+<li><strong>先跑验证命令</strong>，确认当前状态和交接描述一致。</li>
+<li>不一致就先解决差异，再继续下一步（差异本身就是重要信息：可能是别人动了代码，也可能是上次的交接写错了）。</li>
+</ol>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/assembly.py::resume_prompt"><span class="kw">def</span> <span class="fn">resume_prompt</span>(handoff<span class="op">:</span> <span class="cls">Handoff</span> <span class="op">|</span> <span class="kw">None</span>) <span class="op">-&gt;</span> str<span class="op">:</span>
+    <span class="str">"""把交接渲染成新会话的第一段上下文。先验证，再干活。"""</span>
+    <span class="kw">if</span> handoff <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="str">"这是一个新任务，没有上一次的交接记录。"</span>
+    parts <span class="op">=</span> [<span class="str">f"上一次会话（{handoff.updated_at}）留下的交接："</span>, <span class="str">f"目标：{handoff.goal}"</span>]
+    <span class="kw">if</span> handoff.done<span class="op">:</span>
+        parts.append(<span class="str">"已完成："</span> <span class="op">+</span> <span class="str">"；"</span>.join(handoff.done))
+    parts.append(<span class="str">"下一步："</span> <span class="op">+</span> <span class="str">"；"</span>.join(handoff.next_steps))
+    <span class="kw">if</span> handoff.open_questions<span class="op">:</span>
+        parts.append(<span class="str">"未决问题："</span> <span class="op">+</span> <span class="str">"；"</span>.join(handoff.open_questions))
+    <span class="kw">if</span> handoff.verify<span class="op">:</span>
+        parts.append(<span class="str">"开工前先运行这些命令，确认当前状态和交接描述一致："</span> <span class="op">+</span> <span class="str">"；"</span>.join(handoff.verify))
+    <span class="kw">return</span> <span class="str">"\n"</span>.join(parts)</code></pre></div>
+<p>第二步是整套机制里最关键的。故事里那次“有人合了主干改动进来导致 a18 的测试其实是失败的”，如果没有开工验证，橘子会从错误的前提出发继续干活——而且它的每一次判断都是基于“a18 已经改好了”。</p>
+<blockquote><p><strong>和 hooks 的关系</strong>：这两个动作可以用第 21 章的 hook 来保证。“下班”可以做成会话结束时的 hook，“开工”可以做成会话开始时的 hook。区别是：hook 保证它会<strong>发生</strong>，但内容仍然要模型（或者人）来写。用 hook 强制“写交接”，再用校验函数检查必填项，这套机制就不依赖当事人记性好不好了。</p></blockquote>
+
+<h2 id="hx-25-s7">什么时候压缩，什么时候重置</h2>
+<p>历史变长时有两个选择，取舍如下：</p>
+<div class="table-wrap"><table><thead><tr><th></th><th>压缩（第 07 章）</th><th>重置（新会话 + 交接）</th></tr></thead><tbody>
+<tr><td>保留</td><td>对话的形状与一部分细节</td><td>只有仓库里的工件</td></tr>
+<tr><td>丢失</td><td>细节、部分“为什么”</td><td>全部对话，包括正在写的东西</td></tr>
+<tr><td>成本</td><td>一次摘要调用</td><td>重新读取需要的文件</td></tr>
+<tr><td>适合</td><td>任务还需要当前的探索上下文</td><td>任务阶段之间；上下文里已经堆了很多无关内容</td></tr>
+</tbody></table></div>
+<p>实践中的组合是：任务进行中压缩，阶段之间重置。判断依据是“上下文里有多少东西是这一步还需要用的”：如果超过一半已经无关，重置比压缩划算——重置后的上下文干净、便宜，而且能从工件里重建出需要的信息；如果大部分还在用，压缩更划算。</p>
+<p>重置还有一个副作用值得记住：它会<strong>丢掉缓存命中</strong>（第 06 章）。新会话的前缀和旧会话不同，第一次请求全是缓存写。所以频繁重置的成本不只是重读文件，还包括重新建立缓存。</p>
+
+<h2 id="hx-25-s8">坑与失败案例</h2>
+<h3 id="hx-25-s8-1">坑一：靠上一个会话的历史恢复</h3>
+<ul>
+<li><strong>触发条件</strong>：新会话把上一次的完整历史加载进来当上下文。</li>
+<li><strong>后果</strong>：重建成本高（几万 token、几十秒），而且模型读完还是会问“你想让我做什么”——历史里没有“下一步是什么”这个信息。</li>
+<li><strong>怎么防</strong>：交接文件 + 开工验证。历史用来查证，不用来恢复。</li>
+</ul>
+<h3 id="hx-25-s8-2">坑二：交接里只有“已完成”，没有“下一步”</h3>
+<ul>
+<li><strong>触发条件</strong>：交接模板里“已完成”是必填，“下一步”靠自觉。</li>
+<li><strong>后果</strong>：新会话要重新分析一遍才敢动手，交接的价值减半。</li>
+<li><strong>怎么防</strong>：把“下一步”和“验证命令”做成必填项，缺了就在收工时报警（labs 的 <code class="inl">validate()</code> 就是干这个的）。</li>
+</ul>
+<h3 id="hx-25-s8-3">坑三：不验证就相信交接</h3>
+<ul>
+<li><strong>触发条件</strong>：新会话直接按交接里的描述继续做事。</li>
+<li><strong>后果</strong>：交接写的是几小时甚至几天前的状态；代码可能被合了别人的改动、依赖可能升级了、临时文件可能被清理了。从错误前提上继续做，比从头做更糟。</li>
+<li><strong>怎么防</strong>：开工先跑验证命令；不一致就先把差异讲清楚。</li>
+</ul>
+<h3 id="hx-25-s8-4">坑四：交接文件写一半被杀</h3>
+<ul>
+<li><strong>触发条件</strong>：直接覆盖写交接文件，写入过程中进程被杀。</li>
+<li><strong>后果</strong>：留下一个语法不全的 JSON，下一个会话读它时崩溃，而且旧的那份已经被覆盖掉了。</li>
+<li><strong>怎么防</strong>：先写临时文件再原子替换；读取时对解析失败做兜底（当作没有交接，而不是崩掉）。</li>
+</ul>
+<h3 id="hx-25-s8-5">坑五：决策的“为什么”没留下来</h3>
+<ul>
+<li><strong>触发条件</strong>：只记“改成了什么”，不记“为什么这么改”。</li>
+<li><strong>后果</strong>：压缩一次之后，“为什么”永久丢失。后面的会话（或者人）会重新提出已经被否决的方案，甚至推翻一个有理由的决定。</li>
+<li><strong>怎么防</strong>：决策文件里写“决定 + 原因”两行；把“试过但不行”的方案也记下来，它和“选了哪个”一样有价值。</li>
+</ul>
+<h3 id="hx-25-s8-6">坑六：把所有东西都记进工件</h3>
+<ul>
+<li><strong>触发条件</strong>：进度文件每做一步就追加一大段，交接文件字段越来越多。</li>
+<li><strong>后果</strong>：工件本身变成需要压缩的东西；读它的人和模型都会跳过它。</li>
+<li><strong>怎么防</strong>：工件只记“下一个会话需要知道的”。判据是：这条信息如果不说，下一个会话会不会做错事？不会就别记。</li>
+</ul>
+
+<h2 id="hx-25-s9">回到全局：这个 harness 由什么组成</h2>
+<p>把二十五章放在一起看，一个 harness 可以分成六类部件：</p>
+<div class="table-wrap"><table><thead><tr><th>类别</th><th>部件</th><th>章</th><th>它回答的问题</th></tr></thead><tbody>
+<tr><td>骨架</td><td>循环与停止条件、工具定义、执行管线、会话日志</td><td>01–04</td><td>下一步做什么、怎么执行、怎么记录</td></tr>
+<tr><td>上下文</td><td>预算、缓存、压缩、卸载</td><td>05–08</td><td>什么东西现在能进模型的窗口</td></tr>
+<tr><td>记忆</td><td>工作记忆、长期记忆与指令、检索、生命周期</td><td>09–12</td><td>什么东西值得跨轮、跨会话留下来</td></tr>
+<tr><td>安全</td><td>权限、命令解析、沙箱、审批、注入</td><td>13–17</td><td>能不能做、做的是什么、最多能造成什么损失</td></tr>
+<tr><td>韧性</td><td>重试、超时、熔断与降级</td><td>18–20</td><td>外部世界不可靠时怎么继续</td></tr>
+<tr><td>扩展与运维</td><td>hooks、Skill 与 MCP、委派与 PTC、可观测性、组装与连续性</td><td>21–25</td><td>谁能往里加东西、跑起来之后怎么看</td></tr>
+</tbody></table></div>
+<p>这六类里，最容易被低估的是<strong>骨架</strong>和<strong>连续性</strong>：前者看起来只是几十行循环，后者看起来只是几个文件。但真正让一个 agent 从“能跑”变成“好用”的，往往不是多了一个工具或者多了一个模型，而是“它知道自己做到哪了”和“它停下来的时候状态是清楚的”。</p>
+
+<h2 id="hx-25-s10">小结</h2>
+<ul>
+<li>组装的关键是顺序：整轮截止时刻在最外，熔断在重试外，重试包住单次请求；hooks 在执行前后，权限在参数校验之后。</li>
+<li>停止原因是结构化的，不是布尔值：每种原因对应不同的下一步，也要分别统计。</li>
+<li>组装版刻意不做并行、插话、压缩、委派，它的价值是让你看清接口和顺序。</li>
+<li>长任务失去连续性有三个原因：重建成本、上下文焦虑、漂移。对策是把状态放进仓库的工件里，而不是对话历史里。</li>
+<li>三类工件：进度（做了什么、下一步）、决策（决定了什么、为什么）、交接（目标、已完成、下一步、未决问题、验证命令）。</li>
+<li>收工先验证再写交接；开工先读交接再跑验证，不一致就先解决差异。写交接要原子替换。</li>
+<li>任务进行中压缩，阶段之间重置；重置会丢掉缓存命中。</li>
+</ul>
+<p>到这里，一个完整的、能跑长任务的 harness 已经组装完成。最后一章换一个角度：前面二十五章讲的都是“怎么造”，最后看看“怎么用”——同一个 harness，按不同的控制流去解任务，效果可能差好几倍。继续读：<a href="#hx-26">Agent 范式</a>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 白板的最后一页（虚构）</span>
+<p>周一早上，橘子读了交接，跑了四条验证命令，发现 <code class="inl">a18</code> 的测试失败，于是先没说“继续改 a20”，而是说：“交接里写 a18 测试通过，但现在失败了；差异出现在 <code class="inl">logging.py</code> 的一个新签名，可能是周末有人合了改动。要我先修 a18 吗？”</p>
+<p>阿青回了一个字：“修。”橘子改完 a18，重新跑验证，确认全绿之后接着做 a20。</p>
+<p>那天下午，老唐把四页白板从墙上取下来，钉在一起。第一页是“谁说了算”（规则、解析、院子、审批、来源），第二页是“它会出事”（再试一次、别等太久、别撞同一堵墙），第三页是“别人怎么往里加东西”（门、说明书、外部能力、派活），第四页只有一行字：<strong>状态放在仓库里，不放在脑子里</strong>。</p>
+<p>阿青看着第四页说：“那要是任务本身，我们不知道该按什么思路去做呢？”</p>
+<p>老唐把白板翻过去，背面还空着。</p>
+<p class="hx-story-say">“那就是另一件事了，”他说，“同一套零件，怎么摆，能决定它做得好不好。先想清楚这件活适合一次做完、还是先列计划、还是拆开并行、还是做完让人验收——这些摆法，比多写一个工具重要得多。”</p>
+<p>最后一章：<a href="#hx-26">Agent 范式</a>。</p>
+</div>
+</section>

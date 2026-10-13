@@ -56,11 +56,19 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 | hx-18 重试与退避 | `harness/retry.py` | `tests/test_retry.py` |
 | hx-19 超时 | `harness/timeouts.py` | `tests/test_timeouts.py` |
 | hx-20 熔断与降级 | `harness/circuit.py` | `tests/test_circuit.py` |
+| hx-21 Hooks | `harness/hooks.py` | `tests/test_hooks.py` |
+| hx-22 Skills 与 MCP | `harness/extensions.py` | `tests/test_extensions.py` |
+| hx-23 子代理与 PTC | `harness/delegation.py` | `tests/test_delegation.py` |
+| hx-24 可观测性与成本 | `harness/observability.py` | `tests/test_observability.py` |
+| hx-25 组装与长任务连续性 | `harness/assembly.py` | `tests/test_assembly.py` |
+| hx-26 Agent 范式 | `harness/paradigms.py` | `tests/test_paradigms.py` |
 
 `tools.py` 和 `tool_runtime.py` 各有一个 `ToolSpec`：前者描述工具本身（schema、handler、只读标志），后者只描述调度需要的信息（可否并行、超时）。分开写是为了让每章的代码能单独读懂；第 25 章组装 mini-harness 时会把两者合并。
 
 安全部分（13–17）的模块按依赖顺序串起来：`sandbox` 复用 `permissions` 的路径规范化，`approval` 包在 `permissions` 的判定外面。`sandbox.py` 是进程内的教学版，挡不住子进程自己打开的文件，`test_sandbox.py` 里的 `LimitTests` 和 `test_injection.py` 里的 `LimitTests` 专门记录这类局限：它们断言的是“局限存在”，换成真正的隔离或更强的检测之后应当改写。
 
 韧性部分（18–20）的时钟、睡眠和随机数都可以注入，测试不真的等待（`test_timeouts.py` 里两条协作式超时的测试各约 0.1 秒）。参考仓库都没有三态熔断器，`circuit.py` 是按通用做法写的教学版。
+
+扩展与运维部分（21–26）：`assembly.py` 是组装版，按顺序把前面各章的部件串起来；`paradigms.py` 的六个范式都基于同一套 `run_agent` 与 LLM 协议，测试用 FakeLLM 回放控制流。
 
 后续章节的文件随章节补充。

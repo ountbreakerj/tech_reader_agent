@@ -14,6 +14,12 @@
     from harness.retry import retry_call           # 18 重试与退避
     from harness.timeouts import Deadline          # 19 超时
     from harness.circuit import CircuitBreaker     # 20 熔断与降级
+    from harness.hooks import HookBus               # 21 Hooks
+    from harness.extensions import parse_skill      # 22 Skills 与 MCP
+    from harness.delegation import Delegator        # 23 子代理与 PTC
+    from harness.observability import Tracer        # 24 可观测性与成本
+    from harness.assembly import MiniHarness        # 25 组装与长任务连续性
+    from harness.paradigms import react             # 26 Agent 范式
 
 05 章以后的模块没有放进包级导出：它们的名字（Rule、Decision、wrap 等）
 很通用，按模块导入能看清来源，也避免和以后的章节撞名。

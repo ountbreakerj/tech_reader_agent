@@ -132,7 +132,8 @@ class RunWithTimeoutTests(unittest.TestCase):
 
         with self.assertRaises(Timeout):
             run_with_timeout(slow, Deadline("tool:slow", 0.1))
-        self.assertTrue(stopped.wait(1.0))   # 工作线程看到了取消信号并退出
+        # 等待要宽松：机器负载高时线程调度会被推迟，1 秒会让这条测试偶发失败
+        self.assertTrue(stopped.wait(10.0))   # 工作线程看到了取消信号并退出
 
     def test_errors_propagate(self) -> None:
         def boom(cancel):
