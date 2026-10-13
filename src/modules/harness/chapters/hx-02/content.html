@@ -8,7 +8,35 @@
 <p>一个工具在协议层其实只有三个字段：<code class="inl">name</code>、<code class="inl">description</code>、参数 schema。模型看不到你的 Python 函数，只看得到这三件套，然后凭它们猜测你的系统能做什么、该传什么参数。于是“工具定义与注册”这一层要解决的问题不是“怎么调函数”，而是三件容易搞砸的事：<strong>定义怎么变成模型看得懂的东西</strong>、<strong>名字怎么保证唯一</strong>、<strong>模型写的参数谁来查、查出来错了怎么告诉它</strong>。</p>
 <p>本章先给出 labs 里的完整实现（<code class="inl">labs/harness/tools.py</code>），再逐段对照 DSH 的 <code class="inl">ctx.tools</code>、OpenHarness 的 <code class="inl">ToolRegistry</code> 和 learn-claude-code 的 <code class="inl">TOOLS</code> / <code class="inl">TOOL_HANDLERS</code> 两张表，最后列出这一层最常见的失败方式。</p>
 <blockquote><p><strong>前置</strong>：本章假定你已经知道 agent loop 长什么样（工具结果是怎样回填进历史的），如果还没有，先看 <a href="#hx-01">第 01 章 Agent Loop 与停止条件</a>；工具执行里的并发调度细节属于 <a href="#hx-00">第 00 章全景图</a> 划出的范围，本章只讲到“只读标记怎样影响调度决策”为止。</p></blockquote>
-
+<h2 id="hx-02-s0">先看全貌：工具定义与注册是什么、管哪些事</h2>
+<p>一句话：工具定义与注册，是把“你能做什么”翻译成“模型看得懂、也用得对”的那一层。模型看不到你的 Python 函数，只能看到三样东西：名字、说明、参数表。</p>
+<p>这一层要管五件事，本章按这个顺序讲：</p>
+<ul>
+<li><strong>协议形状</strong>：工具发给模型时长什么样。多一个字段就多占 token，少一个字段模型就容易猜错参数。</li>
+<li><strong>定义与实现怎么绑定</strong>：说明和实现分开放，就会出现“有说明没实现”，或反过来的情况。</li>
+<li><strong>名字唯一性</strong>：重名怎么办、报错的范围到哪里、哪些名字要预留。</li>
+<li><strong>参数校验</strong>：模型写的参数由谁来查、查出来怎么用模型听得懂的话告诉它。</li>
+<li><strong>调用前的判定</strong>：钩子能不能拒绝、拒绝要不要带理由、只读标记怎么影响后面的并发调度。</li>
+</ul>
+<p>四个决定，先给结论，正文里逐个展开：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>参数交给谁校验</td><td>让模型照 schema 自己写对</td><td>schema 是提示不是约束，必须在 harness 侧校验；错误变成一条结果喂回模型，不抛异常</td></tr>
+<tr><td>重名注册</td><td>后注册的覆盖先注册的</td><td>必须报错：静默覆盖会让行为取决于加载顺序，排这种 bug 的成本远高于报错</td></tr>
+<tr><td>钩子能做什么</td><td>允许某个钩子强制放行</td><td>只能拒绝、不能放行，策略才能各自独立推理；拒绝必须带理由，否则模型只会重试</td></tr>
+<tr><td>只读标记默认值</td><td>不确定就算只读，跑得快</td><td>默认必须是不安全的“独占”那一侧；分类函数抛异常也一样</td></tr>
+</tbody></table></div>
+<h3 id="hx-02-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript，生产级）：这一层最厚。工具定义是作者向的 DSL，注册可撤销，重名分同层与跨层两种处理，还有保留名。想写产品级工具层，它是主要参考。不熟 TypeScript 也没关系，抓它的规则即可。</p>
+<p><strong>OpenHarness</strong>（Python，完整 harness）：走 pydantic 路线，参数校验由模型类反射生成，注册就是一次赋值、同层不查重。想在 Python 里快速有一个能用的工具层，它的写法最短。</p>
+<p><strong>learn-claude-code</strong>（Python，教程）：本章的反面教材。两张需要手工同步的表，schema 只是给模型看的提示，校验一行都没有。读它是为了知道省掉哪些步骤会出什么事，不是照抄。</p>
+<p><strong>labs</strong>（本章要写的）：一个 <code class="inl">ToolSpec</code> 同时持有 schema 和实现，注册时查重并校验 schema，执行前校验参数、跑钩子，只读标记驱动分批。它是本章的骨架，读完可以直接跑。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>上一节已经把三个仓库的定位说完了，正文里它们会交替出现，每出现一次都是在同一个机制上做对比。第一遍只需盯住 <code class="inl">labs/harness/tools.py</code> 的代码块——那是你要亲手写的东西，其余仓库当作参照。</li>
+<li>第 1 到第 5 节各讲一个机制：协议形状、ToolSpec 与注册、参数校验、钩子、只读标记。想快的话按 2 → 3 → 4 的顺序读，这三节是必须掌握的。</li>
+<li>第 6 节的五个坑来自真实仓库的错误写法，适合写完之后自查。第 7 节的对比表用来复习。</li>
+<li>蓝色的 <code class="inl">文件:行号</code> 是源码出处，第一遍可以跳过，不影响理解。</li>
+</ol></blockquote>
 <h2 id="hx-02-s1">1. 协议层的三件套：模型到底看到什么</h2>
 <p>先看 DSH 的协议定义。真正发给模型的那个形状不叫 <code class="inl">ToolDefinition</code>，而是一个只有四个字段的小接口，而且它被刻意声明在 LLM 适配层而不是工具包里：</p>
 <div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">/**

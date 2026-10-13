@@ -1,8 +1,45 @@
 <section class="chapter" id="ch-hx-03" data-slug="hx-03"><div class="ch-head"><span class="ch-num">第 3 章</span></div><h1 id="hx-03">执行管线与并发</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 3 章（虚构）</span>
+<p>林舟给橘子写了个调度员。第一版非常朴实：模型要几个工具，就按顺序一个一个跑。演示那天，橘子要读六个文件，屏幕上一条一条往外蹦，客户盯着看了四十几秒，问：“它在干嘛？”</p>
+<p>林舟说：“在读文件。”客户说：“六个文件不能一起读吗。”</p>
+<p>第二版改成了“并发一把梭”：一条回复里的调用全部同时发出去，谁先回来谁先入历史。效率上去了，当天下午就出了两件事。</p>
+<p><strong>第一件。</strong>橘子要改两个文件，回复里一次给了两个 <code class="inl">edit_file</code>，改的恰好是同一份 <code class="inl">config.py</code>。两个调用同时读到旧内容，各自改一处，各自写回去。后写的那个把前一个的修改整个盖掉了，而且两个调用都报告成功。</p>
+<p><strong>第二件。</strong>一批六个调用里有三个 <code class="inl">read_file</code> 和一个 <code class="inl">run_tests</code>。跑测试的花了 6 秒，三个读取加起来 0.2 秒，于是结果按完成时间排进了历史：先是读取，再是测试报告。模型看到的顺序和它自己请求的顺序不一样，把那份测试报告当成了“改之前的旧状态”，又白跑一轮。</p>
+<p class="hx-story-say">老唐看完日志：“你那不是并发，是同时撒手。”</p>
+<p>这一章要弄清楚三件事：一条回复里的多个调用，谁可以并排跑、谁必须挡在前面；结果按什么顺序交回去；其中一个失败、超时或者被取消时，同一批里的其他调用怎么办。正文里也会读到 OpenHarness 的写法——它选了“一把并发”这条路，注释和后果都值得看一遍。</p>
+</div>
 <p>模型的一条回复里可以带多个 <code class="inl">tool_use</code> 块。第 2 章讲了单个工具怎么注册、怎么被调用、失败怎么变成错误结果；这一章处理的是它们<b>同时出现</b>时的问题：谁可以一起跑，谁必须单独跑，结果按什么顺序交回给模型。</p>
 
 <p>问题本身不复杂，但很容易做错。天真的实现是「多个就 <code class="inl">gather</code> 一把并发」，代码只有几行，代价是：两个都写同一个文件的调用会互相覆盖；一条慢命令会占满全部并发额度；先完成的调用先入历史，于是 <code class="inl">tool_result</code> 的顺序和模型请求的顺序对不上。这些都不是理论风险——OpenHarness 就选了这条路，本章会把它的注释和后果一起读一遍。</p>
-
+<h2 id="hx-03-s0">先看全貌：执行管线与并发是什么、管哪些事</h2>
+<p>一句话：模型一次说了好几个工具调用之后，由 harness 决定这些调用怎么排序、哪些能同时跑、结果按什么顺序写回历史。这一层也叫工具执行管线。</p>
+<p>它管的是五个问题，本章按这个顺序讲：</p>
+<ul>
+<li><strong>并行还是顺序</strong>：哪些调用可以一起跑，依据是工具自己上报的只读标记。</li>
+<li><strong>并发上限</strong>：一条回复里有二十个调用，不能一次全开出去。</li>
+<li><strong>提交流程</strong>：结果按模型请求的顺序写回，还是按完成时间写回。</li>
+<li><strong>失败隔离</strong>：一个工具抛异常，同一批里的兄弟要不要一起作废。</li>
+<li><strong>超时与取消</strong>：某一条卡住了怎么办；用户按下中断，还没开始的调用怎么收场。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>并发依据</td><td>不确定就一起并发，快</td><td>只有明确标成只读的才能并行；标记缺失、分类抛异常、参数不合法，一律当独占处理</td></tr>
+<tr><td>结果顺序</td><td>谁先完成谁先写</td><td>必须按模型给出的调用顺序提交，哪怕后面的先跑完</td></tr>
+<tr><td>一个失败</td><td>整批作废、抛异常</td><td>失败只属于那一条调用，变成错误结果；兄弟调用照常提交</td></tr>
+<tr><td>取消</td><td>没跑的调用直接丢掉</td><td>没派发的调用要补一条错误结果，否则历史里会留下没有结果的调用</td></tr>
+</tbody></table></div>
+<h3 id="hx-03-s0-repos">这一章主要对照谁</h3>
+<p><strong>OpenHarness</strong>（Python）：本章的主要反面对照。它把头一批调用直接 <code class="inl">gather</code> 出去，注释里写了为什么，也写了代价。读它的价值在于看清“一把并发”会带来哪些后果，以及它的作者是怎么权衡的。</p>
+<p><strong>DSH</strong>（TypeScript）：生产级做法。有界滚动池、并发上限、按模型顺序提交、取消时补结果。这一层它做得最完整，第 01 章已经讲过它的池子，本章只补提交顺序和取消两处细节。</p>
+<p><strong>learn-claude-code</strong>：只有顺序 <code class="inl">for</code> 循环，没有并发，也没有取消。它的位置是“最小可用”，不作为本章的对照重点。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/tool_runtime.py</code> 里的分批、有界并发、按序提交、超时与取消，全部可以用 FakeLLM 和假工具跑出来。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>先读第 1 节，看清“先分批、再执行、按原序提交”这条主线，它是全章骨架。</li>
+<li>第 2 到第 5 节各解决一个问题，篇幅都不长，可以按需跳读；第 5 节的三个小节（失败、超时、取消）是最容易漏的。</li>
+<li>第 6 节把前面几块拼成一个能跑的整步执行函数，这是本章必须掌握的一段代码。</li>
+<li>蓝色的 <code class="inl">文件:行号</code> 是源码出处，第一遍可以跳过。</li>
+</ol></blockquote>
 <h2 id="hx-03-s1">一次回复里多个 tool_use：先分批，再执行</h2>
 
 <p>DSH 把这一步的调度逻辑单独放在一个文件里，模块注释开头就是那句判据（<code class="inl">tool-calls.ts:2</code>）：</p>
@@ -305,4 +342,10 @@
 </ul>
 
 <p>本章的 labs 是 <code class="inl">labs/harness/tool_runtime.py</code>，测试在 <code class="inl">labs/tests/test_tool_runtime.py</code>：<code class="inl">py -m unittest discover -s labs/tests -t labs -p "test_tool_runtime.py"</code>，28 条用例、总计约 0.5 秒。相比 <a href="#hx-01">第 1 章</a>的 <code class="inl">loop.py</code>，这一章只替换了 <code class="inl">execute_tools()</code> 那一个函数——循环的其余部分（停止条件、截断、错误预算）完全不变，这也是把调度单独抽出来的好处。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>调度员上线后，橘子快了很多：六个只读工具并排跑，改配置的两个写操作自动被隔开，结果按请求顺序入历史，模型不再错判状态。客户演示里那句“它在干嘛”也消失了。</p>
+<p>周二凌晨三点，橘子跑一半被系统杀掉了——林舟在同一台机器上跑了个吃内存的构建，内存不够。重启之后，橘子坚持说自己“没改过任何文件”。林舟打开会话文件一看，里面是一份被压扁的对话记录：模型说过什么都在，工具跑了什么、什么时候跑的，全没了。</p>
+<p class="hx-story-say">“崩溃之后能不能接着跑，不取决于你存了多少，”老唐说，“取决于你存的是不是事实。”</p>
+<p>林舟决定把历史从“内存里的一个列表”改成“一份只追加的日志”。下一章：<a href="#hx-04">会话日志与回放</a>。</p>
+</div>
 </section>

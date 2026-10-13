@@ -1,8 +1,45 @@
 <section class="chapter" id="ch-hx-05" data-slug="hx-05"><div class="ch-head"><span class="ch-num">第 5 章</span></div><h1 id="hx-05">Token 预算与计数</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 5 章（虚构）</span>
+<p>林舟花了整晚复盘那次两小时的运行。日志现在很完整了，他一轮一轮往前翻，越翻越沉默。</p>
+<p>工具调用的分布是这样的：真正干活的 <code class="inl">read_file</code>、<code class="inl">edit_file</code> 只占三成，剩下七成里，有一半是模型在反复读同一批文件——因为橘子每写一次代码就得把整个文件重新读一遍，它记不住；还有一笔更大的开销，是每一轮都把前面全部历史原样重发一次。第 40 轮的时候，一次请求的输入已经是第 1 轮的十几倍，而模型真正新增的判断只有一句“把第 12 行的变量名改掉”。</p>
+<p class="hx-story-say">“这不是模型费钱，”老唐说，“是你没告诉它还剩多少。” </p>
+<p>林舟加的第一版“预算”很朴素：数一下历史里大概有多少字，超过某个数就报错退出。当天下午就误伤了——一份中文日志被按英文字数估，实际 token 是估算值的两倍多，请求发出去直接被厂商拒了，前面跑掉的十几个工具全部白费。</p>
+<p>这一章要弄清楚三件事：不知道分词器的时候怎么估，估完怎么用厂商返回的真实用量修正，以及“快满了”这个信号应该在到达上限之前多久发出来。</p>
+</div>
 <p>上下文窗口是 harness 面对的唯一硬上限。轮数、工具调用次数、重试次数都可以商量，窗口不行：请求一旦超过它，厂商直接返回 400，这一轮的推理、这一轮已经跑掉的工具全部作废。而按 token 计费的账单同样不给商量余地。所以一个能长时间跑的 harness 必须自己算账，而且要在<strong>发请求之前</strong>就算出来。</p>
 <p>本章先用 labs 里的 <code class="inl">budget.py</code> 把三件事拆开——估算、窗口切分、用量账本——再逐库对照它们各自怎么算这笔账。压缩策略本身是 <a href="#hx-07">hx-07</a> 的主题，本章只负责回答“什么时候该压缩”这个信号；prompt cache 的读写 token 怎么进成本，衔接 <a href="#hx-06">hx-06</a>。</p>
 <blockquote><p><strong>术语</strong>：<code class="inl">prompt</code> 指一次请求里所有输入（系统提示、工具定义、历史、本轮输入）合起来的 token 数，<code class="inl">completion</code> 指模型本次生成的 token 数，两者相加才是这一次请求对窗口的占用。厂商的 usage 字段名五花八门，本章统一用 input / output / cache_read / cache_write 四个桶。</p></blockquote>
-
+<h2 id="hx-05-s0">先看全貌：Token 预算与计数是什么、管哪些事</h2>
+<p>一句话：模型能同时看到的内容有一个硬上限，harness 必须在发请求之前算出这一轮离上限还有多远，并且知道花掉的钱是怎么来的。</p>
+<p>轮数、重试次数这类限制都可以商量，窗口不行：请求一旦超了，厂商直接返回 400，这一轮已经跑掉的工具全部作废。</p>
+<p>这一层要管的事：</p>
+<ul>
+<li><strong>估算</strong>：没有分词器的时候，怎么在没有厂商接口的情况下估出这一次请求有多大。</li>
+<li><strong>回填</strong>：厂商每次都会返回真实用量，用它把估算值校准回来。</li>
+<li><strong>预算切分</strong>：窗口里怎么分给系统提示、历史、工具输出，留多少给模型的回复。</li>
+<li><strong>分级信号</strong>：什么时候提示“有点满”、什么时候必须压缩。</li>
+<li><strong>账本</strong>：按轮、按会话累计用量与成本，缓存读写要分开算。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>怎么得到 token 数</td><td>字数除以一个固定系数</td><td>按语言分别估（中文和英文的系数差一倍以上），并且必须用厂商返回的用量回填</td></tr>
+<tr><td>估算什么时候可信</td><td>估一次就一路用下去</td><td>只在两次真实用量之间可信；历史被压缩、工具集变更后，原来的锚点就失效</td></tr>
+<tr><td>什么时候压缩</td><td>撞到上限再说</td><td>设分级阈值，留出“压缩本身也要一次请求”的空间</td></tr>
+<tr><td>缓存用量</td><td>缓存读写和普通输入一起加</td><td>四个桶分开记：输入、输出、缓存读、缓存写，价格不一样，混在一起账就错了</td></tr>
+</tbody></table></div>
+<h3 id="hx-05-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript）：最完整。有独立的 token-meter 包，估算加锚点回填，用量按请求归档。<code class="inl">packages/llm/token-meter</code> 是本章的主要参考。</p>
+<p><strong>OpenHarness</strong>（Python）：<code class="inl">services/token_estimation.py</code> 是一个单独的估算服务，写法朴素但完整，适合先看懂“估一次、回填一次”这条最小闭环。</p>
+<p><strong>amt</strong>（notebook 教程）：它的 <code class="inl">helpers.py</code> 里也有计数工具，属于教学代码，没有跑过（它的 notebook 输出全为 0），只当作“怎么做一次估算”的例子看。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/budget.py</code>，估算、回填、分级信号、账本四件事都有，配套测试用一个假的用量序列验证回填。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1、2 节是核心：为什么必须自己算，以及“先估再回填”这条闭环怎么做。</li>
+<li>第 3、4 节讲预算怎么切分、什么阈值触发压缩。压缩本身在第 07 章，本章只负责给出信号。</li>
+<li>第 5 节的账本和第 6 节的对比表可以一起读；第 7 节的五个坑里，“把缓存命中量重复计入”和“估算偏低”出现得最多。</li>
+<li>本章和第 06 章（prompt cache）互相衔接：缓存读写的 token 怎么进成本，两边都提到。</li>
+<li>蓝色的 <code class="inl">文件:行号</code> 是源码出处，第一遍可以跳过。</li>
+</ol></blockquote>
 <h2 id="hx-05-s1">为什么 harness 必须自己算账</h2>
 <p>模型适配器当然知道窗口是多大，但它只在下游：等你把请求交给它，它要么发出去，要么发出去之后收到 400。harness 需要的判断发生在更上游——“这一批工具结果还能不能塞进历史”“还剩多少空间给下一次模型调用”“现在是不是该触发压缩”。这些决定必须自己算，因为只有 harness 知道下一个要填进上下文的东西是什么。</p>
 <p>DSH 把“窗口是多少”明确划给适配器，把“现在用了多少”留给 meter，中间靠一条命令式接口串起来。窗口值与路由绑定：</p>
@@ -355,4 +392,11 @@ if (measurement.totalTokens &lt; spec.thresholdTokens) return null</code></pre><
 </ol>
 <p>有两条纪律值得单独写下来。第一，<strong>预算用估算值，账本用真实值</strong>，不要把两者混在一个字段里——一旦混了，你既不知道预算为什么触发，也不知道账为什么对不上。第二，<strong>估算的系数和阈值都必须是参数</strong>，写死等于把配置债务藏进代码，等模型一换代就全部失效。</p>
 <p>下一章 <a href="#hx-06">hx-06</a> 会用到这里的两个桶：<code class="inl">cache_read</code> 和 <code class="inl">cache_write</code>。缓存能不能省钱，取决于命中率——而命中率只有靠这两个桶分别统计才看得出来。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>预算接上之后，账单好看了不少：粗略估算先把明显过大的请求拦住，真实用量回填之后估算越来越准，快满时提前提醒，模型自己会去精简。林舟终于能在演示前回答客户那句“跑一次多少钱”。</p>
+<p>但账本上有一栏他看不懂：同一段历史，上午跑的时候便宜，下午跑的时候贵，中间没改过任何代码。他一开始怀疑厂商调价，把两次的用量逐桶对比之后发现，贵的那几次全都是“输入”这一桶涨了几倍，输出反而没变。</p>
+<p class="hx-story-say">“历史没变、工具没变、提示没变，它凭什么重算一遍？”林舟把两台机器的请求抓出来逐字节比。</p>
+<p class="hx-story-say">“因为你下午改了一行代码。”老唐说，“你在系统提示里加了个时间戳。”</p>
+<p>下一章：<a href="#hx-06">Prompt cache 稳定性</a>。</p>
+</div>
 </section>
