@@ -1,0 +1,355 @@
+<section class="chapter" id="ch-hx-15" data-slug="hx-15"><div class="ch-head"><span class="ch-num">第 15 章</span></div><h1 id="hx-15">沙箱</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 15 章（虚构）</span>
+<p>那份假密钥的事过去两天，老唐在白板上画了个院子：一圈墙，墙里是项目目录，墙外是林舟的整个家目录——SSH 密钥、浏览器配置、另外三个客户的仓库，还有一个叫 <code class="inl">.aws</code> 的文件夹。</p>
+<p class="hx-story-say">“橘子现在住在哪儿？”老唐问。</p>
+<p class="hx-story-say">“项目目录里。”林舟说。</p>
+<p class="hx-story-say">“它的进程住在哪儿？”</p>
+<p>林舟愣了一下。橘子是用他的账号启动的，它跑的每一条命令都继承了他的全部权限和全部环境变量。<code class="inl">grep -rn "API_KEY" .</code> 里那个点，指的是当前目录；可如果模型写的是 <code class="inl">grep -rn "API_KEY" ~</code>，规则会因为路径越界拦下它，但一条 <code class="inl">python -c "..."</code> 里面打开什么文件，规则根本看不见。更早的时候，他还发现橘子跑过一次 <code class="inl">env</code>——为了“确认 Python 路径”——输出里有他的 GitHub token、两个云厂商的密钥，全部原样进了上下文，进了会话日志，也进了那天发给模型厂商的请求。</p>
+<p class="hx-story-say">“前面两章都在回答‘该不该让它跑’，”老唐说，“这一章回答的是：就算放它跑了，它最多能碰到什么。”</p>
+<p>老唐说完，又补了一句让林舟记到现在的话：“还有，别骗自己。你在 Python 里写的这个院子，墙是纸糊的。你得清楚哪几面墙是真的，哪几面只是画上去的。”</p>
+<p>这一章要搭这个院子：命令在指定目录里跑，路径越界在执行前拦住，凭据类的环境变量不传给子进程，跑太久就杀掉，输出太多就落盘。然后专门花一节讲清楚，标准库能搭出的这个院子挡不住什么，以及要挡住它们需要换成什么。</p>
+</div>
+<p>权限规则（第 13 章）和命令解析（第 14 章）回答的都是“这次调用该不该发生”。它们都有漏判的可能：规则没写全，解析器遇到没见过的语法，用户在疲劳时点了“同意”。沙箱处理的是漏判之后的事——即使一条不该放行的命令真的跑起来了，它能造成的损失有多大。</p>
+<p>这是一个思路的切换：从“识别坏动作”切换到“限制所有动作的影响范围”。前者永远在追赶，后者一旦设好就不依赖对每一条命令的理解。</p>
+
+<h2 id="hx-15-s0">先看全貌：沙箱是什么、管哪些事</h2>
+<p>一句话：沙箱是工具执行时的受限环境。它规定命令在哪个目录里跑、能看到哪些环境变量、能跑多久、能输出多少，以及能读写哪些路径。</p>
+<p>它和前两章的关系是串联的：</p>
+<ol>
+<li><strong>权限规则</strong>决定这次调用能不能发出去；</li>
+<li><strong>命令解析</strong>帮权限规则看懂 <code class="inl">run_bash</code> 那一条字符串；</li>
+<li><strong>沙箱</strong>决定发出去之后，它最多能碰到什么。</li>
+</ol>
+<p>沙箱要管的五件事：</p>
+<ul>
+<li><strong>工作目录</strong>：命令在哪里跑，相对路径相对谁解析。</li>
+<li><strong>路径边界</strong>：参数里的路径先规范化再判断是否越界，越界在执行前拒绝。</li>
+<li><strong>环境变量</strong>：子进程只拿到白名单里的变量；令牌、密钥、口令一律不传。</li>
+<li><strong>资源上限</strong>：超时、输出长度上限，超出时的处理方式（杀进程、落盘）。</li>
+<li><strong>执行方式</strong>：直接执行程序，还是交给 shell 再解析一遍。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>环境变量</td><td>子进程继承父进程的全部环境</td><td>白名单传递；凭据类变量名一律剥离，连策略里主动注入的也不例外</td></tr>
+<tr><td>执行方式</td><td>用 shell 执行整条字符串，最方便</td><td>默认直接执行 argv，不经过 shell；需要管道时由 harness 自己拼，或者在已经过解析的前提下显式开启</td></tr>
+<tr><td>超时</td><td>不设，或者设一个很大的值</td><td>每个调用都有超时；超时要杀掉进程，结果里写清“被杀了”，而不是返回半截输出装作正常</td></tr>
+<tr><td>隔离的强度</td><td>在 Python 里检查路径就算沙箱了</td><td>进程内的检查只能挡住 harness 看得见的路径；要挡住子进程自己打开的文件，必须用操作系统级隔离（容器、只读挂载、系统调用过滤）</td></tr>
+</tbody></table></div>
+<h3 id="hx-15-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript）：把执行环境抽象成独立的一层，工具通过这一层执行，而不是自己去拉子进程。这让“换一种隔离方式”（本地进程、容器、远程执行）不需要改工具代码，是本章架构上最值得借鉴的一点。</p>
+<p><strong>OpenHarness</strong>（Python）：bash 工具直接在本地起子进程，带超时与输出截断；隔离主要依赖权限模式与确认，而不是执行环境本身。适合对照“没有独立执行层时，安全靠什么”。</p>
+<p><strong>learn-claude-code</strong>（教程）：<code class="inl">subprocess.run(..., shell=True)</code> 加一个超时，继承全部环境变量。它是本章的起点：每一节要补的，恰好就是这一行里缺的。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/sandbox.py</code>，工作目录、路径边界、环境白名单、超时与输出落盘，23 条测试，其中 2 条专门记录它<strong>挡不住</strong>的东西。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1 节讲为什么默认不经过 shell，这是执行层最基础的一个决定。</li>
+<li>第 2 到第 4 节分别是路径、环境变量、资源上限，三者都可以直接抄进项目。</li>
+<li>第 5 节讲执行结果怎么告诉模型；第 6 节是本章最重要的一节——标准库能做到的隔离，边界在哪里。</li>
+<li>第 7 节讲怎么把沙箱和前两章接起来；第 8 节的坑可以当执行层的自查清单。</li>
+</ol>
+<p>安全部分不再逐条标注 <code class="inl">文件:行号</code>，各仓库的实现用包名与函数名指代。</p></blockquote>
+
+<h2 id="hx-15-s1">默认不经过 shell</h2>
+<p>执行一条命令有两种方式：</p>
+<div class="table-wrap"><table><thead><tr><th>方式</th><th>Python 写法</th><th>谁来解析命令</th><th>风险</th></tr></thead><tbody>
+<tr><td>经过 shell</td><td><code class="inl">subprocess.run("ls -la " + path, shell=True)</code></td><td>系统 shell（sh / cmd）</td><td>字符串里的 <code class="inl">;</code>、<code class="inl">$(...)</code>、<code class="inl">&amp;&amp;</code> 都会被执行；参数拼接即注入</td></tr>
+<tr><td>直接执行</td><td><code class="inl">subprocess.run(["ls", "-la", path])</code></td><td>没人解析，argv 原样传给程序</td><td>参数里的特殊字符只是普通字符</td></tr>
+</tbody></table></div>
+<p>经过 shell 的问题不只是“危险”，而是它让第 14 章的解析和实际执行变成了两件事：解析器看到的是字符串，执行时 shell 会按自己的规则再解析一遍。只要两者对某个语法的理解不一致（转义规则、编码、Windows 与 POSIX 的差别），判定就和执行脱节了。</p>
+<p>所以 labs 的默认是直接执行 argv，<code class="inl">shell=False</code>：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/sandbox.py::SandboxPolicy"><span class="dec">@dataclass</span>
+<span class="kw">class</span> <span class="cls">SandboxPolicy</span><span class="op">:</span>
+    <span class="str">"""沙箱的策略。所有字段都是「更严的方向」上的默认值。"""</span>
+
+    root<span class="op">:</span> str
+    timeout<span class="op">:</span> float <span class="op">=</span> <span class="num">10.0</span>
+    max_output<span class="op">:</span> int <span class="op">=</span> <span class="num">200_000</span>          <span class="cmt"># 字符数上限，超出部分落盘（正文 hx-08）</span>
+    allow_network<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>        <span class="cmt"># 只影响我们注入的环境变量，不构成真实隔离</span>
+    allow_write<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>          <span class="cmt"># 只挡 argv 里看得见的写路径；子进程自己开文件挡不住</span>
+    extra_env<span class="op">:</span> dict[str, str] <span class="op">=</span> field(default_factory<span class="op">=</span>dict)
+    shell<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>                <span class="cmt"># 默认不用 shell 执行，避免二次解析</span>
+
+    <span class="kw">def</span> <span class="fn">__post_init__</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        self.root <span class="op">=</span> str(<span class="cls">Path</span>(self.root).resolve())</code></pre></div>
+<p>这个默认值会让一部分命令跑不起来——管道、重定向、通配符展开都是 shell 的功能。有两种处理方式：</p>
+<ul>
+<li><strong>由 harness 自己实现需要的那一小部分</strong>。比如“读文件并搜索”拆成两个工具调用，而不是一条 <code class="inl">cat a | grep b</code>。这是最稳的做法，代价是工具数量变多。</li>
+<li><strong>在已经通过第 14 章解析的前提下显式开启 shell</strong>。解析结论是 <code class="inl">readonly</code> 的命令，交给 shell 执行的风险可控；结论是 <code class="inl">opaque</code> 的，绝不交给 shell。</li>
+</ul>
+<p>learn-claude-code 用的是 <code class="inl">shell=True</code>，因为它的 bash 工具接收的就是一条字符串。教学上没问题，但这一行是从教程到产品时第一个要改的地方。</p>
+
+<h2 id="hx-15-s2">工作目录与路径边界</h2>
+<p>沙箱有一个根目录，命令在这里跑，相对路径相对它解析。路径边界的判定复用第 13 章的 <code class="inl">resolve_within</code>，越界统一转成沙箱自己的异常：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/sandbox.py::Sandbox.resolve">    <span class="kw">def</span> <span class="fn">resolve</span>(self, candidate<span class="op">:</span> str, <span class="op">*</span>, write<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>) <span class="op">-&gt;</span> <span class="cls">Path</span><span class="op">:</span>
+        <span class="str">"""把候选路径解析到沙箱内。写操作在只读沙箱里直接拒绝。
+
+        越界统一转成 SandboxViolation：调用方只需要认识沙箱这一种异常，
+        permissions 里的 PathEscape 是它的实现细节。
+        """</span>
+        <span class="kw">if</span> write <span class="kw">and</span> <span class="kw">not</span> self.policy.allow_write<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">SandboxViolation</span>(<span class="str">f"沙箱是只读的，不能写 {candidate!r}"</span>)
+        <span class="kw">try</span><span class="op">:</span>
+            <span class="kw">return</span> resolve_within(self.root, candidate)
+        <span class="kw">except</span> <span class="cls">PathEscape</span> <span class="kw">as</span> exc<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">SandboxViolation</span>(str(exc)) <span class="kw">from</span> exc</code></pre></div>
+<p>为什么要把 <code class="inl">PathEscape</code> 转成 <code class="inl">SandboxViolation</code>？因为调用沙箱的代码只应该认识沙箱这一种异常。权限层的异常类型是沙箱的实现细节；如果它漏出去，调用方就得同时捕获两种异常，迟早有一处会漏捕，然后一个越界路径就变成了一次未处理的崩溃。</p>
+<p>执行前检查 argv 里的路径：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/sandbox.py::Sandbox.check_argv_paths">    <span class="kw">def</span> <span class="fn">check_argv_paths</span>(self, argv<span class="op">:</span> <span class="cls">Sequence</span>[str], <span class="op">*</span>, write<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="str">"""检查 argv 里看起来像路径的参数。
+
+        教学版只挑「含分隔符或点是文件」的裸参数；真实实现会给每个工具声明
+        哪些参数是路径，而不是靠猜。这里保守：拿不准就放过，由权限层兜底。
+        """</span>
+        <span class="kw">for</span> arg <span class="kw">in</span> argv[<span class="num">1</span><span class="op">:</span>]<span class="op">:</span>
+            <span class="kw">if</span> arg.startswith(<span class="str">"-"</span>)<span class="op">:</span>
+                <span class="kw">continue</span>
+            <span class="kw">if</span> any(sep <span class="kw">in</span> arg <span class="kw">for</span> sep <span class="kw">in</span> (<span class="str">"/"</span>, <span class="str">"\\"</span>, <span class="str">".."</span>)) <span class="kw">or</span> <span class="cls">Path</span>(arg).suffix<span class="op">:</span>
+                self.resolve(arg, write<span class="op">=</span>write)</code></pre></div>
+<p>这段代码是靠猜的：含路径分隔符、含 <code class="inl">..</code> 或带扩展名的参数被当成路径。它会漏（<code class="inl">cat secret</code> 里的 <code class="inl">secret</code> 没有任何路径特征），也会误判（<code class="inl">grep v1.2 a.txt</code> 里的 <code class="inl">v1.2</code> 有扩展名）。真实项目的做法是<strong>让工具声明哪些参数是路径</strong>，而不是从 argv 里猜——这和第 02 章“schema 是唯一真相”是同一个思路。<code class="inl">run_bash</code> 这类无法声明参数的工具，正是沙箱最难管的地方，也是第 6 节要讲的局限的来源。</p>
+<p>写操作的判定按程序名精确匹配，而不是看程序名里是否含有 <code class="inl">rm</code>：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/sandbox.py::WRITE_PROGRAMS"><span class="cls">WRITE_PROGRAMS</span> <span class="op">=</span> frozenset({
+    <span class="str">"rm"</span>, <span class="str">"rmdir"</span>, <span class="str">"mv"</span>, <span class="str">"cp"</span>, <span class="str">"touch"</span>, <span class="str">"mkdir"</span>, <span class="str">"tee"</span>, <span class="str">"ln"</span>, <span class="str">"chmod"</span>, <span class="str">"chown"</span>,
+    <span class="str">"truncate"</span>, <span class="str">"dd"</span>, <span class="str">"install"</span>, <span class="str">"rsync"</span>, <span class="str">"unzip"</span>, <span class="str">"tar"</span>, <span class="str">"patch"</span>,
+})</code></pre></div>
+<p>子串匹配的问题第 14 章已经讲过：<code class="inl">format</code>、<code class="inl">transform</code> 里都有 <code class="inl">rm</code>。这类错误在执行层出现时尤其难查，因为它表现为“只读沙箱里某个无害的命令莫名其妙被拒”，而日志里只有一句“沙箱是只读的”。</p>
+
+<h2 id="hx-15-s3">环境变量：白名单传递，凭据一律剥离</h2>
+<p>子进程默认继承父进程的全部环境变量。对 agent 来说这几乎总是错的：harness 进程的环境里通常有模型厂商的 API key，开发者机器上还有 GitHub token、云厂商凭据、数据库口令。只要模型跑一次 <code class="inl">env</code> 或 <code class="inl">printenv</code>，这些值就进了上下文，接着进日志、进下一次请求、进摘要、进记忆。</p>
+<p>labs 用两层过滤：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/sandbox.py::Sandbox.build_env">    <span class="kw">def</span> <span class="fn">build_env</span>(self, base<span class="op">:</span> <span class="cls">Mapping</span>[str, str] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> dict[str, str]<span class="op">:</span>
+        <span class="str">"""构造子进程环境：白名单 + 剥离敏感变量 + 注入额外变量。"""</span>
+        source <span class="op">=</span> dict(base <span class="kw">if</span> base <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">else</span> os.environ)
+        env<span class="op">:</span> dict[str, str] <span class="op">=</span> {}
+        <span class="kw">for</span> key <span class="kw">in</span> <span class="cls">SAFE_ENV_KEYS</span><span class="op">:</span>
+            <span class="kw">if</span> key <span class="kw">in</span> source<span class="op">:</span>
+                env[key] <span class="op">=</span> source[key]
+        <span class="kw">for</span> key, value <span class="kw">in</span> self.policy.extra_env.items()<span class="op">:</span>
+            <span class="kw">if</span> any(hint <span class="kw">in</span> key.upper() <span class="kw">for</span> hint <span class="kw">in</span> <span class="cls">SECRET_HINTS</span>)<span class="op">:</span>
+                <span class="cmt"># 策略里想注入凭据也不行：这条路径只用于无害的开关。</span>
+                <span class="kw">continue</span>
+            env[key] <span class="op">=</span> value
+        <span class="kw">if</span> <span class="kw">not</span> self.policy.allow_network<span class="op">:</span>
+            <span class="cmt"># 不构成真实隔离（进程仍能开 socket），只是把常见的代理变量清掉，</span>
+            <span class="cmt"># 让「不能用网」这件事在行为上可见。正文会说明这一点。</span>
+            <span class="kw">for</span> key <span class="kw">in</span> list(env)<span class="op">:</span>
+                <span class="kw">if</span> <span class="str">"proxy"</span> <span class="kw">in</span> key.lower()<span class="op">:</span>
+                    env.pop(key, <span class="kw">None</span>)
+        <span class="kw">return</span> env</code></pre></div>
+<ol>
+<li><strong>白名单</strong>：只有 <code class="inl">PATH</code>、<code class="inl">HOME</code>、<code class="inl">TEMP</code>、语言设置这类运行程序必需的变量会被传下去。白名单之外的一律不传，不需要判断它是不是凭据。</li>
+<li><strong>凭据名剥离</strong>：策略里额外注入的变量，如果名字里有 <code class="inl">TOKEN</code>、<code class="inl">SECRET</code>、<code class="inl">PASSWORD</code>、<code class="inl">API_KEY</code> 这类词，同样不传。这一层防的是“为了让某个工具能用，在配置里把密钥塞进 extra_env”这种善意的错误。</li>
+</ol>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/sandbox.py::SECRET_HINTS"><span class="cls">SECRET_HINTS</span> <span class="op">=</span> (
+    <span class="str">"TOKEN"</span>, <span class="str">"SECRET"</span>, <span class="str">"PASSWORD"</span>, <span class="str">"PASSWD"</span>, <span class="str">"APIKEY"</span>, <span class="str">"API_KEY"</span>, <span class="str">"CREDENTIAL"</span>,
+    <span class="str">"AUTH"</span>, <span class="str">"COOKIE"</span>, <span class="str">"SESSION_KEY"</span>, <span class="str">"PRIVATE_KEY"</span>, <span class="str">"ACCESS_KEY"</span>, <span class="str">"SSH_"</span>,
+)</code></pre></div>
+<p>那工具确实需要凭据怎么办？比如一个调用内部 API 的工具。答案是<strong>凭据不经过子进程环境</strong>：由 harness 进程自己持有凭据、自己发请求，工具拿到的只是结果。凭据一旦进入子进程，你就无法控制子进程把它打印到哪里。</p>
+<p>测试 <code class="inl">test_secret_not_visible_to_child</code> 在父进程里设置一个 <code class="inl">LEAK_TEST_TOKEN</code>，然后在子进程里读它，断言读到的是 <code class="inl">absent</code>。这条测试值得放进每个 harness 的测试集：它很短，但覆盖的是最常见、后果最严重的泄露路径。</p>
+<blockquote><p><strong>关于网络</strong>：<code class="inl">allow_network=False</code> 在 labs 里只是把代理相关的环境变量去掉，<strong>不构成隔离</strong>——子进程仍然可以直接打开网络连接。标准库没有办法禁止一个子进程联网。真正的网络隔离需要操作系统或容器层面的手段（网络命名空间、防火墙规则、没有网卡的容器）。这个字段保留在策略里，是为了让“这次运行不应该联网”这件事在配置和日志里可见，而不是因为它能挡住什么。</p></blockquote>
+
+<h2 id="hx-15-s4">资源上限：超时、输出、落盘</h2>
+<p>资源上限防的不是攻击，而是失控：一条 <code class="inl">tail -f</code>、一个等待输入的交互程序、一次意外的无限循环。没有超时，循环会一直卡在这一步；没有输出上限，一次 <code class="inl">cat</code> 就能塞满上下文。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/sandbox.py::Sandbox.run">    <span class="kw">def</span> <span class="fn">run</span>(
+        self,
+        argv<span class="op">:</span> <span class="cls">Sequence</span>[str],
+        <span class="op">*</span>,
+        cwd<span class="op">:</span> str <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+        timeout<span class="op">:</span> float <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+        stdin<span class="op">:</span> str <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>,
+    ) <span class="op">-&gt;</span> <span class="cls">ExecResult</span><span class="op">:</span>
+        <span class="str">"""在沙箱里跑一条命令。不抛异常，所有失败都变成结果。"""</span>
+        started <span class="op">=</span> time.monotonic()
+        args <span class="op">=</span> list(argv)
+        <span class="kw">if</span> <span class="kw">not</span> args<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">ExecResult</span>(<span class="kw">False</span>, args, <span class="kw">None</span>, <span class="str">""</span>, <span class="str">"空命令"</span>, <span class="num">0.0</span>, violation<span class="op">=</span><span class="str">"空命令"</span>)
+
+        workdir <span class="op">=</span> self.resolve(cwd) <span class="kw">if</span> cwd <span class="kw">else</span> self.root
+        <span class="kw">try</span><span class="op">:</span>
+            write_hint <span class="op">=</span> <span class="cls">Path</span>(args[<span class="num">0</span>]).name.lower().removesuffix(<span class="str">".exe"</span>) <span class="kw">in</span> <span class="cls">WRITE_PROGRAMS</span>
+            self.check_argv_paths(args, write<span class="op">=</span>write_hint)
+        <span class="kw">except</span> <span class="cls">SandboxViolation</span> <span class="kw">as</span> exc<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">ExecResult</span>(<span class="kw">False</span>, args, <span class="kw">None</span>, <span class="str">""</span>, <span class="str">""</span>, time.monotonic() <span class="op">-</span> started, violation<span class="op">=</span>str(exc))
+
+        budget <span class="op">=</span> timeout <span class="kw">if</span> timeout <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">else</span> self.policy.timeout
+        env <span class="op">=</span> self.build_env()
+        <span class="kw">try</span><span class="op">:</span>
+            proc <span class="op">=</span> subprocess.run(
+                args,
+                cwd<span class="op">=</span>str(workdir),
+                env<span class="op">=</span>env,
+                capture_output<span class="op">=</span><span class="kw">True</span>,
+                text<span class="op">=</span><span class="kw">True</span>,
+                encoding<span class="op">=</span><span class="str">"utf-8"</span>,
+                errors<span class="op">=</span><span class="str">"replace"</span>,
+                timeout<span class="op">=</span>budget,
+                shell<span class="op">=</span>self.policy.shell,
+                stdin<span class="op">=</span>subprocess.<span class="cls">DEVNULL</span> <span class="kw">if</span> stdin <span class="kw">is</span> <span class="kw">None</span> <span class="kw">else</span> subprocess.<span class="cls">PIPE</span>,
+                input<span class="op">=</span>stdin,
+                creationflags<span class="op">=</span>_no_window_flags(),
+            )
+        <span class="kw">except</span> subprocess.<span class="cls">TimeoutExpired</span> <span class="kw">as</span> exc<span class="op">:</span>
+            stdout <span class="op">=</span> _as_text(exc.stdout)
+            stderr <span class="op">=</span> _as_text(exc.stderr)
+            <span class="kw">return</span> <span class="cls">ExecResult</span>(
+                <span class="kw">False</span>, args, <span class="kw">None</span>, stdout, stderr, time.monotonic() <span class="op">-</span> started,
+                timed_out<span class="op">=</span><span class="kw">True</span>, truncated<span class="op">=</span><span class="kw">False</span>,
+            )
+        <span class="kw">except</span> <span class="cls">FileNotFoundError</span><span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">ExecResult</span>(
+                <span class="kw">False</span>, args, <span class="kw">None</span>, <span class="str">""</span>, <span class="str">f"命令不存在：{args[0]}"</span>, time.monotonic() <span class="op">-</span> started,
+            )
+        <span class="kw">except</span> <span class="cls">OSError</span> <span class="kw">as</span> exc<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">ExecResult</span>(<span class="kw">False</span>, args, <span class="kw">None</span>, <span class="str">""</span>, <span class="str">f"{type(exc).__name__}: {exc}"</span>, time.monotonic() <span class="op">-</span> started)
+
+        duration <span class="op">=</span> time.monotonic() <span class="op">-</span> started
+        stdout, truncated_out, spill_out <span class="op">=</span> self._cap(proc.stdout, <span class="str">"stdout"</span>)
+        stderr, truncated_err, spill_err <span class="op">=</span> self._cap(proc.stderr, <span class="str">"stderr"</span>)
+        <span class="kw">return</span> <span class="cls">ExecResult</span>(
+            ok<span class="op">=</span>proc.returncode <span class="op">==</span> <span class="num">0</span>,
+            argv<span class="op">=</span>args,
+            returncode<span class="op">=</span>proc.returncode,
+            stdout<span class="op">=</span>stdout,
+            stderr<span class="op">=</span>stderr,
+            duration<span class="op">=</span>duration,
+            truncated<span class="op">=</span>truncated_out <span class="kw">or</span> truncated_err,
+            spill_path<span class="op">=</span>spill_out <span class="kw">or</span> spill_err,
+        )</code></pre></div>
+<p>这段代码里有几个决定：</p>
+<ul>
+<li><strong>stdin 默认接到空设备</strong>。不这样做的话，一个等待输入的程序（<code class="inl">python</code> 不带参数、<code class="inl">git commit</code> 不带 <code class="inl">-m</code>、任何“确认请输入 y”的脚本）会一直等到超时。接到空设备之后它会立刻读到 EOF，通常马上就退出了。</li>
+<li><strong>所有失败都变成结果，不抛异常</strong>：超时、命令不存在、权限错误、路径越界，都返回 <code class="inl">ExecResult</code>。这和第 01 章“工具异常不能打断循环”是同一条规则在执行层的落实。</li>
+<li><strong>超时被杀时保留已有输出</strong>。<code class="inl">TimeoutExpired</code> 里带着进程被杀前已经产生的输出，这部分对模型判断“卡在哪一步”很有用。</li>
+<li><strong>超长输出落盘</strong>，复用第 08 章的思路：上下文里只留前 N 个字符和文件路径，全文在磁盘上可以按需取回。</li>
+</ul>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/sandbox.py::Sandbox._cap">    <span class="kw">def</span> <span class="fn">_cap</span>(self, text<span class="op">:</span> str, stream<span class="op">:</span> str) <span class="op">-&gt;</span> tuple[str, bool, str <span class="op">|</span> <span class="kw">None</span>]<span class="op">:</span>
+        <span class="str">"""超长输出：截前 N 个字符，全文落盘，返回路径。"""</span>
+        <span class="kw">if</span> len(text) <span class="op">&lt;=</span> self.policy.max_output<span class="op">:</span>
+            <span class="kw">return</span> text, <span class="kw">False</span>, <span class="kw">None</span>
+        self.spill_dir.mkdir(parents<span class="op">=</span><span class="kw">True</span>, exist_ok<span class="op">=</span><span class="kw">True</span>)
+        path <span class="op">=</span> self.spill_dir <span class="op">/</span> <span class="str">f"{stream}-{int(time.time() * 1000)}.txt"</span>
+        path.write_text(text, encoding<span class="op">=</span><span class="str">"utf-8"</span>)
+        head <span class="op">=</span> text[<span class="op">:</span> self.policy.max_output]
+        <span class="kw">return</span> head, <span class="kw">True</span>, str(path.relative_to(self.root))</code></pre></div>
+<p>超时的默认值 10 秒是教学示意，不是推荐值。实际项目里超时应该按工具分开设置：跑测试可能需要几分钟，列目录不应该超过几秒。把超时设成“够所有命令用”的一个大数，等于没设。</p>
+
+<h2 id="hx-15-s5">执行结果怎么告诉模型</h2>
+<p>沙箱拒绝或者命令失败时，模型收到的文字决定了它下一步做什么。labs 把五种结局区分开：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/sandbox.py::ExecResult.as_tool_result">    <span class="kw">def</span> <span class="fn">as_tool_result</span>(self) <span class="op">-&gt;</span> str<span class="op">:</span>
+        <span class="str">"""给模型看的文本。失败要带上原因，否则模型只会重试同一条命令。"""</span>
+        <span class="kw">if</span> self.violation<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">f"Error: 沙箱拒绝执行：{self.violation}"</span>
+        head <span class="op">=</span> <span class="str">" "</span>.join(self.argv)
+        <span class="kw">if</span> self.timed_out<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">f"Error: 命令在 {self.duration:.1f}s 后超时被杀：{head}（已终止整个进程）"</span>
+        body <span class="op">=</span> self.stdout <span class="kw">if</span> self.ok <span class="kw">else</span> (self.stdout <span class="op">+</span> self.stderr)
+        note <span class="op">=</span> <span class="str">f"（输出超过 {len(body)} 字符，已落盘 {self.spill_path}）"</span> <span class="kw">if</span> self.truncated <span class="kw">else</span> <span class="str">""</span>
+        <span class="kw">return</span> <span class="str">f"$ {head}\n{body}{note}"</span></code></pre></div>
+<div class="table-wrap"><table><thead><tr><th>结局</th><th>模型收到什么</th><th>模型应该做什么</th></tr></thead><tbody>
+<tr><td>沙箱拒绝（越界、只读）</td><td>“沙箱拒绝执行：路径 ../x 越出工作区”</td><td>改用工作区内的路径；不要重试同一条</td></tr>
+<tr><td>超时被杀</td><td>“命令在 10.0s 后超时被杀（已终止整个进程）”</td><td>换一个不会阻塞的写法（加参数、限制范围），而不是原样重试</td></tr>
+<tr><td>命令不存在</td><td>“命令不存在：xxx”</td><td>换命令，或者告诉用户需要安装什么</td></tr>
+<tr><td>非零退出</td><td>命令的标准输出与标准错误</td><td>根据错误信息修正</td></tr>
+<tr><td>成功但输出超长</td><td>前 N 个字符 + “已落盘到某路径”</td><td>需要更多内容时按页读取落盘文件</td></tr>
+</tbody></table></div>
+<p>最需要区分的是“超时”和“失败”。如果超时被报告成一次普通的非零退出，模型会以为命令本身有错，于是修改参数重试同一条命令，再超时一次。明确说出“被杀了”，模型才会意识到问题在于这条命令会阻塞。</p>
+
+<h2 id="hx-15-s6">这个沙箱挡不住什么</h2>
+<p>这一节是本章最重要的部分。labs 的沙箱是在 Python 进程里做检查，它能管的只有 <strong>harness 看得见的东西</strong>：argv 里的参数、传给子进程的环境、子进程的运行时间和输出。子进程一旦启动，它做什么 harness 就看不见了。</p>
+<p>具体来说，下面这些它都挡不住：</p>
+<div class="table-wrap"><table><thead><tr><th>挡不住的事</th><th>例子</th><th>原因</th><th>要挡住需要什么</th></tr></thead><tbody>
+<tr><td>子进程自己打开的文件</td><td><code class="inl">python -c "open('/home/dev/.ssh/id_rsa').read()"</code></td><td>文件路径在代码字符串里，不在 argv 的路径参数里</td><td>文件系统隔离：容器、只读挂载、chroot、只给工作目录挂载权限</td></tr>
+<tr><td>“只读”沙箱里写文件</td><td><code class="inl">python -c "open('x', 'w').write('...')"</code></td><td><code class="inl">allow_write=False</code> 只检查 argv 里看得见的写路径</td><td>把工作目录以只读方式挂载给子进程</td></tr>
+<tr><td>联网</td><td><code class="inl">curl</code>、任何语言的 socket 调用</td><td>清掉代理变量不等于断网</td><td>网络命名空间、防火墙规则、无网络的容器</td></tr>
+<tr><td>后台残留进程</td><td><code class="inl">nohup server &amp;</code></td><td>超时只杀直接子进程，孙进程可能存活</td><td>进程组或作业对象（POSIX 的进程组、Windows 的 Job Object），超时时整组杀掉</td></tr>
+<tr><td>资源耗尽</td><td>吃满内存、写满磁盘、fork 炸弹</td><td>标准库的 <code class="inl">subprocess</code> 没有内存与进程数限制</td><td>cgroups、容器资源限制、ulimit</td></tr>
+<tr><td>当前用户的全部权限</td><td>任何该用户能读写的文件</td><td>子进程以 harness 的用户身份运行</td><td>用一个权限更小的专用用户运行子进程</td></tr>
+</tbody></table></div>
+<p>labs 用两条测试把这个局限钉住，断言的是“局限确实存在”：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/tests/test_sandbox.py::LimitTests.test_readonly_flag_does_not_stop_child_writes">    <span class="kw">def</span> <span class="fn">test_readonly_flag_does_not_stop_child_writes</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        sandbox <span class="op">=</span> <span class="cls">Sandbox</span>(readonly_policy(str(self.root)))
+        result <span class="op">=</span> sandbox.run([<span class="cls">PY</span>, <span class="str">"-c"</span>, <span class="str">"open('made-by-child.txt', 'w').write('x')"</span>])
+        self.assertTrue(result.ok)
+        self.assertTrue((self.root <span class="op">/</span> <span class="str">"made-by-child.txt"</span>).exists())</code></pre></div>
+<p>为什么要写一条“断言有漏洞”的测试？因为局限最大的危险是被遗忘。半年后有人看到 <code class="inl">readonly_policy()</code> 这个名字，会自然地以为它是只读的，然后把它用在一个真正需要只读保证的场景里。这条测试让局限出现在测试报告里；等哪天换成了真正的隔离，这条测试会失败，提醒你把它改写成“现在挡住了”。</p>
+<blockquote><p><strong>那这个沙箱还有什么用？</strong>它挡住的是<strong>模型的常规行为</strong>里最常见的那部分：用相对路径越界、在参数里写 <code class="inl">../</code>、读凭据环境变量、跑一个永不退出的命令、输出一大堆东西。这些占了实际事故的大多数，而它们都发生在 harness 看得见的地方。它挡不住的是<strong>有意构造的绕过</strong>，那需要操作系统来挡。把两件事分清楚，你就知道什么时候进程内检查够用，什么时候必须上容器：<strong>只要 agent 会处理不可信输入（网页、第三方仓库、用户上传的文件），就应该上真正的隔离</strong>，因为那时“有意构造的绕过”就不再是假设了（第 17 章）。</p></blockquote>
+
+<h2 id="hx-15-s7">把沙箱接进执行流水线</h2>
+<p>三道关的顺序是：权限规则 → 命令解析（只对 <code class="inl">run_bash</code>）→ 沙箱执行。前两道在执行前，第三道在执行时：</p>
+<div class="table-wrap"><table><thead><tr><th>层</th><th>回答的问题</th><th>拿到的信息</th><th>漏判时谁兜底</th></tr></thead><tbody>
+<tr><td>权限规则（13）</td><td>这次调用能不能发出去</td><td>工具名、参数</td><td>沙箱</td></tr>
+<tr><td>命令解析（14）</td><td>这条命令会做什么</td><td>命令字符串</td><td>权限规则的默认值 + 沙箱</td></tr>
+<tr><td>审批（16）</td><td>人同不同意</td><td>调用的预览</td><td>沙箱</td></tr>
+<tr><td>沙箱（15）</td><td>跑起来之后最多能碰到什么</td><td>执行时的环境</td><td>操作系统级隔离（如果有）</td></tr>
+</tbody></table></div>
+<p>这张表最后一列说明了沙箱的位置：它是所有判断类机制的兜底。判断类机制（规则、解析、审批）都会因为“看错”而漏，沙箱不依赖“看对”。</p>
+<p>架构上值得借鉴的是 DSH 的做法：执行环境是一个独立的层，所有需要执行外部程序的工具都通过这一层。这样有两个好处。一是<strong>不会有绕过沙箱的工具</strong>——如果每个工具自己调 <code class="inl">subprocess</code>，总会有一个工具忘了加限制。二是<strong>隔离方式可以替换</strong>——本地开发用进程内检查，处理不可信输入时切到容器，工具代码不需要改。</p>
+<p>labs 的 <code class="inl">Sandbox</code> 也是按这个思路写的：工具不直接调 <code class="inl">subprocess</code>，而是调 <code class="inl">sandbox.run()</code>。换成容器实现时，保持 <code class="inl">run()</code> 的签名和 <code class="inl">ExecResult</code> 的结构不变即可。</p>
+
+<h2 id="hx-15-s8">坑与失败案例</h2>
+<h3 id="hx-15-s8-1">坑一：子进程继承了全部环境变量</h3>
+<ul>
+<li><strong>触发条件</strong>：<code class="inl">subprocess.run(...)</code> 不传 <code class="inl">env</code> 参数。</li>
+<li><strong>后果</strong>：模型跑一次 <code class="inl">env</code>，所有凭据进上下文，然后进日志、进发给厂商的请求、进压缩摘要、可能进长期记忆。这是一次泄露变成多次泄露的典型路径，而且事后很难清理干净。</li>
+<li><strong>怎么防</strong>：环境变量白名单传递；凭据由 harness 进程持有，不进子进程。加一条“父进程设置假 token、子进程读不到”的测试。</li>
+</ul>
+<h3 id="hx-15-s8-2">坑二：用 shell 执行拼接出来的字符串</h3>
+<ul>
+<li><strong>触发条件</strong>：<code class="inl">subprocess.run(f"grep {pattern} {path}", shell=True)</code>。</li>
+<li><strong>后果</strong>：模型给的 <code class="inl">pattern</code> 里只要有 <code class="inl">; rm -rf ~</code>，就会被执行。而且这个注入发生在 harness 自己的代码里，不在 <code class="inl">run_bash</code> 工具上，权限规则和命令解析都看不到。</li>
+<li><strong>怎么防</strong>：用 argv 列表执行，<code class="inl">shell=False</code>。模型参数永远作为单独的 argv 元素传递，不参与字符串拼接。</li>
+</ul>
+<h3 id="hx-15-s8-3">坑三：超时之后返回半截输出，装作正常</h3>
+<ul>
+<li><strong>触发条件</strong>：超时被捕获后，把已有的部分输出当作结果返回，不标注超时。</li>
+<li><strong>后果</strong>：模型以为命令正常结束了，把半截的测试输出当成完整结果——“测试只跑了 12 个，全部通过”，实际上第 13 个卡住了。</li>
+<li><strong>怎么防</strong>：超时作为独立的结局，结果文字第一句就写“超时被杀”。labs 的 <code class="inl">ExecResult.timed_out</code> 与 <code class="inl">as_tool_result()</code> 就是这么做的。</li>
+</ul>
+<h3 id="hx-15-s8-4">坑四：交互式程序把循环卡死</h3>
+<ul>
+<li><strong>触发条件</strong>：子进程的 stdin 没有处理，命令在等待输入（<code class="inl">git commit</code> 打开编辑器、脚本问“确定吗？”）。</li>
+<li><strong>后果</strong>：每次都等到超时，而且超时之后模型通常会重试同一条命令。</li>
+<li><strong>怎么防</strong>：stdin 默认接到空设备，让等待输入的程序立刻读到 EOF；同时设置 <code class="inl">GIT_EDITOR=true</code>、<code class="inl">CI=1</code> 这类让工具进入非交互模式的环境变量（放进环境白名单的额外注入里）。</li>
+</ul>
+<h3 id="hx-15-s8-5">坑五：把进程内检查当成隔离</h3>
+<ul>
+<li><strong>触发条件</strong>：系统只有 Python 层面的路径检查，就开始处理第三方仓库或者网页内容。</li>
+<li><strong>后果</strong>：一段被注入的指令让模型跑 <code class="inl">python -c "..."</code>，代码字符串里的路径完全不经过检查，沙箱的“只读”和“工作区”都失效。</li>
+<li><strong>怎么防</strong>：清楚记录进程内沙箱的局限（labs 的 <code class="inl">LimitTests</code>）；处理不可信输入时换成操作系统级隔离。名字也很重要：如果一个策略挡不住子进程写文件，就不要叫它 <code class="inl">readonly</code> 而不加说明。</li>
+</ul>
+<h3 id="hx-15-s8-6">坑六：超时只杀了直接子进程</h3>
+<ul>
+<li><strong>触发条件</strong>：命令启动了自己的子进程（测试框架、构建工具、开发服务器）。</li>
+<li><strong>后果</strong>：超时后 harness 以为命令结束了，孙进程继续占着端口、吃着 CPU，下一次运行时报“端口已被占用”。在长时间运行的 agent 里，这类残留进程会越积越多。</li>
+<li><strong>怎么防</strong>：在 POSIX 上用新的进程组启动子进程，超时时杀整个进程组；在 Windows 上用 Job Object。labs 的教学版没有做这一步，正文这里列出来，作为从教学版走向真实实现时必须补上的一项。</li>
+</ul>
+
+<h2 id="hx-15-s9">多仓库取舍对比</h2>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th><th>labs</th></tr></thead><tbody>
+<tr><td>执行入口</td><td>独立的执行环境层，工具通过它执行</td><td>bash 工具直接起子进程</td><td><code class="inl">subprocess.run(shell=True)</code></td><td><code class="inl">Sandbox.run()</code> 统一入口</td></tr>
+<tr><td>经过 shell</td><td>由执行层决定</td><td>是（bash 工具接收字符串）</td><td>是</td><td>默认否，可显式开启</td></tr>
+<tr><td>环境变量</td><td>由执行层控制</td><td>继承为主</td><td>全部继承</td><td>白名单 + 凭据名剥离</td></tr>
+<tr><td>超时</td><td>工具级超时，与取消信号配合</td><td>有</td><td>有，固定值</td><td>策略默认值 + 单次覆盖，超时单独报告</td></tr>
+<tr><td>输出上限</td><td>交给结果卸载插件</td><td>截断 + 落盘</td><td>截断，不落盘</td><td>截断 + 落盘</td></tr>
+<tr><td>隔离强度</td><td>取决于执行层的实现（可替换为更强的隔离）</td><td>进程级，主要靠权限与确认</td><td>无</td><td>进程内检查，并明确记录局限</td></tr>
+<tr><td>适合场景</td><td>需要在不同部署形态之间切换隔离方式</td><td>本地 CLI，可信仓库</td><td>教学</td><td>理解执行层的接口与边界</td></tr>
+</tbody></table></div>
+<p>一句话取舍：在可信的本地仓库里，进程内检查加环境白名单加超时，已经能挡住绝大多数事故；一旦 agent 要处理不可信输入，就必须换成操作系统级隔离。最值得提前做的不是隔离本身，而是 DSH 那种“执行层独立”的结构——它让你在需要更强隔离的那一天，只换一层，而不是改所有工具。</p>
+
+<h2 id="hx-15-s10">小结</h2>
+<ul>
+<li>沙箱是判断类机制（规则、解析、审批）的兜底：它不依赖“看对”，只限制影响范围。</li>
+<li>默认直接执行 argv，不经过 shell；模型参数永远不参与字符串拼接。</li>
+<li>环境变量白名单传递，凭据由 harness 持有，不进子进程。</li>
+<li>每个调用都有超时；超时单独报告，stdin 接空设备，超长输出落盘。</li>
+<li>进程内的沙箱挡不住子进程自己打开的文件、联网、残留进程、资源耗尽。把局限写成测试，处理不可信输入时换成操作系统级隔离。</li>
+<li>所有执行外部程序的工具走同一个执行入口，隔离方式才可以替换。</li>
+</ul>
+<p>到这里，模型的每个动作都有了三道关：能不能做、做的是什么、做了最多能怎样。还剩一个问题：规则说“问人”的时候，到底怎么问。继续读：<a href="#hx-16">审批与升档</a>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>院子搭好后的第一周，橘子撞墙撞了二十多次——大部分是它习惯性地想去 <code class="inl">~</code> 下面找配置文件。撞完一次，它就学会用工作区里的相对路径。那次 <code class="inl">env</code> 的事故没再发生过：子进程里根本没有那些变量。</p>
+<p>老唐顺手给容器化留了个口子：执行层单独抽出来，下个月接第三方仓库的活时，换一个实现就能跑在容器里。</p>
+<p>真正的麻烦来自另一个方向。林舟把审批的弹窗做得很勤快：每次写文件都问一遍。第一天他认真看了三十多次，第二天看了十几次，第三天下午开始，他已经不看内容了，看到弹窗就点“同意”。周五晚上，他点“同意”的那一次，批准的是一条 <code class="inl">git push --force</code>。</p>
+<p class="hx-story-say">“你批准的不是那条命令，”老唐说，“你批准的是‘让这个窗口消失’。”</p>
+<p>下一章：<a href="#hx-16">审批与升档</a>。</p>
+</div>
+</section>

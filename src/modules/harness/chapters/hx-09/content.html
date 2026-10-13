@@ -282,7 +282,7 @@
 
 <h3 id="hx-09-s5-3">labs：一个最小的计划闸门</h3>
 
-<p>labs 取 OpenHarness 的“只读放行、其余拦截”，加上 DSH 的“退出要带计划、要用户批准”，并且像 DSH 一样让出口在计划模式里始终可调，否则模型永远交不出计划。它和 <span class="xref-pending" data-href="#hx-13">hx-13</span>、<span class="xref-pending" data-href="#hx-16">hx-16</span> 的权限检查是串联关系：闸门放行之后，还要再过一遍正常的权限规则。</p>
+<p>labs 取 OpenHarness 的“只读放行、其余拦截”，加上 DSH 的“退出要带计划、要用户批准”，并且像 DSH 一样让出口在计划模式里始终可调，否则模型永远交不出计划。它和 <a href="#hx-13">hx-13</a>、<a href="#hx-16">hx-16</a> 的权限检查是串联关系：闸门放行之后，还要再过一遍正常的权限规则。</p>
 
 <div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/working_memory.py::PlanGate"><span class="dec">@dataclass</span>
 <span class="kw">class</span> <span class="cls">PlanGate</span><span class="op">:</span>

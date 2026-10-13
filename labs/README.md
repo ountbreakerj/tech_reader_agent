@@ -40,7 +40,22 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 | hx-02 工具定义与注册 | `harness/tools.py` | `tests/test_tools.py` |
 | hx-03 执行管线与并发 | `harness/tool_runtime.py` | `tests/test_tool_runtime.py` |
 | hx-04 会话日志与回放 | `harness/session_log.py` | `tests/test_session_log.py` |
+| hx-05 Token 预算与计数 | `harness/budget.py` | `tests/test_budget.py` |
+| hx-06 Prompt cache 稳定性 | `harness/prompt_cache.py` | `tests/test_prompt_cache.py` |
+| hx-07 上下文压缩 | `harness/compaction.py` | `tests/test_compaction.py` |
+| hx-08 工具输出卸载 | `harness/spill.py` | `tests/test_spill.py` |
+| hx-09 短期与工作记忆 | `harness/working_memory.py` | `tests/test_working_memory.py` |
+| hx-10 长期记忆与指令文件 | `harness/memory_store.py` | `tests/test_memory_store.py` |
+| hx-11 检索与注入 | `harness/retrieval.py` | `tests/test_retrieval.py` |
+| hx-12 过期、衰减与替代 | `harness/memory_lifecycle.py` | `tests/test_memory_lifecycle.py` |
+| hx-13 权限规则引擎 | `harness/permissions.py` | `tests/test_permissions.py` |
+| hx-14 Shell 命令解析 | `harness/shell_parse.py` | `tests/test_shell_parse.py` |
+| hx-15 沙箱 | `harness/sandbox.py` | `tests/test_sandbox.py` |
+| hx-16 审批与升档 | `harness/approval.py` | `tests/test_approval.py` |
+| hx-17 Prompt 注入威胁模型 | `harness/injection.py` | `tests/test_injection.py` |
 
 `tools.py` 和 `tool_runtime.py` 各有一个 `ToolSpec`：前者描述工具本身（schema、handler、只读标志），后者只描述调度需要的信息（可否并行、超时）。分开写是为了让每章的代码能单独读懂；第 25 章组装 mini-harness 时会把两者合并。
+
+安全部分（13–17）的模块按依赖顺序串起来：`sandbox` 复用 `permissions` 的路径规范化，`approval` 包在 `permissions` 的判定外面。`sandbox.py` 是进程内的教学版，挡不住子进程自己打开的文件，`test_sandbox.py` 里的 `LimitTests` 和 `test_injection.py` 里的 `LimitTests` 专门记录这类局限：它们断言的是“局限存在”，换成真正的隔离或更强的检测之后应当改写。
 
 后续章节的文件随章节补充。

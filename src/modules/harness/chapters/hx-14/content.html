@@ -1,0 +1,348 @@
+<section class="chapter" id="ch-hx-14" data-slug="hx-14"><div class="ch-head"><span class="ch-num">第 14 章</span></div><h1 id="hx-14">Shell 命令解析</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 14 章（虚构）</span>
+<p>老唐把那两周的 <code class="inl">run_bash</code> 日志导成一份文件，用橙色的荧光笔在上面划。划到第十七行的时候他停下来，把屏幕转给林舟。</p>
+<p>那一行是：<code class="inl">grep -rn "timeout" . &gt; /tmp/scan.log</code>。</p>
+<p class="hx-story-say">“这条命令没有写 rm，没有写 mv，它唯一的动作是把结果写到一个文件里。”老唐说，“你的规则放它过了，因为它只看工具名。”</p>
+<p>后面还有更隐蔽的。有一条 <code class="inl">git checkout -- src/</code>，把三个文件的未提交修改丢掉了；有一条 <code class="inl">find . -name "*.pyc" -delete</code>，程序名是白名单里的 <code class="inl">find</code>，动作是删除；还有一条 <code class="inl">sed -i "s/DEBUG = True/DEBUG = False/" config.py</code>，程序名是 <code class="inl">sed</code>，一个参数就把它变成了写操作。</p>
+<p>林舟的第一版补救是加关键词：命令里出现 <code class="inl">&gt;</code>、<code class="inl">-delete</code>、<code class="inl">-i</code> 就拦。当天下午橘子用 <code class="inl">cat $(ls /tmp/*.sql)</code> 绕过去了——参数里的 <code class="inl">$(...)</code> 会在执行时被 shell 展开成别的东西，而这条命令的字面文本里既没有重定向也没有危险参数。第二天又出了一条误报：<code class="inl">echo "use &gt; to redirect"</code>，引号里的那个 <code class="inl">&gt;</code> 被当成了真的重定向。</p>
+<p class="hx-story-say">“你在拿字符串做语法分析。”老唐把荧光笔盖上，“要做就正经做：先把它拆成片段，再看每个片段的第一段程序是什么。”</p>
+<p>这一章要做的事就是拆：按 shell 的规则切开 <code class="inl">;</code>、<code class="inl">&amp;&amp;</code>、<code class="inl">|</code>、换行，但不切开引号里的；给每个片段取出程序名和参数；把“重定向写文件”“命令替换”“子 shell”“解释器内联代码”这些让命令变得不可静态判定的东西标出来；最后只给三种结论——只读、需要人看、无法判定。目标不是“识别危险命令”，而是<strong>把不确定的地方暴露出来</strong>，因为一个能确定说“我判定不了”的解析器，比一个猜测的规则安全得多。</p>
+</div>
+<p>权限规则遇到 <code class="inl">run_bash</code> 时会卡住，因为它的参数只有一个键 <code class="inl">command</code>，值是一条字符串。模型在这条字符串里能表达的东西，比任何工具 schema 都多：管道、逻辑连接、重定向、命令替换、子 shell、变量展开、把一段代码作为参数交给解释器。规则要做出参数级判定，前提是先把这条字符串变成结构。</p>
+<p>这一章只做一件事：把命令字符串解析成可判定的结构，然后给出保守的结论。至于结论出来之后是放行、问人还是拒绝，属于第 13 章和第 16 章。</p>
+
+<h2 id="hx-14-s0">先看全貌：Shell 命令解析是什么、管哪些事</h2>
+<p>一句话：把 <code class="inl">run_bash</code> 那一条字符串拆成若干片段，判断每个片段在跑什么程序、会不会改动文件系统，然后把无法静态判定的部分标出来。</p>
+<p>它管四件事：</p>
+<ul>
+<li><strong>切分</strong>：按 shell 的语法切开连接符（<code class="inl">;</code>、<code class="inl">&amp;&amp;</code>、<code class="inl">||</code>、<code class="inl">|</code>、换行、<code class="inl">&amp;</code>），引号和转义内部不切。</li>
+<li><strong>分词</strong>：每个片段取出 argv，程序名就是第一段。</li>
+<li><strong>分类</strong>：程序是否在只读白名单里；参数里有没有把只读程序变成写操作（<code class="inl">sed -i</code>、<code class="inl">sort -o</code>、<code class="inl">git checkout</code>）。</li>
+<li><strong>标记不可判定</strong>：重定向、命令替换、变量展开、子 shell、解释器内联代码、通配符。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>判定方式</td><td>在原始字符串上找关键词</td><td>先按 shell 语法切分，再逐段判断；字符串匹配两头都错（漏 <code class="inl">/bin/rm</code>、误报引号里的关键词）</td></tr>
+<tr><td>白名单还是黑名单</td><td>列一串危险命令拦住</td><td>用只读白名单：命中的放行，其余按需要人看处理。黑名单永远在补漏</td></tr>
+<tr><td>遇到看不懂的部分</td><td>猜一个大概率的结果</td><td>标成不可判定，按最坏情况处理（拒绝或强制问人）</td></tr>
+<tr><td>多条片段混合</td><td>看第一条命令</td><td>取所有片段里最严的结论：一段要写，整条就不能自动放行</td></tr>
+</tbody></table></div>
+<h3 id="hx-14-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>OpenHarness</strong>（Python）：有一部分命令分类逻辑，用于决定哪些 bash 调用可以免确认。深度取决于它的实现范围，可以看它把哪些命令当成安全的，以及它怎么处理管道。</p>
+<p><strong>DSH</strong>（TypeScript）：安全边界不放在“解析命令”上，而是把命令交给权限钩子和沙箱处理。这个选择值得注意：解析命令是一条永远在追赶的路，把风险交给能力边界（第 15 章）更稳。</p>
+<p><strong>learn-claude-code</strong>（教程）：早期用危险子串黑名单，是本章要避免的写法。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/shell_parse.py</code>，切分、分词、分类、标记、结论五步，22 条测试覆盖引号、转义、替换、重定向与各类白名单陷阱。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1 节讲切分为什么是整个解析的地基，必须掌握；引号处理错了，后面全是错的。</li>
+<li>第 2、3 节讲只读白名单与三种结论，是判定逻辑本身。</li>
+<li>第 4 节把“不可判定”单独列出来，这是本章最重要的态度：解析器要敢说自己看不懂。</li>
+<li>第 5 节讲解析结果怎么接到权限引擎上；第 7 节的六条坑可以直接当解析器的测试清单。</li>
+</ol>
+<p>安全部分不再逐条标注 <code class="inl">文件:行号</code>，各仓库的实现用包名与函数名指代。</p></blockquote>
+
+<h2 id="hx-14-s1">第一步是切分，而切分的关键是引号</h2>
+<p>切分的目标是把一条命令变成若干片段，每个片段对应一个进程（大致上）。分隔符有六种，其中三种是“顺序执行”（<code class="inl">;</code>、<code class="inl">&amp;&amp;</code>、<code class="inl">||</code>），两种是“管道”（<code class="inl">|</code>、<code class="inl">|&amp;</code>），一种是把整条命令放到后台（<code class="inl">&amp;</code>）。判定时它们的区别不大——不管用什么连接，每一段都会被执行——但记录连接符有额外用途：<code class="inl">&amp;&amp;</code> 后面的片段只在前面成功时执行，这对“这条命令会不会真的删东西”的判断有影响，虽然保守起见我们会忽略这个区别。</p>
+<p>真正麻烦的是引号。下面四条命令看起来相似，判定结果完全不同：</p>
+<div class="table-wrap"><table><thead><tr><th>命令</th><th>片段数</th><th>正确的判定</th></tr></thead><tbody>
+<tr><td><code class="inl">grep a file.txt; rm b.txt</code></td><td>2</td><td>第二段是删除，不是只读</td></tr>
+<tr><td><code class="inl">grep "a; rm b.txt" file.txt</code></td><td>1</td><td>只读：<code class="inl">;</code> 在被搜索的字符串里</td></tr>
+<tr><td><code class="inl">echo 'a | b'</code></td><td>1</td><td>只读：单引号里不做任何展开</td></tr>
+<tr><td><code class="inl">echo a\;b</code></td><td>1</td><td>只读：反斜杠转义了分隔符</td></tr>
+</tbody></table></div>
+<p>切分函数是一个字符一个字符往前走的循环，维护三个状态：当前是否在某种引号里、上一个字符是否是转义符、当前正在积累的片段。它不解释语义，只负责“在正确的位置断开”：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/shell_parse.py::split_segments"><span class="kw">def</span> <span class="fn">split_segments</span>(command<span class="op">:</span> str) <span class="op">-&gt;</span> list[tuple[str, str]]<span class="op">:</span>
+    <span class="str">"""按 shell 分隔符切分，返回 [(连接符, 片段)]。引号与转义内部不切。
+
+    这是本模块最容易出错的地方：`echo "a; b"` 是一段，`echo a; b` 是两段；
+    `2&gt;&amp;1` 和 `&amp;&gt;` 里的 &amp; 是重定向的一部分，不是「放到后台」。
+    """</span>
+    pieces<span class="op">:</span> list[tuple[str, str]] <span class="op">=</span> []
+    buffer<span class="op">:</span> list[str] <span class="op">=</span> []
+    separator <span class="op">=</span> <span class="str">""</span>
+    quote <span class="op">=</span> <span class="str">""</span>
+    escaped <span class="op">=</span> <span class="kw">False</span>
+    index <span class="op">=</span> <span class="num">0</span>
+    <span class="kw">while</span> index <span class="op">&lt;</span> len(command)<span class="op">:</span>
+        char <span class="op">=</span> command[index]
+        <span class="kw">if</span> escaped<span class="op">:</span>
+            buffer.append(char)
+            escaped <span class="op">=</span> <span class="kw">False</span>
+            index <span class="op">+=</span> <span class="num">1</span>
+            <span class="kw">continue</span>
+        <span class="kw">if</span> char <span class="op">==</span> <span class="str">"\\"</span> <span class="kw">and</span> quote <span class="op">!=</span> <span class="str">"'"</span><span class="op">:</span>
+            buffer.append(char)
+            escaped <span class="op">=</span> <span class="kw">True</span>
+            index <span class="op">+=</span> <span class="num">1</span>
+            <span class="kw">continue</span>
+        <span class="kw">if</span> quote<span class="op">:</span>
+            buffer.append(char)
+            <span class="kw">if</span> char <span class="op">==</span> quote<span class="op">:</span>
+                quote <span class="op">=</span> <span class="str">""</span>
+            index <span class="op">+=</span> <span class="num">1</span>
+            <span class="kw">continue</span>
+        <span class="kw">if</span> char <span class="kw">in</span> (<span class="str">'"'</span>, <span class="str">"'"</span>)<span class="op">:</span>
+            quote <span class="op">=</span> char
+            buffer.append(char)
+            index <span class="op">+=</span> <span class="num">1</span>
+            <span class="kw">continue</span>
+        matched <span class="op">=</span> next((sep <span class="kw">for</span> sep <span class="kw">in</span> <span class="cls">SPLITTERS</span> <span class="kw">if</span> command.startswith(sep, index)), <span class="str">""</span>)
+        <span class="kw">if</span> matched <span class="op">==</span> <span class="str">"&amp;"</span> <span class="kw">and</span> _is_redirect_ampersand(command, index)<span class="op">:</span>
+            matched <span class="op">=</span> <span class="str">""</span>
+        <span class="kw">if</span> matched<span class="op">:</span>
+            pieces.append((separator, <span class="str">""</span>.join(buffer).strip()))
+            separator <span class="op">=</span> matched
+            buffer <span class="op">=</span> []
+            index <span class="op">+=</span> len(matched)
+            <span class="kw">continue</span>
+        buffer.append(char)
+        index <span class="op">+=</span> <span class="num">1</span>
+    pieces.append((separator, <span class="str">""</span>.join(buffer).strip()))
+    <span class="kw">return</span> [(sep, text) <span class="kw">for</span> sep, text <span class="kw">in</span> pieces <span class="kw">if</span> text]</code></pre></div>
+<p>这段代码有四处值得注意：</p>
+<ul>
+<li><strong>双引号里的反斜杠仍然有转义作用，单引号里的没有</strong>。所以判断转义时要看 <code class="inl">quote != "'"</code>。<code class="inl">"a\"b"</code> 是一个片段，<code class="inl">'a\'b'</code> 里那个反斜杠是普通字符。</li>
+<li><strong>切分只做切分，不解释</strong>。<code class="inl">$VAR</code>、<code class="inl">$(cmd)</code> 在这里被当作普通文本原样保留，交给第 4 节的标记步骤处理。</li>
+<li><strong>分隔符按长度优先匹配</strong>：<code class="inl">&amp;&amp;</code> 必须比 <code class="inl">&amp;</code> 先试，否则 <code class="inl">a &amp;&amp; b</code> 会被切成 <code class="inl">a &amp;</code> 和 <code class="inl">&amp; b</code>。labs 把 <code class="inl">&amp;&amp;</code>、<code class="inl">||</code> 放在分隔符列表前面。</li>
+<li><strong>保留连接符</strong>：返回的是 <code class="inl">(连接符, 片段)</code> 对，连接符记在片段上，后面判定和给模型的理由都用得到。</li>
+</ul>
+<p>分词交给标准库的 <code class="inl">shlex</code>——它已经正确处理了引号、转义和 Windows 之外的常见情形。切不出来（引号没闭合）时返回空列表，让上游把整条命令标成不可判定，而不是丢掉这段继续判。</p>
+
+<h2 id="hx-14-s2">只读白名单：判的是程序加参数，不是命令名</h2>
+<p>分类的核心是一份只读白名单。选它的理由很直接：能自动放行的命令是少数，而“所有其他命令”是一个无限集合，没法枚举。白名单漏掉的是<strong>灵活性</strong>（多问几次），黑名单漏掉的是<strong>安全性</strong>。</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/shell_parse.py::READ_ONLY_COMMANDS"><span class="cls">READ_ONLY_COMMANDS</span> <span class="op">=</span> frozenset({
+    <span class="str">"cat"</span>, <span class="str">"head"</span>, <span class="str">"tail"</span>, <span class="str">"wc"</span>, <span class="str">"ls"</span>, <span class="str">"find"</span>, <span class="str">"grep"</span>, <span class="str">"rg"</span>, <span class="str">"awk"</span>, <span class="str">"sed"</span>, <span class="str">"cut"</span>, <span class="str">"sort"</span>,
+    <span class="str">"uniq"</span>, <span class="str">"diff"</span>, <span class="str">"file"</span>, <span class="str">"stat"</span>, <span class="str">"du"</span>, <span class="str">"df"</span>, <span class="str">"echo"</span>, <span class="str">"printf"</span>, <span class="str">"pwd"</span>, <span class="str">"which"</span>,
+    <span class="str">"whoami"</span>, <span class="str">"date"</span>, <span class="str">"basename"</span>, <span class="str">"dirname"</span>, <span class="str">"realpath"</span>, <span class="str">"jq"</span>, <span class="str">"md5sum"</span>,
+    <span class="str">"sha256sum"</span>, <span class="str">"od"</span>, <span class="str">"nl"</span>, <span class="str">"tr"</span>, <span class="str">"type"</span>, <span class="str">"git"</span>,
+})</code></pre></div>
+<p>白名单只是第一层。同一个程序名，参数一变性质就变，所以分类还要看参数：</p>
+<div class="table-wrap"><table><thead><tr><th>程序</th><th>看起来只读</th><th>实际会写</th><th>怎么判</th></tr></thead><tbody>
+<tr><td><code class="inl">sed</code></td><td><code class="inl">sed -n 1,10p a.txt</code></td><td><code class="inl">sed -i s/a/b/ a.txt</code></td><td>参数含 <code class="inl">-i</code> / <code class="inl">--in-place</code></td></tr>
+<tr><td><code class="inl">sort</code></td><td><code class="inl">sort a.txt</code></td><td><code class="inl">sort -o out.txt a.txt</code></td><td>参数含 <code class="inl">-o</code> / <code class="inl">--output</code></td></tr>
+<tr><td><code class="inl">git</code></td><td><code class="inl">git status</code></td><td><code class="inl">git checkout</code> / <code class="inl">git reset</code> / <code class="inl">git push</code></td><td>子命令在只读子命令集合里</td></tr>
+<tr><td><code class="inl">find</code></td><td><code class="inl">find . -name "*.py"</code></td><td><code class="inl">find . -delete</code> / <code class="inl">find . -exec rm {} \;</code></td><td>参数含 <code class="inl">-delete</code> 算会写（需要人看）；含 <code class="inl">-exec</code> 算不可判定，因为它会对每个结果执行任意命令</td></tr>
+<tr><td><code class="inl">awk</code></td><td><code class="inl">awk '{print $1}' a.txt</code></td><td><code class="inl">awk '{print &gt; "out.txt"}' a.txt</code></td><td>脚本参数里含重定向算会写；含 <code class="inl">system(</code> 或管道算不可判定</td></tr>
+</tbody></table></div>
+<p>这类“参数改变语义”的判断不可能穷尽。<code class="inl">git</code> 尤其麻烦：它的子命令有一百多个，其中一部分既读又写（<code class="inl">git stash</code>、<code class="inl">git clean</code>），还有一部分取决于参数（<code class="inl">git branch -D</code>）。labs 的做法是给 <code class="inl">git</code> 单独一张只读子命令表，其余一律按“需要人看”处理：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/shell_parse.py::READ_ONLY_GIT"><span class="cls">READ_ONLY_GIT</span> <span class="op">=</span> frozenset({<span class="str">"status"</span>, <span class="str">"log"</span>, <span class="str">"diff"</span>, <span class="str">"show"</span>, <span class="str">"branch"</span>, <span class="str">"rev-parse"</span>, <span class="str">"describe"</span>, <span class="str">"blame"</span>, <span class="str">"ls-files"</span>})</code></pre></div>
+<p><code class="inl">branch</code> 在只读表里，但它要再看参数：不带参数是列出分支，带 <code class="inl">-D</code> 或一个新名字就是删除或创建。所有“白名单程序 + 参数改变性质”的判断集中在一个函数里，新增规则时只改这一处：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/shell_parse.py::_program_risk"><span class="kw">def</span> <span class="fn">_program_risk</span>(argv<span class="op">:</span> list[str]) <span class="op">-&gt;</span> tuple[str, str] <span class="op">|</span> <span class="kw">None</span><span class="op">:</span>
+    <span class="str">"""白名单程序里，参数会改变性质的那几个。返回 (结论, 理由)；None 表示参数没问题。
+
+    sed 和 awk 本身是完整的语言，这里只覆盖最常见的写法；拿不准的交给沙箱兜底（hx-15）。
+    """</span>
+    program, args <span class="op">=</span> argv[<span class="num">0</span>], argv[<span class="num">1</span><span class="op">:</span>]
+    positional <span class="op">=</span> [arg <span class="kw">for</span> arg <span class="kw">in</span> args <span class="kw">if</span> <span class="kw">not</span> arg.startswith(<span class="str">"-"</span>)]
+    <span class="kw">if</span> program <span class="op">==</span> <span class="str">"find"</span><span class="op">:</span>
+        <span class="kw">if</span> any(arg <span class="kw">in</span> (<span class="str">"-exec"</span>, <span class="str">"-execdir"</span>, <span class="str">"-ok"</span>, <span class="str">"-okdir"</span>) <span class="kw">for</span> arg <span class="kw">in</span> args)<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"opaque"</span>, <span class="str">"find -exec 会对每个结果执行任意命令"</span>
+        <span class="kw">if</span> any(arg <span class="kw">in</span> (<span class="str">"-delete"</span>, <span class="str">"-fprint"</span>, <span class="str">"-fprintf"</span>, <span class="str">"-fls"</span>) <span class="kw">for</span> arg <span class="kw">in</span> args)<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"needs_review"</span>, <span class="str">"find 带 -delete / -fprint，会删除或写文件"</span>
+    <span class="kw">elif</span> program <span class="op">==</span> <span class="str">"sed"</span><span class="op">:</span>
+        <span class="kw">if</span> any(arg.startswith(<span class="str">"-i"</span>) <span class="kw">or</span> arg.startswith(<span class="str">"--in-place"</span>) <span class="kw">for</span> arg <span class="kw">in</span> args)<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"needs_review"</span>, <span class="str">"sed -i 会原地修改文件"</span>
+        script <span class="op">=</span> positional[<span class="num">0</span>] <span class="kw">if</span> positional <span class="kw">else</span> <span class="str">""</span>
+        <span class="kw">if</span> re.search(<span class="str">r"(^|[;}/])\s*[we]\b"</span>, script)<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"needs_review"</span>, <span class="str">"sed 脚本里有 w（写文件）或 e（执行命令）"</span>
+    <span class="kw">elif</span> program <span class="op">==</span> <span class="str">"awk"</span><span class="op">:</span>
+        script <span class="op">=</span> positional[<span class="num">0</span>] <span class="kw">if</span> positional <span class="kw">else</span> <span class="str">""</span>
+        <span class="kw">if</span> <span class="str">"system("</span> <span class="kw">in</span> script <span class="kw">or</span> <span class="str">"|"</span> <span class="kw">in</span> script<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"opaque"</span>, <span class="str">"awk 脚本里调用了 system() 或管道，会执行别的命令"</span>
+        <span class="kw">if</span> <span class="str">"&gt;"</span> <span class="kw">in</span> script<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"needs_review"</span>, <span class="str">"awk 脚本里有重定向，会写文件"</span>
+    <span class="kw">elif</span> program <span class="op">==</span> <span class="str">"sort"</span><span class="op">:</span>
+        <span class="kw">if</span> any(arg <span class="kw">in</span> (<span class="str">"-o"</span>, <span class="str">"--output"</span>) <span class="kw">or</span> arg.startswith(<span class="str">"--output="</span>) <span class="kw">for</span> arg <span class="kw">in</span> args)<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"needs_review"</span>, <span class="str">"sort -o 会写文件"</span>
+    <span class="kw">elif</span> program <span class="op">==</span> <span class="str">"uniq"</span><span class="op">:</span>
+        <span class="kw">if</span> len(positional) <span class="op">&gt;=</span> <span class="num">2</span><span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"needs_review"</span>, <span class="str">"uniq 的第二个参数是输出文件"</span>
+    <span class="kw">elif</span> program <span class="op">==</span> <span class="str">"date"</span><span class="op">:</span>
+        <span class="kw">if</span> any(arg <span class="kw">in</span> (<span class="str">"-s"</span>, <span class="str">"--set"</span>) <span class="kw">or</span> arg.startswith(<span class="str">"--set="</span>) <span class="kw">for</span> arg <span class="kw">in</span> args)<span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"needs_review"</span>, <span class="str">"date -s 会修改系统时间"</span>
+    <span class="kw">elif</span> program <span class="op">==</span> <span class="str">"git"</span><span class="op">:</span>
+        sub <span class="op">=</span> positional[<span class="num">0</span>] <span class="kw">if</span> positional <span class="kw">else</span> <span class="str">""</span>
+        <span class="kw">if</span> sub <span class="kw">not</span> <span class="kw">in</span> <span class="cls">READ_ONLY_GIT</span><span class="op">:</span>
+            <span class="kw">return</span> <span class="str">"needs_review"</span>, <span class="str">f"git {sub or '（无子命令）'} 不是只读子命令"</span>
+        <span class="kw">if</span> sub <span class="op">==</span> <span class="str">"branch"</span><span class="op">:</span>
+            rest <span class="op">=</span> args[args.index(<span class="str">"branch"</span>) <span class="op">+</span> <span class="num">1</span><span class="op">:</span>]
+            <span class="kw">if</span> any(arg <span class="kw">in</span> (<span class="str">"-d"</span>, <span class="str">"-D"</span>, <span class="str">"-m"</span>, <span class="str">"-M"</span>, <span class="str">"-c"</span>, <span class="str">"-C"</span>, <span class="str">"--delete"</span>, <span class="str">"--move"</span>, <span class="str">"--copy"</span>) <span class="kw">for</span> arg <span class="kw">in</span> rest) \
+                    <span class="kw">or</span> any(<span class="kw">not</span> arg.startswith(<span class="str">"-"</span>) <span class="kw">for</span> arg <span class="kw">in</span> rest)<span class="op">:</span>
+                <span class="kw">return</span> <span class="str">"needs_review"</span>, <span class="str">"git branch 带参数会创建、删除或重命名分支"</span>
+    <span class="kw">return</span> <span class="kw">None</span></code></pre></div>
+<p>注意这里判的是<strong>具体的写出选项</strong>，而不是“带 <code class="inl">-o</code> 或 <code class="inl">-i</code> 就算写”：<code class="inl">grep -i</code> 是忽略大小写，<code class="inl">grep -o</code> 是只输出匹配部分，它们都不写文件。一刀切的写出选项列表会让 <code class="inl">grep -i todo</code> 这种最常见的只读命令每次都停下来问人，用户很快就会去把审批关掉。</p>
+<blockquote><p><strong>经验</strong>：白名单的条目应当由“最近用到过、而且明确只读”的命令逐步积累，而不是一次性抄一份 shell 命令大全。清单越长，误放行的概率越大，而每一条都需要有人真的审过。labs 的清单里故意没有 <code class="inl">tee</code>、<code class="inl">xargs</code>、<code class="inl">install</code>、<code class="inl">cp</code> / <code class="inl">mv</code>——它们看起来无害，但都是写操作；也没有 <code class="inl">env</code>（<code class="inl">env rm -rf build</code> 会执行后面的命令）、<code class="inl">xxd</code>（<code class="inl">xxd a b</code> 会写 <code class="inl">b</code>）和 <code class="inl">tree</code>（<code class="inl">tree -o</code> 会写文件）。</p></blockquote>
+
+<h2 id="hx-14-s3">三种结论，而不是一个布尔值</h2>
+<p>解析的产物不是“安全 / 不安全”，而是三种状态：</p>
+<div class="table-wrap"><table><thead><tr><th>结论</th><th>含义</th><th>建议动作</th><th>典型例子</th></tr></thead><tbody>
+<tr><td><code class="inl">readonly</code></td><td>全部片段都是只读程序，参数里没有写出选项，也没有重定向或替换</td><td>自动放行</td><td><code class="inl">cat a.txt | grep -n todo | wc -l</code></td></tr>
+<tr><td><code class="inl">needs_review</code></td><td>能判定它会做什么，而且其中有一段会写</td><td>问人（或按规则拒绝）</td><td><code class="inl">ls &gt; out.txt</code>、<code class="inl">sed -i ...</code>、<code class="inl">git checkout -- src/</code></td></tr>
+<tr><td><code class="inl">opaque</code></td><td>无法静态判定它到底会做什么</td><td>默认拒绝；明确知道风险并配置过时降级为问人</td><td><code class="inl">sh -c "..."</code>、<code class="inl">cat $(find . -name x)</code>、<code class="inl">python -c "..."</code></td></tr>
+</tbody></table></div>
+<p>把 <code class="inl">opaque</code> 单列出来是这套设计的关键。很多实现只有“危险 / 安全”两档，于是所有看不懂的命令都被塞进“安全”那一档（因为看起来没有危险词），或者被塞进“危险”那一档（于是 <code class="inl">cat $(ls)</code> 和 <code class="inl">rm -rf /</code> 得到同样的处理，用户很快就不再认真读提示了）。</p>
+<p>判定顺序是：先算每一段的结论，再取最严的一个。最严的顺序是 <code class="inl">opaque</code> &gt; <code class="inl">needs_review</code> &gt; <code class="inl">readonly</code>：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/shell_parse.py::analyze"><span class="kw">def</span> <span class="fn">analyze</span>(command<span class="op">:</span> str) <span class="op">-&gt;</span> <span class="cls">CommandAnalysis</span><span class="op">:</span>
+    <span class="str">"""解析一条 shell 命令，给出判定与理由。"""</span>
+    analysis <span class="op">=</span> <span class="cls">CommandAnalysis</span>(command<span class="op">=</span>command)
+    <span class="kw">if</span> <span class="kw">not</span> command.strip()<span class="op">:</span>
+        analysis.verdict <span class="op">=</span> <span class="str">"opaque"</span>
+        analysis.reasons.append(<span class="str">"空命令"</span>)
+        <span class="kw">return</span> analysis
+
+    <span class="kw">for</span> separator, text <span class="kw">in</span> split_segments(command)<span class="op">:</span>
+        segment <span class="op">=</span> <span class="cls">Segment</span>(text<span class="op">=</span>text, separator_before<span class="op">=</span>separator, argv<span class="op">=</span>_tokenize(text))
+        <span class="kw">if</span> redirect_targets(text)<span class="op">:</span>
+            segment.flags.append(<span class="str">"write-redirect"</span>)
+        <span class="kw">if</span> <span class="cls">SUBSTITUTION</span>.search(strip_quoted(text, double<span class="op">=</span><span class="kw">False</span>))<span class="op">:</span>
+            segment.flags.append(<span class="str">"substitution"</span>)
+        <span class="kw">if</span> <span class="cls">GLOB</span>.search(strip_quoted(text, double<span class="op">=</span><span class="kw">True</span>))<span class="op">:</span>
+            segment.flags.append(<span class="str">"glob"</span>)
+        analysis.segments.append(segment)
+
+    reasons<span class="op">:</span> list[str] <span class="op">=</span> []
+    verdict <span class="op">=</span> <span class="str">"readonly"</span>
+    <span class="kw">for</span> segment <span class="kw">in</span> analysis.segments<span class="op">:</span>
+        program <span class="op">=</span> segment.program
+        <span class="kw">if</span> <span class="kw">not</span> program<span class="op">:</span>
+            verdict <span class="op">=</span> _worse(verdict, <span class="str">"opaque"</span>)
+            reasons.append(<span class="str">f"无法解析片段 {segment.text[:40]!r}（引号未闭合或语法不完整）"</span>)
+            <span class="kw">continue</span>
+        <span class="kw">if</span> <span class="str">"substitution"</span> <span class="kw">in</span> segment.flags<span class="op">:</span>
+            verdict <span class="op">=</span> _worse(verdict, <span class="str">"opaque"</span>)
+            reasons.append(<span class="str">f"{program}: 含命令替换或变量展开，实际执行的命令在解析阶段无法确定"</span>)
+        <span class="kw">if</span> <span class="str">"write-redirect"</span> <span class="kw">in</span> segment.flags<span class="op">:</span>
+            verdict <span class="op">=</span> _worse(verdict, <span class="str">"needs_review"</span>)
+            targets <span class="op">=</span> <span class="str">", "</span>.join(redirect_targets(segment.text))
+            reasons.append(<span class="str">f"{program}: 重定向会写入 {targets}"</span>)
+        <span class="kw">if</span> program <span class="kw">in</span> <span class="cls">SHELL_INTERPRETERS</span> <span class="kw">or</span> (program <span class="kw">in</span> <span class="cls">CODE_RUNNERS</span> <span class="kw">and</span> _runs_inline_code(segment.argv))<span class="op">:</span>
+            verdict <span class="op">=</span> _worse(verdict, <span class="str">"opaque"</span>)
+            reasons.append(<span class="str">f"{program}: 直接把代码当参数执行，内容无法静态判定"</span>)
+        <span class="kw">elif</span> program <span class="kw">not</span> <span class="kw">in</span> <span class="cls">READ_ONLY_COMMANDS</span><span class="op">:</span>
+            verdict <span class="op">=</span> _worse(verdict, <span class="str">"needs_review"</span>)
+            reasons.append(<span class="str">f"{program}: 不在只读白名单里"</span>)
+        <span class="kw">else</span><span class="op">:</span>
+            risk <span class="op">=</span> _program_risk(segment.argv)
+            <span class="kw">if</span> risk<span class="op">:</span>
+                verdict <span class="op">=</span> _worse(verdict, risk[<span class="num">0</span>])
+                reasons.append(<span class="str">f"{program}: {risk[1]}"</span>)
+
+    analysis.reasons <span class="op">=</span> reasons <span class="kw">or</span> [<span class="str">"全部片段都是白名单里的只读命令，且没有写文件的重定向"</span>]
+    analysis.verdict <span class="op">=</span> verdict
+    <span class="kw">return</span> analysis</code></pre></div>
+<p>和权限引擎同构：局部结论先算出来，合成时取最严，理由逐条累积。这样的好处是判定结果永远可以说清楚——你能告诉用户“因为第三段含命令替换，所以整条按不可判定处理”。</p>
+
+<h2 id="hx-14-s4">不可判定：这四类东西让命令不再是一段静态文本</h2>
+<p>有四类语法让命令的<strong>实际行为</strong>在解析阶段无法确定。它们不是“危险”，而是“无法判定”，处理方式应该和危险区别开。</p>
+<p><strong>命令替换与变量展开。</strong><code class="inl">$(...)</code>、反引号、<code class="inl">${VAR}</code> 的值在执行时才确定。攻击者可以用它绕过任何字符串判断：<code class="inl">c\at /etc/shadow</code> 里那个反斜杠会被 shell 吃掉。更常见的是无害用法（<code class="inl">cat $(find . -name "*.log")</code>），但你无法从文本上区分两者。</p>
+<p><strong>子 shell 与进程替换。</strong><code class="inl">(...)</code> 里可以是一整条命令，<code class="inl">&lt;(cmd)</code> 把命令输出当成文件描述符传给程序。</p>
+<p><strong>解释器内联代码。</strong><code class="inl">sh -c "..."</code>、<code class="inl">bash -lc "..."</code>、<code class="inl">python -c "..."</code>、<code class="inl">perl -e "..."</code>、<code class="inl">node -e "..."</code>。注意这里的判据是<strong>程序名 + 参数形态</strong>，不是“程序名在黑名单里”：<code class="inl">python setup.py install</code> 是未知程序（会写），<code class="inl">python -c "..."</code> 是不可判定。两者结论不同，处置也不同。</p>
+<p><strong>通配符与重定向。</strong><code class="inl">*</code>、<code class="inl">?</code> 展开成哪些文件取决于磁盘状态；<code class="inl">&gt;</code>、<code class="inl">&gt;&gt;</code>、<code class="inl">&amp;&gt;</code> 会写文件（<code class="inl">&lt;&lt;&lt;</code> 是把字符串当输入，不写文件）。前者 labs 只做标记（不放行也不拒绝，由别的规则决定），后者算“需要人看”——它确定会写，只是不知道写什么。</p>
+<p>重定向有两个容易误判的地方。一是<strong>引号里的符号是字面量</strong>：<code class="inl">echo "a &gt; b"</code> 不写文件，所以找重定向之前要先把引号里的内容去掉。二是<strong>有些重定向不写文件</strong>：<code class="inl">2&gt;/dev/null</code> 把错误丢掉，<code class="inl">2&gt;&amp;1</code> 合并两个输出流，它们出现在大量只读命令的末尾。把它们也当成写操作，<code class="inl">grep -rn todo . 2&gt;/dev/null</code> 就要问人，误报会多到没人愿意读提示。labs 用同一个函数处理这两件事：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/shell_parse.py::redirect_targets"><span class="kw">def</span> <span class="fn">redirect_targets</span>(text<span class="op">:</span> str) <span class="op">-&gt;</span> list[str]<span class="op">:</span>
+    <span class="str">"""片段里会写入的重定向目标。`&gt;/dev/null`、`2&gt;&amp;1` 不算；目标被引号包住时记作 '?'。"""</span>
+    bare <span class="op">=</span> strip_quoted(text, double<span class="op">=</span><span class="kw">True</span>)
+    targets<span class="op">:</span> list[str] <span class="op">=</span> []
+    <span class="kw">for</span> <span class="kw">match</span> <span class="kw">in</span> <span class="cls">REDIRECT</span>.finditer(bare)<span class="op">:</span>
+        target <span class="op">=</span> <span class="kw">match</span>.group(<span class="num">1</span>)
+        <span class="kw">if</span> target <span class="kw">not</span> <span class="kw">in</span> <span class="cls">HARMLESS_TARGETS</span><span class="op">:</span>
+            targets.append(target <span class="kw">or</span> <span class="str">"?"</span>)
+    <span class="kw">return</span> targets</code></pre></div>
+<p>还有一个连带的细节：<code class="inl">2&gt;&amp;1</code> 和 <code class="inl">&amp;&gt;out.txt</code> 里的 <code class="inl">&amp;</code> 是重定向的一部分，不是“放到后台”的连接符。切分函数遇到 <code class="inl">&amp;</code> 时要看它前后的字符，否则 <code class="inl">ls 2&gt;&amp;1</code> 会被切成两段。</p>
+<p>这四类的判定结果统一往 <code class="inl">opaque</code> 或 <code class="inl">needs_review</code> 走，然后转成权限决策：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/shell_parse.py::to_hook_decision"><span class="kw">def</span> <span class="fn">to_hook_decision</span>(analysis<span class="op">:</span> <span class="cls">CommandAnalysis</span>, <span class="op">*</span>, allow_opaque<span class="op">:</span> bool <span class="op">=</span> <span class="kw">False</span>) <span class="op">-&gt;</span> tuple[str, str]<span class="op">:</span>
+    <span class="str">"""把分析结果映射成权限引擎的判定（allow / ask / deny）与理由。"""</span>
+    <span class="kw">if</span> analysis.verdict <span class="op">==</span> <span class="str">"readonly"</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="str">"allow"</span>, <span class="str">"命令的每一段都是只读的，且没有写文件的重定向"</span>
+    <span class="kw">if</span> analysis.verdict <span class="op">==</span> <span class="str">"needs_review"</span><span class="op">:</span>
+        <span class="kw">return</span> <span class="str">"ask"</span>, <span class="str">"命令里有会写入的片段："</span> <span class="op">+</span> <span class="str">"；"</span>.join(analysis.reasons)
+    <span class="kw">return</span> (<span class="str">"ask"</span> <span class="kw">if</span> allow_opaque <span class="kw">else</span> <span class="str">"deny"</span>), <span class="str">"无法判定这条命令会做什么："</span> <span class="op">+</span> <span class="str">"；"</span>.join(analysis.reasons) \
+        <span class="op">+</span> <span class="str">"。请把要执行的命令直接写出来，不要用替换、变量或内联代码"</span></code></pre></div>
+<blockquote><p><strong>一个真实的边界</strong>：解析器<strong>不能</strong>用来做安全保证。它可以被绕过（换编码、用未列入的语法、把命令放进脚本文件里执行），所以它的定位是“把明显只读的放行、把明显要写的交给审批”，而不是“识别所有攻击”。真正的防线是第 15 章的沙箱——即使解析漏放了一条 <code class="inl">rm</code>，沙箱的路径边界和只读挂载仍然限制它能删什么。这句话在很多实现里被搞反了：它们把解析当成安全边界，于是规则一漏，损失就没有上限。</p></blockquote>
+
+<h2 id="hx-14-s5">把解析结果接回权限引擎</h2>
+<p>解析器输出的是结构，权限引擎需要的是 allow / deny / ask。两者之间用一个适配函数连接，规则只写一条：</p>
+<div class="table-wrap"><table><thead><tr><th>解析结论</th><th>权限引擎的动作</th><th>理由文案（喂回模型）</th></tr></thead><tbody>
+<tr><td><code class="inl">readonly</code></td><td>allow</td><td>（不需要）</td></tr>
+<tr><td><code class="inl">needs_review</code></td><td>ask</td><td>“命令里有一段会写：<code class="inl">sed -i</code> 会原地修改文件；请确认，或改用 write_file 工具”</td></tr>
+<tr><td><code class="inl">opaque</code></td><td>deny（默认）或 ask（配置过时）</td><td>“这条命令含命令替换，实际执行的命令无法确定；请把展开后的命令直接写出来”</td></tr>
+</tbody></table></div>
+<p>最后一行的那句理由是有讲究的。橘子出问题的那条命令是 <code class="inl">cat $(ls /tmp/*.sql)</code>，直接拒绝之后它收到的是“无法确定你执行什么”。它下一轮改成先跑 <code class="inl">ls /tmp/*.sql</code>，拿到文件名列表，再逐条 <code class="inl">cat</code>——两轮之后任务完成，全程没有人工介入。这就是把不可判定转成一次有效纠正，而不是一次空转。</p>
+<p>有一条边界要提醒：<strong>解析只覆盖通过 <code class="inl">run_bash</code> 这一条路径进来的命令</strong>。如果某个工具内部会拼命令（比如“模糊查找文件”工具自己调 <code class="inl">grep</code>），那条命令不经过解析器，规则的覆盖就出现了缺口。真实项目里的做法是：所有执行外部程序的工具都必须经过同一个执行入口，解析与沙箱挂在这个入口上，而不是挂在某一个工具上。</p>
+
+<h2 id="hx-14-s6">哪些命令该进白名单：一份可维护的清单</h2>
+<p>白名单的维护比写解析器更花时间。三条经验：</p>
+<ol>
+<li><strong>按用途分组，而不是按字母</strong>：读文本（<code class="inl">cat</code>/<code class="inl">head</code>/<code class="inl">sed -n</code>/<code class="inl">awk</code>）、查目录（<code class="inl">ls</code>/<code class="inl">find</code>/<code class="inl">du</code>）、查内容（<code class="inl">grep</code>/<code class="inl">rg</code>）、看状态（<code class="inl">git status</code>/<code class="inl">git diff</code>/<code class="inl">stat</code>）。审清单时按组过，比一条条看快得多。</li>
+<li><strong>每个条目都要有一个“它为什么只读”的说法</strong>。<code class="inl">sed</code> 只读是因为不加 <code class="inl">-i</code> 就只输出到标准输出；<code class="inl">git</code> 只读是因为子命令在白名单里。写不出这个说法的条目，就该从清单里去掉。</li>
+<li><strong>把清单做成配置，而不是代码常量</strong>。项目不同，需要的命令不同；做成配置之后，用户可以在自己的项目里加规则（并承担后果），而不是来改 harness 的源码。</li>
+</ol>
+<p>反面清单同样有用：明确列出一批“看起来只读、其实会写”的命令，命中就进 <code class="inl">needs_review</code>，不依赖白名单遗漏。<code class="inl">tee</code>、<code class="inl">xargs</code>、<code class="inl">install</code>、<code class="inl">truncate</code>、<code class="inl">dd</code>、<code class="inl">patch</code>、<code class="inl">unzip -o</code> 都属于这一类。</p>
+
+<h2 id="hx-14-s7">坑与失败案例</h2>
+<h3 id="hx-14-s7-1">坑一：在原始字符串上做关键词匹配</h3>
+<ul>
+<li><strong>触发条件</strong>：规则写成 <code class="inl">"&gt;" in command</code> 或 <code class="inl">"rm" in command</code>。</li>
+<li><strong>后果</strong>：漏报与误报同时发生。<code class="inl">grep "rm" notes.md</code> 被拦；<code class="inl">/bin/rm</code>、<code class="inl">rm\t-rf</code>、<code class="inl">find . -delete</code> 放行；<code class="inl">echo "a &gt; b"</code> 被当成重定向拦住。</li>
+<li><strong>怎么防</strong>：切分 + 分词 + 按程序名分类；把“引号里的符号不是分隔符”写成测试。</li>
+</ul>
+<h3 id="hx-14-s7-2">坑二：只看第一个片段的程序名</h3>
+<ul>
+<li><strong>触发条件</strong>：<code class="inl">cat a.txt &amp;&amp; rm -rf build</code>，判定只看 <code class="inl">cat</code>。</li>
+<li><strong>后果</strong>：一条命令里后半段做什么完全不受约束；模型（或注入的指令）只要把危险动作接在只读命令后面就能过。</li>
+<li><strong>怎么防</strong>：所有片段都判，取最严。labs 的 <code class="inl">test_mixed_chain_takes_worst</code> 覆盖三种组合。</li>
+</ul>
+<h3 id="hx-14-s7-3">坑三：把不可判定的命令当成安全</h3>
+<ul>
+<li><strong>触发条件</strong>：解析遇到看不懂的语法时返回“没发现问题”。</li>
+<li><strong>后果</strong>：<code class="inl">cat $(printf 'rm -rf /')</code> 这类命令自动放行。所有基于解析的防护都被这一条归类错误一次性绕过。</li>
+<li><strong>怎么防</strong>：解析结果三种状态，看不懂就是 <code class="inl">opaque</code>，默认拒绝；要降级成问人必须显式配置。</li>
+</ul>
+<h3 id="hx-14-s7-4">坑四：把解析当成安全边界</h3>
+<ul>
+<li><strong>触发条件</strong>：系统里只有解析层，没有沙箱和审批。</li>
+<li><strong>后果</strong>：一次漏判就等于全部权限。典型的漏判路径是把命令写进脚本文件再执行（<code class="inl">bash ./setup.sh</code> 里是什么，解析器看不到），或者用程序拼命令（<code class="inl">python -c</code> 之外的一切解释器）。</li>
+<li><strong>怎么防</strong>：解析负责“少问几次”，能力边界（沙箱的工作目录、只读挂载、超时）负责“少损失”。两者叠加，缺一个都会让另一个变得关键。</li>
+</ul>
+<h3 id="hx-14-s7-5">坑五：白名单里混进写命令</h3>
+<ul>
+<li><strong>触发条件</strong>：为了减少询问，把常用命令一股脑加进白名单。<code class="inl">tee</code>、<code class="inl">cp</code>、<code class="inl">mv</code>、<code class="inl">sed -i</code>、<code class="inl">git stash</code>。</li>
+<li><strong>后果</strong>：白名单从此等于“全部放行”，而且因为攻击面转移，没人再去审它。更麻烦的是这些条目往往由“加一条就能少弹一次窗”这种动机驱动，一次一条，不知不觉。</li>
+<li><strong>怎么防</strong>：每条白名单条目都要有“为什么只读”的理由；<code class="inl">git</code> 这种多子命令的程序拆开判；把白名单的变更纳入代码评审。</li>
+</ul>
+<h3 id="hx-14-s7-6">坑六：忽略重定向的目标</h3>
+<ul>
+<li><strong>触发条件</strong>：命令 <code class="inl">cat a.txt &gt; b.txt</code> 被判成“读文件”。</li>
+<li><strong>后果</strong>：目标文件被截断为零字节（<code class="inl">&gt;</code> 会覆盖），而日志里只看到一次 <code class="inl">cat</code>。如果目标是配置文件或测试文件，损失往往在很久之后才体现。</li>
+<li><strong>怎么防</strong>：任何重定向都算写操作，进 <code class="inl">needs_review</code>；如果解析器要更进一步，就把重定向的目标路径提取出来交给沙箱做路径校验。</li>
+</ul>
+
+<h2 id="hx-14-s8">多仓库取舍对比</h2>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>OpenHarness</th><th>DSH</th><th>learn-claude-code</th><th>labs</th></tr></thead><tbody>
+<tr><td>命令判定</td><td>有一部分命令分类，用于决定免确认范围</td><td>不在解析层做，交给权限钩子与沙箱</td><td>危险子串黑名单</td><td>切分 + 白名单 + 三态结论</td></tr>
+<tr><td>管道与连接符</td><td>按实现范围处理</td><td>不适用</td><td>不处理</td><td>逐段判定，取最严</td></tr>
+<tr><td>命令替换 / 变量</td><td>未作为独立类别处理</td><td>不适用</td><td>漏</td><td>标为 <code class="inl">opaque</code></td></tr>
+<tr><td>“不可判定”这一档</td><td>无（通常二分：安全 / 需要确认）</td><td>无（用能力边界兜底）</td><td>无</td><td>有，且默认拒绝</td></tr>
+<tr><td>误报控制</td><td>中</td><td>不适用</td><td>差（子串匹配）</td><td>较好（白名单 + 参数检查）</td></tr>
+<tr><td>定位</td><td>减少确认次数的辅助</td><td>不是安全边界</td><td>教学</td><td>辅助判定；安全边界在沙箱</td></tr>
+</tbody></table></div>
+<p>值得注意的对比是 DSH 的选择：它没有把精力投在解析命令上，而是把边界放在权限钩子与沙箱。这个取舍有道理——命令语法是开放集合，解析永远落后一步；而沙箱的能力边界是封闭的，一旦设好就不会因为一条新语法而失效。实践中的推荐组合是：<strong>解析用来决定“要不要问人”，沙箱用来决定“问了也最多能怎样”</strong>。</p>
+
+<h2 id="hx-14-s9">小结</h2>
+<ul>
+<li>判定前先切分：连接符分片段，引号与转义不切。切错的后果比判断错更严重。</li>
+<li>分类用只读白名单，程序名之外还要看参数（<code class="inl">sed -i</code>、<code class="inl">sort -o</code>、<code class="inl">git checkout</code>、<code class="inl">find -delete</code>）。</li>
+<li>结论是三态：只读、需要人看、无法判定。能说“我看不懂”是这一层最有价值的性质。</li>
+<li>命令替换、变量展开、子 shell、解释器内联代码让命令不再是静态文本，一律按最坏情况处理。</li>
+<li>多段命令取最严的一条；解析只覆盖经过统一执行入口的命令。</li>
+<li>解析不是安全边界；“问了也最多能怎样”由下一章的沙箱回答。</li>
+</ul>
+<p>下一章把最后一道关补上：假设权限放行了、命令也看懂了，这条命令跑起来之后，它还能碰到什么。继续读：<a href="#hx-15">沙箱</a>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>解析器上线后，橘子跑命令顺畅了很多：只读的自动过，要写文件的会停下来问，含 <code class="inl">$(...)</code> 的会被要求把命令写清楚。老唐把三天的日志过了一遍，标记成“不可判定”的一共十一条，其中十条在模型改写成显式命令之后正常执行了。</p>
+<p>第十一条让两个人都不太舒服。那条命令本身没问题——<code class="inl">grep -rn "API_KEY" .</code>，完全只读，规则放行，沙箱也会放行。它跑完之后，模型把命中行的一小段内容写进了一封“给客户的问题清单”里，而那段内容恰好是某个测试用的假密钥，客户以为是真的，紧张了半天。</p>
+<p class="hx-story-say">“命令没错、权限没错、解析没错。”老唐把日志合上，“那问题出在哪？”</p>
+<p class="hx-story-say">“它读了全仓库，”林舟说，“我们没有限制它能读哪儿。”</p>
+<p>下一章要给橘子划一个院子：<a href="#hx-15">沙箱</a>。</p>
+</div>
+</section>

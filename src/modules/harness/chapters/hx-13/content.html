@@ -1,0 +1,337 @@
+<section class="chapter" id="ch-hx-13" data-slug="hx-13"><div class="ch-head"><span class="ch-num">第 13 章</span></div><h1 id="hx-13">权限规则引擎</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 13 章（虚构）</span>
+<p>橘子删掉的那个文件，是一份三天前的数据库备份。任务里写的是“清理临时产物”，清单上有 <code class="inl">.harness/tmp/</code>，也有一个叫 <code class="inl">dump.sql.bak</code> 的东西——它恰好长得像临时文件。</p>
+<p>老唐把日志打印出来，一行一行读给林舟听：模型先列了目录，看到 <code class="inl">dump.sql.bak</code>，判断“备份已经过期”，调了一次删除工具。整个过程干净利落，没有报错，没有询问，因为橘子从来没人可以问——它只有“能调”和“不能调”。</p>
+<p class="hx-story-say">“问题不在它删错了，”老唐说，“问题在它压根不知道删文件这件事需要人点头。你给它的每一个工具，它都默认可以随便用。”</p>
+<p>他们先从最笨的办法开始：把危险工具的名字列出来，硬编在循环里，碰到就问用户。当天就被这个“办法”打脸了三次。第一次，<code class="inl">run_bash</code> 被整条拦下，可橘子只是想跑 <code class="inl">ls</code>；第二次，用户点了一晚上“同意”，第二天早上把审批整个关掉了；第三次最糟——橘子绕过了被拦的工具，用 <code class="inl">run_bash</code> 里的 <code class="inl">rm</code> 把同一件事做完了，而硬编码的名单只拦了删除工具，没拦命令里的字符串。</p>
+<p>这一章要做的是把那堆“碰到就问”的硬编码，换成一套能被审读、能被解释、能逐条增删的规则：每次工具调用之前，由 harness 自己给出三种回答里的一种——允许、拒绝、问人——并且回答的方式与规则书写的顺序无关。后面四章分别处理这个回答里最难的四个部分：命令里到底会发生什么（14）、跑起来之后能碰到什么（15）、问人的时候问什么（16），以及模型读到的文字本身可能是攻击者写的（17）。</p>
+</div>
+<p>工具能执行了、结果也安置好了，接下来要回答的问题是“这次调用该不该发生”。最省事的做法是让模型自己判断——它已经知道任务的意图，也读过提示里那句“操作前请确认”。这条路在实践里走不通，原因不是模型笨，而是它没有能力承担这个责任：它看不到用户的文件系统、不知道哪条命令会覆盖数据、也不清楚哪些文件属于别人。判断必须由 harness 一侧给出，而且必须是可解释的：出错时你要能说出“是第 3 条规则拒绝了它”，而不是“大概被拦了”。</p>
+
+<h2 id="hx-13-s0">先看全貌：权限规则引擎是什么、管哪些事</h2>
+<p>一句话：权限规则引擎在每次工具调用之前，把这次调用的工具名和参数过一遍规则，给出 allow / deny / ask 三种回答中的一个，并说明是哪条规则做出的决定。</p>
+<p>它和前面第 02 章的“执行前钩子”是同一层的东西，区别在职责：钩子是机制（在正确的位置调用一个函数），引擎是策略（那些函数里写什么、规则怎么组织、冲突怎么裁决）。小项目里两者常常写在一起，一旦规则超过五六条，就需要把它当数据来管理。</p>
+<p>这一层要管的事：</p>
+<ul>
+<li><strong>规则模型</strong>：一条规则看什么（工具名？参数里的路径？命令原文？）、怎么写。</li>
+<li><strong>裁决</strong>：多条规则同时命中时听谁的。</li>
+<li><strong>默认值</strong>：没有任何规则命中时怎么办。</li>
+<li><strong>理由</strong>：拒绝或询问时给模型什么话，让它知道下一步该怎么做。</li>
+<li><strong>范围</strong>：规则的优先级与作用域（用户级、项目级、会话级、子代理级）。</li>
+<li><strong>留痕</strong>：每次判定都要能查，包括“为什么这次被放行了”。</li>
+</ul>
+<p>四个决定，先给结论：</p>
+<div class="table-wrap"><table><thead><tr><th>决定</th><th>看起来省事的做法</th><th>本章的结论</th></tr></thead><tbody>
+<tr><td>多条规则冲突</td><td>按注册顺序，先命中的赢</td><td>按严格程度裁决：只要有一条拒绝，结果就是拒绝。这样每条规则可以独立审读，不需要推理先后顺序</td></tr>
+<tr><td>没有规则命中</td><td>默认放行，有问题再加规则</td><td>默认是问人；没有问人通道时降级为拒绝，而不是降级为放行</td></tr>
+<tr><td>规则写在哪</td><td>硬编码在循环里的一串 if</td><td>规则是数据：工具名 + 参数谓词 + 理由，可以配置、可以列表、可以单测</td></tr>
+<tr><td>拒绝时说什么</td><td>返回“被拒绝了”</td><td>理由会喂回模型，必须包含“下一步怎么做”；否则它只会原样重试，直到轮数用完</td></tr>
+</tbody></table></div>
+<h3 id="hx-13-s0-repos">三个仓库在这一层分别是什么水平</h3>
+<p><strong>DSH</strong>（TypeScript）：把权限做成了两级的可扩展钩子，并且把“只能拒绝、不能强制放行”写成明确的契约。它同时区分了四种决策（允许、拒绝、取消、询问）和“问人”这条路径的降级规则，是本章的主要参照。</p>
+<p><strong>OpenHarness</strong>（Python）：有一套权限模式加规则文件的实现，判定点在循环里、在参数通过校验之前。它的钩子拿到的是未校验的原始参数——这一点本章会重点讲，因为它决定了写钩子的人必须把参数当不可信数据。</p>
+<p><strong>learn-claude-code</strong>（教程）：早期章节完全不拦，到 s03 才加了一层危险命令的子串黑名单。它是本章的反面教材：子串匹配既漏（换个写法就绕过）又误（把正常的字符串当命令）。</p>
+<p><strong>labs</strong>（本章要写的）：<code class="inl">labs/harness/permissions.py</code>，规则是数据、裁决按严格程度、默认 fail-closed、拒绝必带理由，配套 20 条测试。</p>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>第 1 到第 3 节是引擎的三个核心决定：三种结果怎么相遇、规则长什么样、默认值怎么定。这三节必须掌握。</li>
+<li>第 4、5 节讲两类最常见的参数级规则（路径与凭据），可以直接抄进自己的项目。</li>
+<li>第 6 节讲拒绝理由的写法，容易被当成文案问题，实际上它决定了模型会不会陷入重试循环。</li>
+<li>第 8 节的六条坑来自真实实现；第 9 节的对比表用来复习三个仓库的取舍。</li>
+</ol>
+<p>本章不再逐条标注 <code class="inl">文件:行号</code>：安全部分的重点在机制与取舍，各仓库的实现细节用包名和函数名指代，你可以按名字去仓库里检索。</p></blockquote>
+
+<h2 id="hx-13-s1">判定只有三种结果，难的是它们怎么相遇</h2>
+<p>三种回答的含义要先说清楚，因为它们对应的后续动作完全不同：</p>
+<div class="table-wrap"><table><thead><tr><th>回答</th><th>含义</th><th>harness 接下来做什么</th><th>模型收到什么</th></tr></thead><tbody>
+<tr><td>allow</td><td>这条规则明确放行</td><td>直接执行</td><td>工具结果</td></tr>
+<tr><td>deny</td><td>这条规则明确拒绝</td><td>不执行，写一条错误结果</td><td>拒绝理由（含下一步建议）</td></tr>
+<tr><td>ask</td><td>需要人看一眼</td><td>进入审批流程（第 16 章）</td><td>批准则执行；拒绝则收到拒绝说明</td></tr>
+</tbody></table></div>
+<p>一条调用可能同时命中好几条规则：一条通配的 <code class="inl">allow</code>、一条针对路径的 <code class="inl">deny</code>。这时听谁的？有两个办法。</p>
+<p><strong>按顺序。</strong>先命中的赢。它的问题是规则集的语义依赖书写顺序：你把新规则加在开头还是结尾，行为会变。规则一多，没人能说清“这条调用最后会被什么拦下”，只能把整个列表在脑子里跑一遍。</p>
+<p><strong>按严格程度。</strong>所有命中的规则都算一遍，取最严的那个：<code class="inl">deny</code> 压 <code class="inl">ask</code> 压 <code class="inl">allow</code>。这样每条规则可以独立审读：你要判断“这条调用能不能出去”，只需要看有没有任何一条规则拒绝它，不需要考虑顺序。<strong>单调性</strong>这个词说的就是这件事——加规则只会让判定变严，不会让判定变松。</p>
+<p>DSH 把这个性质写进了它的钩子契约：任何匹配上的 guard 都可以拒绝这次调用，但没有任何 guard 能强行放行另一个 guard 已经拒绝的调用。labs 抄的是同一条。判定函数长这样：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/permissions.py::PermissionEngine.decide">    <span class="kw">def</span> <span class="fn">decide</span>(self, tool<span class="op">:</span> str, args<span class="op">:</span> dict[str, <span class="cls">Any</span>] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> <span class="cls">Decision</span><span class="op">:</span>
+        <span class="str">"""跑一遍规则，给出最终判定。
+
+        返回结果是单一的落点，不会因为「谁先命中」而不同：所有命中的规则都算一遍，
+        取最严的那个（deny &gt; ask &gt; allow）。
+        """</span>
+        payload <span class="op">=</span> dict(args <span class="kw">or</span> {})
+        hits <span class="op">=</span> [rule <span class="kw">for</span> rule <span class="kw">in</span> self.rules <span class="kw">if</span> rule.hit(tool, payload)]
+        <span class="kw">if</span> <span class="kw">not</span> hits<span class="op">:</span>
+            decision <span class="op">=</span> self._fallback(<span class="str">f"没有规则命中 {tool!r}"</span>)
+        <span class="kw">else</span><span class="op">:</span>
+            worst <span class="op">=</span> max(hits, key<span class="op">=</span><span class="kw">lambda</span> r<span class="op">:</span> _SEVERITY[r.mode])
+            decision <span class="op">=</span> <span class="cls">Decision</span>(worst.mode, worst.name, worst.reason)
+        self.audit.append(<span class="cls">AuditEntry</span>(tool, decision.outcome, decision.rule, decision.reason, payload))
+        <span class="kw">return</span> decision</code></pre></div>
+<p>注意三件事：</p>
+<ol>
+<li>命中的规则全部收集起来再裁决，不是边跑边返回。这样 <code class="inl">explain()</code> 才有东西可列——排错时你需要知道“它命中了哪几条”，而不只是“最后是什么结果”。</li>
+<li>裁决只比较严格程度，不比较别的。没有“优先级数字”“规则权重”这类字段：它们会让规则集重新变成顺序依赖。</li>
+<li>每次判定都进审计列表。审计用的是同一次判定里的数据，不会出现“日志记的和实际跑的不一致”。</li>
+</ol>
+<blockquote><p><strong>为什么不做“强制放行”</strong>：现实里总有“这条必须放过”的需求，比如项目级的 <code class="inl">bypass</code> 开关。正确的做法是把这类需求做成<strong>更严的那一侧的特例</strong>（例如把 <code class="inl">ask</code> 换成一个明确的 <code class="inl">allow</code> 规则，并让它在审计里可见），而不是在引擎里开一个能压过 <code class="inl">deny</code> 的口子。一旦存在“谁都能被绕过的拒绝”，所有规则都要重新推理一遍：它们真的生效吗？这就是不可维护的开始。</p></blockquote>
+
+<h2 id="hx-13-s2">规则是数据：工具名加一个参数谓词</h2>
+<p>一条规则需要四样东西：名字（出现在日志和理由里）、结论（allow / deny / ask）、匹配条件、理由。匹配条件分两层，第一层是工具名，第二层是参数谓词：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/permissions.py::Rule"><span class="dec">@dataclass</span>(frozen<span class="op">=</span><span class="kw">True</span>)
+<span class="kw">class</span> <span class="cls">Rule</span><span class="op">:</span>
+    <span class="str">"""一条权限规则。
+
+    name     规则名，会出现在日志和给模型的理由里
+    mode     allow / deny / ask
+    tool     工具名，支持 fnmatch 通配；None 表示匹配所有工具
+    matches  额外的参数谓词；None 表示只看工具名
+    reason   命中时要说明的话
+    """</span>
+
+    name<span class="op">:</span> str
+    mode<span class="op">:</span> str
+    tool<span class="op">:</span> str <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>
+    matches<span class="op">:</span> <span class="cls">Match</span> <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>
+    reason<span class="op">:</span> str <span class="op">=</span> <span class="str">""</span>
+
+    <span class="kw">def</span> <span class="fn">__post_init__</span>(self) <span class="op">-&gt;</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">if</span> self.mode <span class="kw">not</span> <span class="kw">in</span> (<span class="cls">ALLOW</span>, <span class="cls">DENY</span>, <span class="cls">ASK</span>)<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">RuleError</span>(<span class="str">f"规则 {self.name!r} 的 mode 必须是 allow/deny/ask，收到 {self.mode!r}"</span>)
+        <span class="kw">if</span> self.mode <span class="kw">in</span> (<span class="cls">DENY</span>, <span class="cls">ASK</span>) <span class="kw">and</span> <span class="kw">not</span> self.reason<span class="op">:</span>
+            <span class="kw">raise</span> <span class="cls">RuleError</span>(<span class="str">f"规则 {self.name!r} 是 {self.mode}，必须给出 reason"</span>)
+
+    <span class="kw">def</span> <span class="fn">hit</span>(self, tool<span class="op">:</span> str, args<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> bool<span class="op">:</span>
+        <span class="str">"""这条规则是否命中。谓词抛异常一律算「不命中」——交给后面的兜底规则处理。"""</span>
+        <span class="kw">if</span> self.tool <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span> <span class="kw">and</span> <span class="kw">not</span> fnmatch.fnmatchcase(tool, self.tool)<span class="op">:</span>
+            <span class="kw">return</span> <span class="kw">False</span>
+        <span class="kw">if</span> self.matches <span class="kw">is</span> <span class="kw">None</span><span class="op">:</span>
+            <span class="kw">return</span> <span class="kw">True</span>
+        <span class="kw">try</span><span class="op">:</span>
+            <span class="kw">return</span> bool(self.matches(tool, args))
+        <span class="kw">except</span> <span class="cls">Exception</span><span class="op">:</span>  <span class="cmt"># noqa: BLE001 — 坏规则不能变成放行，也不能把循环带走</span>
+            <span class="kw">return</span> <span class="kw">False</span></code></pre></div>
+<p>几个刻意的选择：</p>
+<ul>
+<li><strong>工具名支持通配</strong>：<code class="inl">write_*</code> 能一次管住一族工具。注册表里工具名很多时，这条比写十条规则省事，也更容易审读。</li>
+<li><strong>谓词只拿到工具名和参数</strong>，拿不到别的上下文。它应该是同步、纯、快的函数——权限判定发生在每一次调用前，里面做网络请求或者读大文件都会拖慢循环。需要外部状态（比如“用户已经批准过这个路径”）就放进第 16 章的授权表，不要塞进谓词。</li>
+<li><strong>谓词抛异常算不命中</strong>，这条容易被忽略。反过来的选择（异常算命中）会让一条写错的规则把整个工具集拦下来；现在的选择是“坏规则退化成没写这条规则”，然后由默认策略兜底。安全上这是可接受的，因为默认值是 <code class="inl">ask</code>/<code class="inl">deny</code>，不是 <code class="inl">allow</code>。</li>
+<li><strong>拒绝和询问必须带理由</strong>，缺理由在构造规则时就报错。这是把“写理由”从习惯变成约束，理由是可执行性的一部分。</li>
+</ul>
+<p>一套能直接用的规则集长这样（顺序不重要，因为裁决按严格程度）：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/permissions.py::default_rules"><span class="kw">def</span> <span class="fn">default_rules</span>(root<span class="op">:</span> str) <span class="op">-&gt;</span> list[<span class="cls">Rule</span>]<span class="op">:</span>
+    <span class="str">"""一份能直接用的规则集，顺序无关紧要（判定取最严）。
+
+    这里刻意把 allow 规则也写出来，而不是靠 default=allow：默认值应该留给
+    「谁都没命中」这种意外情况，正常的放行要能一条一条审。
+    """</span>
+    <span class="kw">return</span> [
+        <span class="cls">Rule</span>(
+            name<span class="op">=</span><span class="str">"deny-path-escape"</span>,
+            mode<span class="op">=</span><span class="cls">DENY</span>,
+            matches<span class="op">=</span>escapes_root(root),
+            reason<span class="op">=</span><span class="str">f"参数里的路径越出了工作区 {root}；请改用工作区内的相对路径"</span>,
+        ),
+        <span class="cls">Rule</span>(
+            name<span class="op">=</span><span class="str">"deny-credentials"</span>,
+            mode<span class="op">=</span><span class="cls">DENY</span>,
+            matches<span class="op">=</span>touches_sensitive(<span class="str">""</span>),
+            reason<span class="op">=</span><span class="str">"这条调用会碰到凭据或密钥文件；如果你需要配置，请告诉我具体要改哪一项"</span>,
+        ),
+        <span class="cls">Rule</span>(
+            name<span class="op">=</span><span class="str">"ask-write"</span>,
+            mode<span class="op">=</span><span class="cls">ASK</span>,
+            tool<span class="op">=</span><span class="str">"write_file"</span>,
+            reason<span class="op">=</span><span class="str">"要写文件，需要确认"</span>,
+        ),
+        <span class="cls">Rule</span>(
+            name<span class="op">=</span><span class="str">"allow-read"</span>,
+            mode<span class="op">=</span><span class="cls">ALLOW</span>,
+            tool<span class="op">=</span><span class="str">"read_file"</span>,
+        ),
+        <span class="cls">Rule</span>(
+            name<span class="op">=</span><span class="str">"deny-shell-write"</span>,
+            mode<span class="op">=</span><span class="cls">DENY</span>,
+            tool<span class="op">=</span><span class="str">"run_bash"</span>,
+            matches<span class="op">=</span><span class="kw">lambda</span> tool, args<span class="op">:</span> any(
+                token <span class="kw">in</span> str(args.get(<span class="str">"command"</span>, <span class="str">""</span>)) <span class="kw">for</span> token <span class="kw">in</span> (<span class="str">"rm "</span>, <span class="str">"mv "</span>, <span class="str">"chmod "</span>, <span class="str">"&gt; "</span>)
+            ),
+            reason<span class="op">=</span><span class="str">"shell 命令里包含写操作；请改用专门的写工具，或者把命令拆开逐条确认"</span>,
+        ),
+    ]</code></pre></div>
+<p>这里把 <code class="inl">allow</code> 规则也显式写出来，而不是靠“默认放行”：默认值留给“谁都没命中”这种意外情况，正常放行要一条一条能审。你能列出全部放行路径，是这套设计最大的价值。</p>
+
+<h2 id="hx-13-s3">默认值必须是 ask，而没有审批通道时它必须是 deny</h2>
+<p>没有任何规则命中时给什么回答，是这一层最容易放松的地方。</p>
+<p>“默认放行”在演示时很爽：想跑什么就跑什么。代价是每新增一个工具，它就自动获得全部权限，而写规则的人并不知道自己“批准”了它。默认 <code class="inl">allow</code> 的规则集永远不会报错，只会慢慢积累出一批没人审过的能力。</p>
+<p>默认 <code class="inl">ask</code> 的代价是噪音：新工具第一次调用会停下来问人。这个代价应当由“给新工具补一条规则”来消除，而不是靠放松默认值。</p>
+<p>还有一个更容易漏的分支：<strong>没有审批通道的时候怎么办</strong>。无人值守的批处理、CI 里的 agent、后台整理的子进程，这些场景下 <code class="inl">ask</code> 没有接收者。此时有三种选择：</p>
+<div class="table-wrap"><table><thead><tr><th>选择</th><th>后果</th><th>适用</th></tr></thead><tbody>
+<tr><td>降级为 allow</td><td>给了“点不动就自动放行”的语义，等于把审批做成开关</td><td>不建议，除非这次运行本来就带明确的授权</td></tr>
+<tr><td>抛异常 / 卡住等待</td><td>整个任务挂起，模型和调用方都拿不到有效反馈</td><td>只有交互式前端可以这样（等用户回来）</td></tr>
+<tr><td>降级为 deny，并把原因写清楚</td><td>任务继续跑，只是这一步做不了，模型据此换做法</td><td>无人值守场景的默认选择</td></tr>
+</tbody></table></div>
+<p>labs 选第三种，并且把“为什么被拒”写进理由，让模型知道换一条不需要审批的路：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/permissions.py::PermissionEngine._fallback">    <span class="kw">def</span> <span class="fn">_fallback</span>(self, why<span class="op">:</span> str) <span class="op">-&gt;</span> <span class="cls">Decision</span><span class="op">:</span>
+        <span class="str">"""没有任何规则命中时的兜底：默认值，或者在没有问人通道时降级成拒绝。"""</span>
+        <span class="kw">if</span> self.default <span class="op">==</span> <span class="cls">ASK</span> <span class="kw">and</span> <span class="kw">not</span> self.has_approval_channel<span class="op">:</span>
+            <span class="kw">return</span> <span class="cls">Decision</span>(<span class="cls">DENY</span>, <span class="kw">None</span>, <span class="str">f"{why}；这是默认策略，且当前没有审批通道，按拒绝处理"</span>)
+        <span class="kw">return</span> <span class="cls">Decision</span>(self.default, <span class="kw">None</span>, why)</code></pre></div>
+<p>对应测试 <code class="inl">test_default_is_ask_and_fail_closed_without_channel</code>：同一个引擎，只把 <code class="inl">has_approval_channel</code> 从真改成假，判定就从 <code class="inl">ask</code> 变成 <code class="inl">deny</code>。</p>
+
+<h2 id="hx-13-s4">路径是权限最早碰到的一类参数</h2>
+<p>大多数工具的敏感参数是路径。判定路径的第一步不是“看它像不像危险文件”，而是把路径规范化到工作区之内——因为 <code class="inl">../../etc/passwd</code>、符号链接、Windows 的盘符切换都能让“看起来在工作区里”的路径落到别处。labs 的规范化函数处理三种情况：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/permissions.py::resolve_within"><span class="kw">def</span> <span class="fn">resolve_within</span>(root<span class="op">:</span> str <span class="op">|</span> os.<span class="cls">PathLike</span>[str], candidate<span class="op">:</span> str) <span class="op">-&gt;</span> <span class="cls">Path</span><span class="op">:</span>
+    <span class="str">"""把 candidate 规范化到 root 之内，越界就抛 PathEscape。
+
+    三道关：
+    - 拼接后 resolve()，跟随符号链接（`..` 和软链接都会被展开成真实路径）
+    - 结果必须仍在 root 之内（用 commonpath，避免 `/work` 前缀匹配掉 `/work2`）
+    - 空字节直接拒绝（某些系统调用会把它截断成另一个路径）
+    """</span>
+    <span class="kw">if</span> <span class="str">"\x00"</span> <span class="kw">in</span> candidate<span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">PathEscape</span>(<span class="str">f"路径含空字节：{candidate!r}"</span>)
+    base <span class="op">=</span> <span class="cls">Path</span>(root).resolve()
+    target <span class="op">=</span> (base <span class="op">/</span> candidate).resolve() <span class="kw">if</span> <span class="kw">not</span> <span class="cls">Path</span>(candidate).is_absolute() <span class="kw">else</span> <span class="cls">Path</span>(candidate).resolve()
+    <span class="kw">try</span><span class="op">:</span>
+        inside <span class="op">=</span> os.path.commonpath([str(base), str(target)]) <span class="op">==</span> str(base)
+    <span class="kw">except</span> <span class="cls">ValueError</span><span class="op">:</span>  <span class="cmt"># 不同盘符</span>
+        inside <span class="op">=</span> <span class="kw">False</span>
+    <span class="kw">if</span> <span class="kw">not</span> inside<span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">PathEscape</span>(<span class="str">f"路径 {candidate!r} 越出工作区 {base}"</span>)
+    <span class="kw">return</span> target</code></pre></div>
+<ul>
+<li><strong>先 resolve 再比较</strong>：<code class="inl">..</code> 和符号链接都在这一步展开成真实路径。只做字符串检查（比如“不含 <code class="inl">..</code>”）会漏掉符号链接；只做 <code class="inl">startswith</code> 前缀比较会漏掉 <code class="inl">/work</code> 与 <code class="inl">/work2</code> 这种前缀陷阱，所以用 <code class="inl">commonpath</code>。</li>
+<li><strong>空字节直接拒绝</strong>：某些系统调用会在空字节处截断路径，<code class="inl">"safe.txt\x00../../etc/passwd"</code> 这种输入如果传到下层，判定和实际打开的可能不是同一个文件。</li>
+<li><strong>越界抛异常，由调用方决定语义</strong>：规范化函数只回答“在不在里面”，不回答“该不该拒绝”。项目里允许读 <code class="inl">/tmp</code> 的话，异常可以被规则捕获后放行。</li>
+</ul>
+<p>规则侧的写法是一个谓词：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/permissions.py::escapes_root"><span class="kw">def</span> <span class="fn">escapes_root</span>(root<span class="op">:</span> str, keys<span class="op">:</span> <span class="cls">Sequence</span>[str] <span class="op">=</span> (<span class="str">"path"</span>, <span class="str">"file"</span>, <span class="str">"file_path"</span>)) <span class="op">-&gt;</span> <span class="cls">Match</span><span class="op">:</span>
+    <span class="str">"""命中条件：参数里的路径越出工作区。"""</span>
+
+    <span class="kw">def</span> <span class="fn">predicate</span>(tool<span class="op">:</span> str, args<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> bool<span class="op">:</span>
+        <span class="kw">for</span> key <span class="kw">in</span> keys<span class="op">:</span>
+            value <span class="op">=</span> args.get(key)
+            <span class="kw">if</span> isinstance(value, str) <span class="kw">and</span> value<span class="op">:</span>
+                <span class="kw">try</span><span class="op">:</span>
+                    resolve_within(root, value)
+                <span class="kw">except</span> <span class="cls">PathEscape</span><span class="op">:</span>
+                    <span class="kw">return</span> <span class="kw">True</span>
+        <span class="kw">return</span> <span class="kw">False</span>
+
+    <span class="kw">return</span> predicate</code></pre></div>
+<p>注意谓词的返回语义：<strong>命中就代表“这条调用有问题”</strong>，而不是“这条调用安全”。写规则时最容易搞反的地方就是这个——一条叫 <code class="inl">inside-workspace</code> 的规则如果写成“命中则 allow”，那么它会在路径越界时反而不命中，于是越界的调用落到默认值上。默认值虽然是 <code class="inl">ask</code>，但它少了那条明确的“路径越界”理由，模型据此改不对参数。</p>
+<blockquote><p><strong>一个实践建议</strong>：把“越界”当成一类独立事件来建模，而不是“路径检查不通过”。前者可以带出处（哪个参数、哪个键）、可以统计（今天有多少次越界尝试），后者只是一个布尔值。labs 的 <code class="inl">PathEscape</code> 携带具体路径和根目录，就是为了让理由能写出人话。</p></blockquote>
+
+<h2 id="hx-13-s5">凭据文件：按名字挡，而不是按内容看</h2>
+<p>第二类常见的参数规则是“不要碰凭据”。这里的诱惑是按内容判断——“读到 private key 就拦”。不要这样做，有两个原因：</p>
+<ol>
+<li><strong>读内容意味着你已经读过了</strong>。权限判定发生在执行之前，如果判定本身要把文件读进来，那么这次读取已经发生，敏感内容已经进了 harness 的内存，接下来还要小心别让它进日志、进上下文。</li>
+<li><strong>内容判定需要模式匹配</strong>，而密钥格式会变、会有自定义格式，也会被压缩或编码。名字匹配的规则漏得多，但每一条都确定、可解释、开销为零。</li>
+</ol>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/permissions.py::touches_sensitive"><span class="kw">def</span> <span class="fn">touches_sensitive</span>(name<span class="op">:</span> str, patterns<span class="op">:</span> <span class="cls">Iterable</span>[str] <span class="op">|</span> <span class="kw">None</span> <span class="op">=</span> <span class="kw">None</span>) <span class="op">-&gt;</span> <span class="cls">Match</span><span class="op">:</span>
+    <span class="str">"""命中条件：路径命中一组敏感文件名（默认是凭据、密钥、环境文件）。"""</span>
+    globs <span class="op">=</span> tuple(patterns <span class="kw">or</span> (
+        <span class="str">"*credentials*"</span>, <span class="str">"*.pem"</span>, <span class="str">"*.key"</span>, <span class="str">"*id_rsa*"</span>, <span class="str">"*.env"</span>, <span class="str">".env*"</span>,
+        <span class="str">"*/.ssh/*"</span>, <span class="str">"*/.aws/*"</span>, <span class="str">"*/.git/config"</span>, <span class="str">"*.p12"</span>, <span class="str">"*.keystore"</span>,
+    ))
+
+    <span class="kw">def</span> <span class="fn">predicate</span>(tool<span class="op">:</span> str, args<span class="op">:</span> dict[str, <span class="cls">Any</span>]) <span class="op">-&gt;</span> bool<span class="op">:</span>
+        <span class="kw">for</span> key, value <span class="kw">in</span> args.items()<span class="op">:</span>
+            <span class="kw">if</span> isinstance(value, str) <span class="kw">and</span> any(fnmatch.fnmatch(value.lower(), g) <span class="kw">for</span> g <span class="kw">in</span> globs)<span class="op">:</span>
+                <span class="kw">return</span> <span class="kw">True</span>
+        <span class="kw">return</span> <span class="kw">False</span>
+
+    <span class="kw">return</span> predicate</code></pre></div>
+<p>这条规则的三个细节值得抄：匹配时把路径转小写并做 glob，覆盖 <code class="inl">.ENV</code>、<code class="inl">Id_rsa</code> 这类变体；匹配范围是<strong>所有</strong>字符串参数值，而不是只看名为 <code class="inl">path</code> 的键——模型的参数名千奇百怪，也可能把路径塞进 <code class="inl">pattern</code> 或 <code class="inl">include</code>；命中之后给的理由是“告诉我你要改哪一项”，而不是“禁止访问”，前者能让对话继续。</p>
+<div class="table-wrap"><table><thead><tr><th>做法</th><th>漏报</th><th>误报</th><th>可解释性</th><th>开销</th></tr></thead><tbody>
+<tr><td>按文件名 glob（本章）</td><td>改名的凭据文件</td><td>低</td><td>高：能说出命中哪个 glob</td><td>零</td></tr>
+<tr><td>按目录拒绝（如整个 <code class="inl">.ssh/</code>）</td><td>低</td><td>中：连带挡住公钥与 known_hosts</td><td>高</td><td>零</td></tr>
+<tr><td>读内容做模式匹配</td><td>低</td><td>中</td><td>中：得解释匹配到了什么</td><td>一次额外读取</td></tr>
+<tr><td>交给模型自己判断</td><td>高</td><td>高</td><td>低：说不出依据</td><td>一次模型调用</td></tr>
+</tbody></table></div>
+
+<h2 id="hx-13-s6">拒绝必须带理由，而且理由要能执行</h2>
+<p>拒绝理由是喂回模型的输入，不是给用户看的文案。这两者的区别很明显：</p>
+<div class="table-wrap"><table><thead><tr><th>理由</th><th>模型接下来的行为</th></tr></thead><tbody>
+<tr><td>“被拒绝了”</td><td>原样重试同一个调用，然后再次被拒，直到轮数用完</td></tr>
+<tr><td>“不允许访问该路径”</td><td>换个路径再试，可能换到另一个越界路径</td></tr>
+<tr><td>“路径 /etc/shadow 越出了工作区 /home/dev/app；请改用工作区内的相对路径”</td><td>改成工作区内路径继续做事</td></tr>
+<tr><td>“这条命令里包含写操作；请改用 write_file 工具，它会先给出 diff 让你确认”</td><td>换工具，或在必要时向用户解释为什么需要写</td></tr>
+</tbody></table></div>
+<p>写好理由的三个要素：<strong>是什么</strong>（哪条规则、命中哪个参数）、<strong>为什么</strong>（这条规则想避免什么后果）、<strong>怎么办</strong>（替代方案，或者需要用户提供什么信息）。第三项最容易漏，而它恰恰决定了这次拒绝是“一次有效纠正”还是“一次空转”。</p>
+<p>labs 在 <code class="inl">Rule.deny</code> 的构造函数里强制要求理由非空，缺理由直接抛错：这条约束把“写不写理由”变成“能不能跑起来”。它的代价是写规则时多打几个字，收益是省掉一整天“模型为什么在反复重试”的排查。</p>
+
+<h2 id="hx-13-s7">把引擎接进执行流水线</h2>
+<p>判定发生在流水线的哪个位置，决定了规则能拿到什么数据、能看到什么后果。labs 在第 02 章的注册表里已经有一个钩子位置，两者的分工是：注册表负责“按顺序调用钩子”，引擎负责“钩子里判断什么”。</p>
+<p>推荐的位置是：<strong>参数校验之后、工具执行之前</strong>。理由是规则要读参数里的路径和命令原文，而没校验过的参数可能是任意类型——一个 <code class="inl">{"path": ["a", "b"]}</code> 会让谓词里的字符串操作直接抛异常。校验之后，谓词看到的至少是形状正确的数据。</p>
+<p>OpenHarness 的顺序相反：它的钩子在参数校验之前跑，拿到的载荷是未校验的原始参数。这个顺序有它的理由——钩子要能拦下连 schema 都不符合的调用，甚至要在校验前把整个调用挡掉。但写钩子的人必须知道自己拿到的是<strong>不可信数据</strong>：任何 <code class="inl">args["path"].startswith(...)</code> 都要先判断类型。两种顺序都成立，前提是把契约写清楚。</p>
+<p>另外一件事是审计。判定日志要回答的问题按重要性排序是：这次调用是什么（工具名 + 参数摘要）、谁做的决定（规则名）、结果是什么（allow / deny / ask）、后来发生了什么（执行了 / 被批准了 / 被拒了）。前两项在设计时就定下来，最后一项需要执行侧的配合——审批层要把结局写回同一条记录（第 16 章）。</p>
+
+<h2 id="hx-13-s8">坑与失败案例</h2>
+<h3 id="hx-13-s8-1">坑一：规则顺序决定行为</h3>
+<ul>
+<li><strong>触发条件</strong>：引擎按“先命中先赢”实现，规则集里既有通配 <code class="inl">allow</code> 又有细粒度 <code class="inl">deny</code>。</li>
+<li><strong>后果</strong>：往列表末尾追加一条 deny 规则没有任何效果，因为通配 allow 在前面先命中了。写规则的人以为规则生效了，直到事故复盘时才发现它从没被用过。</li>
+<li><strong>怎么防</strong>：裁决按严格程度而不是顺序；把 <code class="inl">explain()</code> 做成能列出全部命中的调试入口。labs 的 <code class="inl">test_deny_wins_regardless_of_rule_order</code> 把两种顺序都断言了一遍。</li>
+</ul>
+<h3 id="hx-13-s8-2">坑二：默认放行，新工具自动获得全部权限</h3>
+<ul>
+<li><strong>触发条件</strong>：默认值是 allow，规则集只写了少数几条 deny。</li>
+<li><strong>后果</strong>：每个新增工具都静默获得完全权限。危险工具（删除、部署、发消息）往往是后来加的，加的那一刻没人意识到它已经被默认放行了。</li>
+<li><strong>怎么防</strong>：默认 ask 加 fail-closed；把“显式 allow”列出来，让放行路径可枚举。labs 的 <code class="inl">default_rules()</code> 就是显式列出的写法。</li>
+</ul>
+<h3 id="hx-13-s8-3">坑三：谓词抛异常被当成放行</h3>
+<ul>
+<li><strong>触发条件</strong>：谓词里有 <code class="inl">args["path"].startswith(...)</code> 这类假设参数形状的代码，而模型传了别的类型。</li>
+<li><strong>后果</strong>：如果实现写成“异常则放行”，一条写错的规则会变成所有危险调用的通道。更隐蔽的是异常被上层接住后记进日志，但判定结果已经变成放行了。</li>
+<li><strong>怎么防</strong>：异常算不命中，然后交给默认策略；在开发环境把异常记进审计（labs 现在的实现只记判定，正文这里建议把谓词异常单独记一笔，方便发现规则写错）。</li>
+</ul>
+<h3 id="hx-13-s8-4">坑四：用字符串包含判断命令</h3>
+<ul>
+<li><strong>触发条件</strong>：规则写成 <code class="inl">"rm " in command</code>。</li>
+<li><strong>后果</strong>：两个方向都错。<strong>漏</strong>：<code class="inl">rm\t-rf</code>、<code class="inl">/bin/rm</code>、<code class="inl">find . -delete</code>、<code class="inl">python -c "shutil.rmtree(...)"</code> 全都绕过。<strong>误</strong>：<code class="inl">grep "rm " notes.txt</code> 会被拦。</li>
+<li><strong>怎么防</strong>：命令类的判定交给解析器（第 14 章）：先分词，再看每一段的程序名与参数。lcc 的 s03 就是子串黑名单的写法，属于要避免的例子。</li>
+</ul>
+<h3 id="hx-13-s8-5">坑五：把规则写成对“工具名”的白名单，忽略参数</h3>
+<ul>
+<li><strong>触发条件</strong>：只按工具名放行，例如“<code class="inl">read_file</code> 一律允许”。</li>
+<li><strong>后果</strong>：读文件本身确实无害，但读的是 <code class="inl">~/.ssh/id_rsa</code> 时结果会进上下文，接着可能被写入日志、被发给模型，甚至被下一步的写工具带出去。工具名的粒度不够。</li>
+<li><strong>怎么防</strong>：允许类规则尽量带上参数谓词（路径在工作区内、命中只读白名单），或者把参数级限制交给沙箱（第 15 章）叠加实现。</li>
+</ul>
+<h3 id="hx-13-s8-6">坑六：审批被关掉之后，ask 变成静默放行</h3>
+<ul>
+<li><strong>触发条件</strong>：交互前端把审批 UI 关掉了（用户嫌烦），而引擎仍然把 ask 当成“等待输入”。</li>
+<li><strong>后果</strong>：没有接收者的询问如果被实现成“超时即放行”，那么关掉 UI 等于关闭了整层权限。这类改动通常发生在前端，而不是在安全代码里，review 时很难看见。</li>
+<li><strong>怎么防</strong>：把“有没有审批通道”做成引擎的显式输入（labs 的 <code class="inl">has_approval_channel</code>），而不是靠超时探测；没有通道就 fail-closed，并在审计里记一条 <code class="inl">no_channel</code>。</li>
+</ul>
+
+<h2 id="hx-13-s9">多仓库取舍对比</h2>
+<div class="table-wrap"><table><thead><tr><th>维度</th><th>DSH</th><th>OpenHarness</th><th>learn-claude-code</th><th>labs</th></tr></thead><tbody>
+<tr><td>判定形态</td><td>两级可扩展钩子，决策有 allow / deny / cancel / ask 四种</td><td>权限模式 + 规则文件，判定点在循环里</td><td>s03 起一层危险命令子串黑名单</td><td>规则列表 + 按严格程度裁决</td></tr>
+<tr><td>能否强制放行</td><td>不能，契约里写明 guard 单调</td><td>模式本身即“放行全部”（如 bypass 模式）</td><td>不适用（黑名单之外一律放行）</td><td>不能，deny 压 allow</td></tr>
+<tr><td>默认值</td><td>由钩子决定，未命中时通常放行，靠 guard 覆盖</td><td>按权限模式（默认 / 接受编辑 / 计划 / 全放行）</td><td>默认放行</td><td>默认 ask；无审批通道时 deny</td></tr>
+<tr><td>参数级规则</td><td>guard 可读参数（分类函数要求同步且纯）</td><td>钩子在参数校验之前，拿到未校验载荷</td><td>无</td><td>谓词读参数，位在校验之后</td></tr>
+<tr><td>问人</td><td>ask 决策走审批路径，无人时可降级</td><td>由前端提供确认</td><td>无</td><td>ask 交给第 16 章的审批层</td></tr>
+<tr><td>审计</td><td>判定进会话日志</td><td>日志 + UI 提示</td><td>无</td><td>内存里的审计列表（真实项目应落日志）</td></tr>
+<tr><td>适合场景</td><td>多插件、多 agent 共享一套策略，需要审计</td><td>单体 CLI，策略集中在少数几个模式</td><td>教学，或明确只做演示</td><td>需要可解释、可单测的规则集</td></tr>
+</tbody></table></div>
+<p>一句话取舍：规则少于五条时，写成循环里的一串 if 完全够用，as long as 每条 if 都带清楚的拒绝理由；规则一多、或者需要按项目/用户分层时，就该换成本章这种“规则是数据”的形态，因为你需要的是“能列出全部放行路径”和“能解释每次判定”，而不是少写几行代码。</p>
+
+<h2 id="hx-13-s10">小结</h2>
+<ul>
+<li>判定只有三种结果，但裁决规则要简单到能推理：命中全收集，取最严的那个。加规则只会更严，不会更松。</li>
+<li>规则是数据：工具名（可通配）+ 参数谓词 + 理由。谓词同步、纯、快，抛异常算不命中。</li>
+<li>默认 ask；没有审批通道时默认 deny，而不是 allow。把“有没有通道”做成显式输入。</li>
+<li>参数级规则先做路径规范化（resolve + commonpath + 空字节），再谈别的；凭据按名字挡，不按内容看。</li>
+<li>拒绝理由三要素：是什么、为什么、怎么办。第三项决定模型是纠正还是空转。</li>
+<li>判定位置推荐在参数校验之后、执行之前；若像 OpenHarness 那样放在校验之前，必须把参数当不可信数据。</li>
+</ul>
+<p>下一章处理本章留下的最大一块空白：<code class="inl">run_bash</code> 的参数是一条字符串，而规则要实现参数级判定，就必须先知道这条字符串到底会做什么。继续读：<a href="#hx-14">Shell 命令解析</a>。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>规则引擎上线后，橘子第一次在“删文件”这件事上停下来问人了。老唐特意挑了个周五下午，把三周里被拒绝的调用全部拉出来看：一共四十七条，其中三十九条是同一个原因——路径越界，模型想读项目外面的东西；剩下的八条里，有六条是写文件，两条是碰凭据文件。</p>
+<p>清理完名单，老唐说了一句让林舟后背发凉的话：“你有没有发现，这四十七条里，没有一条来自 <code class="inl">run_bash</code>。”</p>
+<p>橘子这两周跑了上千条命令，规则引擎一条都没拦过——因为规则只写了工具名和路径参数，而 <code class="inl">run_bash</code> 的参数只有一个键：<code class="inl">command</code>，一条字符串。规则看不懂字符串里写了什么。</p>
+<p class="hx-story-say">“它不是没违规，”林舟翻着日志说，“它是把违规藏在一个我们没看的地方。”</p>
+<p>下一章要把那条字符串拆开看：<a href="#hx-14">Shell 命令解析</a>。</p>
+</div>
+</section>
