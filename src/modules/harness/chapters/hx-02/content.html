@@ -1,4 +1,10 @@
 <section class="chapter" id="ch-hx-02" data-slug="hx-02"><div class="ch-head"><span class="ch-num">第 2 章</span></div><h1 id="hx-02">工具定义与注册</h1>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 2 章（虚构）</span>
+<p>“search 撞名事件”之后，林舟把实习生小满叫过来，一起把橘子的工具箱翻了个底朝天。翻出来的东西不太好看：</p>
+<p>工具的说明写在一个字典里，实现写在另一个字典里，小满加了实现却忘了加说明，于是那个工具模型根本看不见，从没被调用过，小满还以为是模型“不喜欢它”。<code class="inl">read_file</code> 的说明只有三个字“读文件”，模型就自己猜参数，有时传 <code class="inl">path</code>，有时传 <code class="inl">file</code>，有一次还传了个数字 <code class="inl">42</code>。Python 函数直接用 <code class="inl">**args</code> 展开调用，参数一错就是一屏 TypeError 调用栈，原样塞回上下文。模型读完调用栈，回了一句“抱歉，我再试一次”，然后用一模一样的参数又试了一次。</p>
+<p class="hx-story-say">“它看不到你的代码，”老唐说，“它只能看到你写的那几行说明。你给它一张写着‘读文件’的便利贴，然后怪它不会用。”</p>
+<p>这一章做的事情，就是把便利贴换成说明书：工具在协议层到底长什么样，名字怎么保证不撞，参数错了由谁来查、怎么用模型听得懂的话告诉它，以及哪些工具可以放心并行。</p>
+</div>
 <p>一个工具在协议层其实只有三个字段：<code class="inl">name</code>、<code class="inl">description</code>、参数 schema。模型看不到你的 Python 函数，只看得到这三件套，然后凭它们猜测你的系统能做什么、该传什么参数。于是“工具定义与注册”这一层要解决的问题不是“怎么调函数”，而是三件容易搞砸的事：<strong>定义怎么变成模型看得懂的东西</strong>、<strong>名字怎么保证唯一</strong>、<strong>模型写的参数谁来查、查出来错了怎么告诉它</strong>。</p>
 <p>本章先给出 labs 里的完整实现（<code class="inl">labs/harness/tools.py</code>），再逐段对照 DSH 的 <code class="inl">ctx.tools</code>、OpenHarness 的 <code class="inl">ToolRegistry</code> 和 learn-claude-code 的 <code class="inl">TOOLS</code> / <code class="inl">TOOL_HANDLERS</code> 两张表，最后列出这一层最常见的失败方式。</p>
 <blockquote><p><strong>前置</strong>：本章假定你已经知道 agent loop 长什么样（工具结果是怎样回填进历史的），如果还没有，先看 <a href="#hx-01">第 01 章 Agent Loop 与停止条件</a>；工具执行里的并发调度细节属于 <a href="#hx-00">第 00 章全景图</a> 划出的范围，本章只讲到“只读标记怎样影响调度决策”为止。</p></blockquote>
@@ -413,4 +419,11 @@ export class ToolArgsError extends HarnessError {
 <li>结果截断要可逆：给句柄和说明，不要给一段没有痕迹的裁剪文本。</li>
 </ul>
 <p>下一章把这一层接到调度器上：一次模型回复里的多个调用怎么排序、中断时怎么给未执行的调用补结果、并发上限怎么算。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>工具箱整理完，橘子明显“聪明”了：参数传错会收到一句清楚的错误说明，下一轮就改对了；同名工具在启动时就会报错，小满再也没机会悄悄覆盖别人的工具。</p>
+<p>可是新问题来了。现在模型很爱一次性提好几个请求：一条回复里同时要读五个文件。橘子老老实实一个一个读，每次都要等，客户在演示里盯着转圈看了四十秒。</p>
+<p class="hx-story-say">“这五个能不能一起读？”老唐问。</p>
+<p class="hx-story-say">“读可以一起，”林舟说，“可要是一条回复里有两个 <code class="inl">edit_file</code> 改的是同一个文件呢？要是一起跑的时候其中一个抛异常了呢？要是用户这时候按了 Ctrl+C 呢？”</p>
+<p>老唐想了想：“那你得有个调度员。”下一章：<a href="#hx-03">执行管线与并发</a>。</p>
+</div>
 </section>

@@ -1,8 +1,217 @@
 <section class="chapter" id="ch-hx-01" data-slug="hx-01"><div class="ch-head"><span class="ch-num">第 1 章</span></div><h1 id="hx-01">Agent Loop 与停止条件</h1>
-<p>Agent loop 的骨架只有几行：调模型，看回复，跑工具，把结果喂回去，再调模型。真正决定一个 harness 能不能放心交给它跑的，是它<strong>怎么停</strong>：谁有权说“到此为止”，停的依据是什么，停下那一刻的消息历史还能不能原样发出下一次请求。本章先给出 labs 里的完整实现，再逐段对照 DSH、OpenHarness 和 learn-claude-code 的循环，然后把“采样后决定下一步”单独抽成纯函数，最后列出这一层最常见的失败方式。</p>
+<div class="hx-story"><span class="hx-story-tag">主线故事 · 第 1 章（虚构）</span>
+<p>周一下午，林舟给橘子的循环加了一行：<code class="inl">if turns &gt; 50: break</code>。老唐看了一眼：“行，至少不会烧一个周末了。”</p>
+<p>周二，翻车了三次，每次都不一样。</p>
+<p><strong>第一次。</strong>演示前彩排，橘子跑到一半，林舟觉得它方向不对，按了 Ctrl+C，然后输入“换个思路，先看日志”。结果 API 直接报错，说历史里有一个工具调用找不到对应的结果。原来按下 Ctrl+C 的那一刻，模型刚说完“我要读 config.py”，工具还没来得及跑。历史里留下了一个只有问、没有答的调用，之后每次请求都被拒，这个会话就这么废了。</p>
+<p><strong>第二次。</strong>林舟让橘子写一个长一点的迁移脚本。橘子写到一半，回复戛然而止，最后一句是“接下来我们把所有的 user_id 改成”。循环检查了一下：没有工具调用，于是判断“任务完成”，在终端里打出一个绿色的勾。半截脚本就这么被当成了成品。</p>
+<p><strong>第三次。</strong>某个工具抛了个异常，异常一路冒泡，把整个循环带走了。终端里只剩一屏 Python 调用栈，橘子之前十几轮的工作上下文全没了。</p>
+<p class="hx-story-say">老唐总结：“你只装了一种刹车，就是撞墙。”</p>
+<p>这一章就是给循环补齐刹车：先看清楚“停”有哪几种，每一种由谁来喊，喊停的那一刻怎么保证历史还是完整的。下面的正文会反复回到这三次翻车，它们对应的正是 <a href="#hx-01-s4">坑与失败案例</a> 里的几条。</p>
+</div>
+<p>Agent loop 的骨架只有几行：调模型，看回复，跑工具，把结果喂回去，再调模型。真正决定一个 harness 能不能放心交给它跑的，是它<strong>怎么停</strong>：谁有权说“到此为止”，停的依据是什么，停下那一刻的消息历史还能不能原样发出下一次请求。本章先画出全貌，再按从简单到复杂的顺序逐个看 learn-claude-code、OpenHarness 和 DSH 的循环，然后给出 labs 里的完整实现，把“采样后决定下一步”单独抽成纯函数，最后列出这一层最常见的失败方式。</p>
+
+<h2 id="hx-01-s0">先看全貌：Agent Loop 是什么、管哪些事</h2>
+<p>一句话：Agent Loop 是 harness 最外层的那个循环。它反复做同一件事：把历史发给模型，看模型想干什么，替它去干，把结果记进历史，再问一次模型。直到某个条件成立，它才停下来。</p>
+<p>收到用户的任务后，循环每一轮做五步：</p>
+<ol>
+<li><strong>先检查该不该停</strong>：用户按了中断，或者轮数已经用完，就停。</li>
+<li><strong>调模型</strong>：把系统提示和全部历史发出去，拿回一条回复。</li>
+<li><strong>判定这条回复</strong>：被截断或拒答，就停（或者让模型接着写）；没有工具调用，就停，任务完成；有工具调用，进入第 4 步。</li>
+<li><strong>执行工具</strong>：把这一批的全部结果作为一条消息写回历史。</li>
+<li><strong>记账</strong>：工具连续失败太多次，就停；否则回到第 1 步。</li>
+</ol>
+<p>五步里只有第 2 步是模型在干活，其余四步全是 harness 的事。这个循环要管的事情可以归成四类：</p>
+<ul>
+<li><strong>驱动</strong>：让模型和工具轮流说话，采样、执行、回填，周而复始。</li>
+<li><strong>判定</strong>：每拿到一条回复，决定是继续、停下，还是让模型接着写完。</li>
+<li><strong>刹车</strong>：模型自己不停的时候，harness 要能主动喊停，比如轮数上限、错误预算、用户中断。</li>
+<li><strong>保持历史合法</strong>：不管从哪个出口停下，留下的消息历史都必须能原样发出下一次请求，否则这个会话就废了。</li>
+</ul>
+<p>不管哪个仓库，循环能停下的出口大体就是下面这几种。表里“labs 里的名字”是本章自己实现时用的停止原因：</p>
+<div class="table-wrap"><table><thead><tr><th>出口</th><th>谁喊的停</th><th>什么时候发生</th><th>labs 里的名字</th></tr></thead><tbody>
+<tr><td>任务完成</td><td>模型</td><td>回复里不再有工具调用</td><td><code class="inl">completed</code></td></tr>
+<tr><td>输出被截断</td><td>模型（撞到输出上限）</td><td>回复写到一半被切断，工具参数可能只有半截</td><td><code class="inl">max_tokens</code></td></tr>
+<tr><td>拒答</td><td>模型</td><td>模型拒绝继续</td><td><code class="inl">refusal</code></td></tr>
+<tr><td>轮数用完</td><td>harness</td><td>模型调用次数到了上限</td><td><code class="inl">max_turns</code></td></tr>
+<tr><td>错误预算用完</td><td>harness</td><td>工具连续失败太多次，模型在原地打转</td><td><code class="inl">error_budget</code></td></tr>
+<tr><td>模型调用失败</td><td>harness</td><td>网络、鉴权、限流等，调模型这一步本身出错</td><td><code class="inl">llm_error</code></td></tr>
+<tr><td>用户中断</td><td>用户</td><td>按下 Ctrl+C，或上层取消了任务</td><td><code class="inl">interrupted</code></td></tr>
+</tbody></table></div>
+<p>有的仓库还有第四方能喊停：插件。DSH 的插件可以拒绝下一步、提前结束一轮，也可以反过来让本该停下的循环继续跑。</p>
+<p>全章反复出现的两条规则，先记住：</p>
+<ol>
+<li><strong>先判截断，再看工具调用。</strong>被截断的回复里，工具调用的参数可能只有半截，不能执行。橘子把半截迁移脚本当成“完成”，就是没先判截断。</li>
+<li><strong>任何一个停止点上，每个工具调用都要有结果。</strong>历史里只要留下一个“只有问、没有答”的调用，下一次请求就会被拒。橘子按 Ctrl+C 后整个会话报废，就是这条被破坏了。</li>
+</ol>
+<blockquote><p><strong>本章怎么读</strong>：</p>
+<ol>
+<li>本节是全貌，必读。</li>
+<li>然后逐个看三个仓库，从最简单的三十行版本读到生产级实现，每个仓库单独一节。第一遍可以只挑一个：想看骨架，读 learn-claude-code；想看完整的 Python 写法，读 OpenHarness；想看生产级的细节，读 DSH。</li>
+<li>看完别人的写法，再读 labs 的实现：自己写一个循环，必须掌握的就是这一部分，代码可以直接运行。</li>
+<li>坑与失败案例按问题列出，每条里再分仓库说明怎么防，适合遇到问题时回来查。最后的对比表用来复习。</li>
+</ol>
+<p>正文里蓝色的 <code class="inl">文件:行号</code> 是源码出处，第一遍读可以跳过，不影响理解。</p></blockquote>
+
+<h2 id="hx-01-s2">逐个仓库看：从三十行到生产级</h2>
+<p>三个仓库按从简单到复杂的顺序排：learn-claude-code 只有骨架，OpenHarness 在骨架上加了上限和错误处理，DSH 把截断、插话、中断都做全了。每个仓库自成一节，可以只读你关心的那一个；对照上一节的五步，看它在每一步做了什么、少做了什么。</p>
 <blockquote><p><strong>术语</strong>：三个仓库对“轮”的叫法不一样。DSH 把处理一条用户输入的全过程叫 turn（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:298" data-expect="private async turn(): Promise">agent.ts:298</code>），把其中每一次模型调用叫 step（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:400" data-expect="private async step(decision">agent.ts:400</code>）。OpenHarness 的 <code class="inl">turn_count</code> 每调一次模型加一（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:699-701" data-expect="turn_count = 0">query.py:699-701</code>），相当于 DSH 的 step。labs 沿用 OpenHarness 的口径：<code class="inl">LoopResult.turns</code> 是模型调用次数。下文说“一轮”都指一次模型调用。</p></blockquote>
+<h3 id="hx-01-s2-4">learn-claude-code s01：最小版本</h3>
+<blockquote><p><strong>先知道</strong>：learn-claude-code 是一个教程仓库，每一课讲一个机制，第一课 s01 就是一个最小循环。读它是为了看清骨架长什么样；后面两个仓库多出来的代码，基本都是在防这个骨架没防住的情况。</p></blockquote>
+<p>learn-claude-code 的第一课把循环压到三十行，README 的说法是“模型调用工具就继续，不调用就停”（<code class="inl src-ref" data-src="lcc:s01_agent_loop/README.zh.md:28" data-expect="模型调用工具就继续，不调用就停">README.zh.md:28</code>）：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="kw">def</span> <span class="fn">agent_loop</span>(messages<span class="op">:</span> list)<span class="op">:</span>
+    <span class="kw">while</span> <span class="kw">True</span><span class="op">:</span>
+        response <span class="op">=</span> client.messages.create(
+            model<span class="op">=</span><span class="cls">MODEL</span>, system<span class="op">=</span><span class="cls">SYSTEM</span>, messages<span class="op">=</span>messages,
+            tools<span class="op">=</span><span class="cls">TOOLS</span>, max_tokens<span class="op">=</span><span class="num">8000</span>,
+        )
+
+        <span class="cmt"># Append assistant turn</span>
+        messages.append({<span class="str">"role"</span><span class="op">:</span> <span class="str">"assistant"</span>, <span class="str">"content"</span><span class="op">:</span> response.content})
+
+        <span class="cmt"># If the model didn't call a tool, we're done</span>
+        tool_calls <span class="op">=</span> [
+            block <span class="kw">for</span> block <span class="kw">in</span> response.content <span class="kw">if</span> block.type <span class="op">==</span> <span class="str">"tool_use"</span>
+        ]
+        <span class="kw">if</span> <span class="kw">not</span> tool_calls<span class="op">:</span>
+            <span class="kw">return</span>
+
+        <span class="cmt"># Execute each tool call, collect results</span>
+        results <span class="op">=</span> []
+        <span class="kw">for</span> block <span class="kw">in</span> tool_calls<span class="op">:</span>
+            print(<span class="str">f"\033[33m$ {block.input['command']}\033[0m"</span>)
+            output <span class="op">=</span> run_bash(block.input[<span class="str">"command"</span>])
+            print(output[<span class="op">:</span><span class="num">200</span>])
+            results.append({
+                <span class="str">"type"</span><span class="op">:</span> <span class="str">"tool_result"</span>,
+                <span class="str">"tool_use_id"</span><span class="op">:</span> block.id,
+                <span class="str">"content"</span><span class="op">:</span> output,
+            })
+
+        <span class="cmt"># Feed tool results back, loop continues</span>
+        messages.append({<span class="str">"role"</span><span class="op">:</span> <span class="str">"user"</span>, <span class="str">"content"</span><span class="op">:</span> results})</code></pre></div>
+<p>出处：<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:96-126" data-expect="def agent_loop(messages: list):">code.py:96-126</code>。它做对了两件事：没有 tool_use 块就返回（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:110" data-expect="if not tool_calls:">code.py:110</code>），一批调用的结果放进同一条 user 消息（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:126" data-expect="results})">code.py:126</code>）。其余都没做：<code class="inl">while True</code> 没有上限（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:97" data-expect="while True:">code.py:97</code>）；<code class="inl">max_tokens</code> 写死 8000 且不看 <code class="inl">stop_reason</code>（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:100" data-expect="tools=TOOLS, max_tokens=8000,">code.py:100</code>）；不检查工具名，所有 tool_use 都当 bash 执行；<code class="inl">run_bash</code> 只接住超时和两类系统错误（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:89-92" data-expect="except subprocess.TimeoutExpired:">code.py:89-92</code>）；没有插话，也没有中断。这是有意的教学取舍，README 自己说后面 16 章都在这个循环上叠机制（<code class="inl src-ref" data-src="lcc:s01_agent_loop/README.zh.md:116" data-expect="三十多行，这就是最小可运行的 agent harness 内核">README.zh.md:116</code>）。</p>
+<p>后面的章节补上了一部分。s15 把“只看块、不信 stop_reason”写成了注释（<code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:1924" data-expect="Do not rely on stop_reason alone; the concrete tool_use block is the">code.py:1924</code>），仓库测试专门验证：stop_reason 说 <code class="inl">end_turn</code> 但回复里有真实的 tool_use 时，工具照样执行（<code class="inl src-ref" data-src="lcc:tests/test_agent_loop_boundaries.py:244" data-expect="def test_parent_loop_executes_a_real_tool_call_even_if_stop_reason_disagrees(">test_agent_loop_boundaries.py:244</code>）。s15 也处理了截断：第一次截断丢弃整个回复、把 max_tokens 从 8000 提到 16000 重试；再截断就把回复写进历史、追加续写提示，最多两次（<code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:3185-3197" data-expect="if response.stop_reason ==">code.py:3185-3197</code>，常量见 <code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:69" data-expect="ESCALATED_MAX_TOKENS = 16000">code.py:69</code> 和 <code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:72" data-expect="MAX_RECOVERY_RETRIES = 2">code.py:72</code>）。</p>
+
+<h3 id="hx-01-s2-3">OpenHarness：一个 while 加一个异常</h3>
+<blockquote><p><strong>先知道</strong>：OpenHarness 是用 Python 写的完整 harness，循环集中在 <code class="inl">engine/query.py</code> 的 <code class="inl">run_query</code> 一个函数里。它和 learn-claude-code 的骨架几乎一样，只是多了轮数上限、错误处理和中断后的修补。读的时候对照开头的五步看三件事：停止只看什么，截断防没防，上限用什么方式表达。</p></blockquote>
+<p>OpenHarness 的循环集中在 <code class="inl">run_query</code> 一个函数里，文档字符串就是它的停止条件：“运行对话循环，直到模型不再请求工具”（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:637" data-expect="Run the conversation loop until the model stops requesting tools.">query.py:637</code>）。与停止有关的三段：</p>
+<div class="codeblock" data-lang="python"><pre><code class="lang-python">    turn_count <span class="op">=</span> <span class="num">0</span>
+    <span class="kw">while</span> context.max_turns <span class="kw">is</span> <span class="kw">None</span> <span class="kw">or</span> turn_count <span class="op">&lt;</span> context.max_turns<span class="op">:</span>
+        turn_count <span class="op">+=</span> <span class="num">1</span>
+        <span class="cmt"># …</span>
+        <span class="kw">if</span> <span class="kw">not</span> final_message.tool_uses<span class="op">:</span>
+            <span class="kw">if</span> context.hook_executor <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+                <span class="kw">await</span> context.hook_executor.execute(
+                    <span class="cls">HookEvent</span>.<span class="cls">STOP</span>,
+                    {
+                        <span class="str">"event"</span><span class="op">:</span> <span class="cls">HookEvent</span>.<span class="cls">STOP</span>.value,
+                        <span class="str">"stop_reason"</span><span class="op">:</span> <span class="str">"tool_uses_empty"</span>,
+                    },
+                )
+            <span class="kw">return</span>
+        <span class="cmt"># …</span>
+        messages.append(<span class="cls">ConversationMessage</span>(role<span class="op">=</span><span class="str">"user"</span>, content<span class="op">=</span>tool_results))
+
+    <span class="kw">if</span> context.max_turns <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
+        <span class="kw">raise</span> <span class="cls">MaxTurnsExceeded</span>(context.max_turns)
+    <span class="kw">raise</span> <span class="cls">RuntimeError</span>(<span class="str">"Query loop exited without a max_turns limit or final response"</span>)</code></pre></div>
+<p>出处：<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:699-884" data-expect="turn_count = 0">query.py:699-884</code>。逐项看：</p>
+<ul>
+<li><strong>停止判定</strong>：只看 <code class="inl">final_message.tool_uses</code> 是否为空（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:808" data-expect="if not final_message.tool_uses:">query.py:808</code>）。API 客户端其实把 <code class="inl">stop_reason</code> 带回来了（<code class="inl src-ref" data-src="oh:src/openharness/api/client.py:64" data-expect="stop_reason: str "> None = None</code>，<code class="inl src-ref" data-src="oh:src/openharness/api/client.py:261" data-expect="stop_reason=getattr(final_message,">client.py:261</code>），但循环只取走 message 和 usage（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:750-752" data-expect="if isinstance(event, ApiMessageCompleteEvent):">query.py:750-752</code>），STOP 钩子收到的 stop_reason 是一个固定字符串 <code class="inl">tool_uses_empty</code>。</li>
+<li><strong>截断</strong>：没有处理输出截断。它处理的是请求侧的 max_tokens：先夹到 128000 和上下文窗口以内（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:90" data-expect="def _bounded_completion_tokens(">query.py:90</code>），厂商仍嫌太大时从错误信息里解析上限、重试，并把这一轮的计数退回去（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:766" data-expect="turn_count = max(0, turn_count - 1)">query.py:766</code>）。如果输出在 tool_use 中间被截断，这个块照样被转成 <code class="inl">ToolUseBlock</code>（<code class="inl src-ref" data-src="oh:src/openharness/engine/messages.py:205" data-expect="def assistant_message_from_api(">messages.py:205</code>）并执行，唯一的保护是参数的 pydantic 校验（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:917" data-expect="parsed_input = tool.input_model.model_validate(tool_input)">query.py:917</code>）。</li>
+<li><strong>插话</strong>：<code class="inl">run_query</code> 里没有收件箱，用户的新输入只能等这次循环结束、下一次 <code class="inl">submit_message</code>。</li>
+<li><strong>上限</strong>：<code class="inl">max_turns</code> 写在 while 条件里，检查发生在调模型之前。默认值有三处且不一致：<code class="inl">QueryContext</code> 是 200（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:153" data-expect="max_turns: int "> None = 200</code>），<code class="inl">QueryEngine</code> 构造参数是 8（<code class="inl src-ref" data-src="oh:src/openharness/engine/query_engine.py:36" data-expect="max_turns: int "> None = 8,</code>），设置文件是 200（<code class="inl src-ref" data-src="oh:src/openharness/config/settings.py:581" data-expect="max_turns: int = 200">settings.py:581</code>）。可以设成 None 表示不设限（<code class="inl src-ref" data-src="oh:tests/test_engine/test_query_engine.py:375" data-expect="async def test_query_engine_allows_unbounded_turns_when_max_turns_is_none">test_query_engine.py:375</code>）。超限时抛 <code class="inl">MaxTurnsExceeded</code> 而不是返回，由 UI 捕获后提示（<code class="inl src-ref" data-src="oh:src/openharness/ui/runtime.py:681" data-expect="except MaxTurnsExceeded as exc:">runtime.py:681</code>），再由 <code class="inl">/continue</code> 走 <code class="inl">continue_pending</code> 接着跑（<code class="inl src-ref" data-src="oh:src/openharness/engine/query_engine.py:280" data-expect="async def continue_pending(self, *, max_turns: int "> None = None)</code>）。</li>
+<li><strong>错误</strong>：模型调用失败时发一个 ErrorEvent 后返回（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:781" data-expect="yield ErrorEvent(message=f">query.py:781</code>），提示过长时先做一次反应式压缩再重试（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:768" data-expect="if not reactive_compact_attempted and _is_prompt_too_long_error(exc):">query.py:768</code>）；模型回了空消息就丢掉并返回（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:792" data-expect="final_message.is_effectively_empty()">query.py:792</code>）。工具侧：未知工具（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:912" data-expect="Unknown tool: {tool_name}">query.py:912</code>）、参数非法、工具抛异常都变成 <code class="inl">is_error=True</code> 的结果。</li>
+<li><strong>中断</strong>：循环内没有取消信号。悬空的 tool_use 在下一次进入时修补：<code class="inl">sanitize_conversation_messages</code> 把没有配对结果的 tool_use 所在的 assistant 消息整条删掉（<code class="inl src-ref" data-src="oh:src/openharness/engine/messages.py:119-127" data-expect="def sanitize_conversation_messages(">messages.py:119-127</code>），<code class="inl">submit_message</code> 和 <code class="inl">continue_pending</code> 开头都会调用（<code class="inl src-ref" data-src="oh:src/openharness/engine/query_engine.py:237" data-expect="self._messages = sanitize_conversation_messages(self._messages)">query_engine.py:237</code>）。</li>
+</ul>
+
+<h3 id="hx-01-s2-1">DSH：三层循环和一张出口表</h3>
+<blockquote><p><strong>先知道</strong>：DSH（DeepSeek Harness）是用 TypeScript 写的生产级 harness，循环在 <code class="inl">packages/core/agent-loop/src/agent.ts</code>，拆成三层：<code class="inl">kick()</code> 一直开新的 turn，<code class="inl">turn()</code> 处理一条用户输入，<code class="inl">step()</code> 调一次模型。不熟 TypeScript 也没关系，抓住两件事就够了：<code class="inl">turn()</code> 有哪些出口（下面的出口表），<code class="inl">step()</code> 怎么判定一条回复的结局（第二段代码）。截断、插话、上限和中断放在下一小节单独讲。</p></blockquote>
+<p>DSH 的循环拆在三个方法里。最外层 <code class="inl">kick()</code> 只做一件事：只要 <code class="inl">turn()</code> 返回 true 就再开一个 turn（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:254" data-expect="while (await this.turn()) {}">agent.ts:254</code>）；<code class="inl">turn()</code> 结束时只要收件箱里还有待处理的输入就返回 true（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:392" data-expect="if (!this.inbox.hasPending) return false">agent.ts:392</code>）。中间层 <code class="inl">turn()</code> 是驱动 step 的 <code class="inl">while (true)</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:315" data-expect="while (true) {">agent.ts:315</code>）。最内层 <code class="inl">step()</code> 里还有一个 <code class="inl">while (true)</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:409" data-expect="while (true) {">agent.ts:409</code>），只服务于“请求失败后重试同一步”。</p>
+<p>turn 内部驱动 step 的部分（省略了失败恢复，下面单独讲）：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      while (true) {
+        signal.throwIfAborted()
+        const step = phase.step + 1
+        const decision = await this.preStep(target, { turn, step })
+        if (decision.kind === 'reject') {
+          turnEnds = { kind: 'blocked' }
+          return false
+        }
+        if (turnEnds &amp;&amp; decision.messages.length === 0) break
+        // A removed waking message or an enter decision rewritten to empty
+        // still owns the initial turn boundary, but it spends no model call.
+        if (phase.step === 0 &amp;&amp; decision.messages.length === 0) {
+          turnEnds = { kind: 'completed' }
+          return false
+        }
+        signal.throwIfAborted()
+        this.session.append('step/start', { turn, step })
+        phase.step = step
+        const toolRecovery = new ToolCallRecovery()
+        const stopRecovery = this.ctx.on('session/event', (session, event) =&gt; {
+          if (session === this.session) toolRecovery.observe(event)
+        })
+        try {
+          // max-tokens is sticky: once any step hits the ceiling, later steps
+          // that complete normally must not downgrade the turn outcome.
+          const stepEnd = await this.step(decision)
+          // max-tokens stays sticky: a later completed step must not
+          // downgrade the turn outcome.
+          if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd
+        // …
+        signal.throwIfAborted()
+        if (turnEnds &amp;&amp; this.inbox.nextStep.length === 0) {
+          await this.dispatch.serial('agent/turn-stopping', { turn, signal })
+          signal.throwIfAborted()
+        }
+        if (turnEnds &amp;&amp; this.inbox.nextStep.length === 0) break
+        target = 'next-step'</code></pre></div>
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:315-366" data-expect="while (true) {">agent.ts:315-366</code>。<code class="inl">step()</code> 的返回值只有三种：<code class="inl">{ kind: 'max-tokens' }</code>、<code class="inl">{ kind: 'completed' }</code>，或 <code class="inl">null</code> 表示“工具已执行，还欠模型一次回应”（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:52" data-expect="type StepEndReason = Extract">agent.ts:52</code>）。<code class="inl">turnEnds</code> 为 null 时循环继续；非 null 时还要看收件箱。把 <code class="inl">turn()</code> 的所有出口列出来：</p>
+<div class="table-wrap"><table><thead><tr><th>出口</th><th>条件</th><th>turn/end 记录的原因</th><th>源码</th></tr></thead><tbody>
+<tr><td>步骤被拒</td><td><code class="inl">agent/pre-step</code> 钩子返回 reject</td><td><code class="inl">blocked</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:319-322" data-expect="if (decision.kind === &#x27;reject&#x27;) {">agent.ts:319-322</code></td></tr>
+<tr><td>开局没有输入</td><td>第一步认领到的消息为空（唤醒消息被删除或被钩子改写成空）</td><td><code class="inl">completed</code>，不调模型</td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:326-329" data-expect="if (phase.step === 0 &amp;&amp; decision.messages.length === 0) {">agent.ts:326-329</code></td></tr>
+<tr><td>转向消息消失</td><td>上一步已给出结束原因，为插话再开一步时却没认领到消息</td><td>沿用上一步的原因</td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:323" data-expect="if (turnEnds &amp;&amp; decision.messages.length === 0) break">agent.ts:323</code></td></tr>
+<tr><td>正常停止</td><td>本步给出结束原因，且 next-step 收件箱为空；先跑 <code class="inl">agent/turn-stopping</code> 钩子，再查一次</td><td><code class="inl">completed</code> 或 <code class="inl">max-tokens</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:361-365" data-expect="if (turnEnds &amp;&amp; this.inbox.nextStep.length === 0) {">agent.ts:361-365</code></td></tr>
+<tr><td>取消</td><td>本 turn 的 AbortSignal 已中止</td><td><code class="inl">aborted</code>，带取消来源</td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:370-373" data-expect="const cause = abortedCancelCause(signal)">agent.ts:370-373</code></td></tr>
+<tr><td>其他异常</td><td>请求失败且没人要求重试、调度器故障、钩子抛错等</td><td><code class="inl">error</code>，带结构化失败信息</td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:378-382" data-expect="kind: &#x27;error&#x27;,">agent.ts:378-382</code></td></tr>
+</tbody></table></div>
+<p>不管从哪个出口离开，<code class="inl">finally</code> 都会写一条 <code class="inl">turn/end</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:387" data-expect="this.session.append(&#x27;turn/end&#x27;, { turn, reason: turnEnds! })">agent.ts:387</code>）。原因的完整枚举在 <code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:201" data-expect="export interface TurnEndReasonMap {">types.ts:201</code>，其中 <code class="inl">interrupted</code> 和 <code class="inl">forked</code> 只由崩溃恢复和分叉补写，循环本身不会产生。</p>
+<p>再看 <code class="inl">step()</code> 拿到完整回复之后的判定，这是 DSH 真正决定“停还是继续”的地方：</p>
+<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      try {
+        const finish = live.finish
+        if (finish.kind === 'error' || finish.kind === 'aborted') {
+          // …
+          if (action?.kind !== 'retry') {
+            throw new LlmError(finish.failure.message, finish.failure.code, finish.failure)
+          }
+          continue
+        }
+        // …
+        if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }
+
+        const toolCalls = message.content.filter(block =&gt; block.type === 'tool-call')
+        if (toolCalls.length === 0) return { kind: 'completed' }
+        const { concluded } = await executeToolCalls(
+          this.loopCtx, turn, step, toolCalls, signal,
+          context =&gt; this.inbox.splice('next-step', this.inbox.nextStep.length, 0, [context]),
+        )
+        return concluded ? { kind: 'completed' } : null</code></pre></div>
+<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:504-555" data-expect="try {">agent.ts:504-555</code>。判定顺序是：先看流的结束原因，出错就交给 <code class="inl">agent/request-error</code> 钩子决定重试（<code class="inl">continue</code> 回到内层循环）还是抛错；然后<strong>先判截断</strong>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:547" data-expect="if (finish.kind === &#x27;max-tokens&#x27;) return { kind: &#x27;max-tokens&#x27; }">agent.ts:547</code>），<strong>再看有没有工具调用</strong>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:550" data-expect="if (toolCalls.length === 0) return { kind: &#x27;completed&#x27; }">agent.ts:550</code>）。注意 DSH 的结束原因里同时有 <code class="inl">stop</code> 和 <code class="inl">tool-calls</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:156-162" data-expect="export interface FinishReasonMap {">types.ts:156-162</code>），但循环并不区分这两者，是否继续只看回复里有没有 tool-call 块；流里缺结束原因时默认按 <code class="inl">stop</code> 处理（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:188" data-expect="return this._finish ?? { kind: &#x27;stop&#x27; }">assembler.ts:188</code>）。工具执行完，如果某个工具调用了 <code class="inl">concludeTurn()</code>，这一步也算完成（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:555" data-expect="return concluded ? { kind: &#x27;completed&#x27; } : null">agent.ts:555</code>），测试见 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1257" data-expect="a tool can conclude the turn despite owing a follow-up request">loop.spec.ts:1257</code>。</p>
+
+<h3 id="hx-01-s2-2">DSH：截断、插话、上限与中断</h3>
+<p><strong>截断。</strong>DSH 在两层防半截工具调用。组装层：结束原因是 <code class="inl">max-tokens</code> 时，<code class="inl">BlockAssembler</code> 从回复里丢掉所有 tool-call 块，只保留文本，回放元数据也同步裁剪，“写进日志的内容”和“回放时发给厂商的内容”不会对不上（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:131-140" data-expect="The one shared keep/drop decision over all seen blocks: max-token">assembler.ts:131-140</code>）。循环层：<code class="inl">step()</code> 先判截断再找工具调用（上面的 547 行）。两层叠加的效果由测试钉住：截断回复里的工具调用不会被执行，日志里也没有 <code class="inl">tool/call</code> 事件（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1530" data-expect="does not dispatch tool calls from a max-tokens-truncated step">loop.spec.ts:1530</code>）；文本部分保留，下一次请求照常回放（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1665" data-expect="keeps safe max-tokens assistant content while dropping truncated tool calls">loop.spec.ts:1665</code>）。</p>
+<p>DSH 默认<strong>不自动续写</strong>：单步被截断，turn 就以 <code class="inl">max-tokens</code> 结束，只调用一次模型（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1439" data-expect="surfaces max-tokens as the turn-end reason when the last step is cut off">loop.spec.ts:1439</code>）。要续写，由插件在 <code class="inl">agent/turn-stopping</code> 钩子里 steer 一条消息，测试里正是这么做的（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1459" data-expect="a max-tokens step earlier in a turn still surfaces as max-tokens after a later completed step">loop.spec.ts:1459</code>）。这个测试还说明了第二个设计：max-tokens 是<strong>粘滞</strong>的，后面的步骤正常结束也不会把 turn 的结局改回 completed（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:343" data-expect="if (turnEnds === null "></code>；类型注释写得很直白：<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:213" data-expect="At least one step reached its output-token ceiling, even if a plugin continued the turn.">types.ts:213</code>）。</p>
+<p><strong>插话（inbox）。</strong>DSH 的待处理输入是持久化在会话日志里的两个队列：<code class="inl">next-turn</code> 和 <code class="inl">next-step</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/inbox.ts:22-23" data-expect="&#x27;next-turn&#x27;: z.array(">inbox.ts:22-23</code>）。三个入口分别是 <code class="inl">followup</code>（排到下一个 turn 并唤醒，<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:164" data-expect="this.send(input, &#x27;next-turn&#x27;, true)">agent.ts:164</code>）、<code class="inl">steer</code>（排到下一步并唤醒，<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:168" data-expect="this.send(input, &#x27;next-step&#x27;, true)">agent.ts:168</code>）和 <code class="inl">inject</code>（排到下一步但不唤醒，<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:172" data-expect="this.send(input, &#x27;next-step&#x27;, false)">agent.ts:172</code>）。并入时机是每一步开始前的认领：先取走全部 next-step 消息，新 turn 的第一步再额外取一条 next-turn（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/inbox.ts:109-111" data-expect="claim(target: InboxTarget, turn: number): UserMessage[] {">inbox.ts:109-111</code>）。认领到的消息只在本步第一次请求时写入会话，失败重试不会重复写（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:426" data-expect="if (firstAttempt) {">agent.ts:426</code>）。</p>
+<p>工具执行期间产生的上下文也走 next-step 队列（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:553" data-expect="context =&gt; this.inbox.splice(&#x27;next-step&#x27;, this.inbox.nextStep.length, 0, [context]),">agent.ts:553</code>），所以它们总是排在工具结果之后，不会把 tool_use 和 tool_result 隔开（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1155" data-expect="defers inject() during tool execution until after the tool result">loop.spec.ts:1155</code>）。工具执行时用户 steer 的消息，会进入同一 turn 的下一步（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1018" data-expect="injects steering between steps and continues the turn">loop.spec.ts:1018</code>）。最关键的一点在出口表的“正常停止”一行：即使模型已经不再调用工具，只要 next-step 队列里还有消息，turn 就不会停，而是再跑一步。换句话说，DSH 的停止条件是“模型不欠回应<strong>并且</strong>没有待处理的转向”，钩子文档把这个规则写成“数据决定，监听器的顺序改变不了结果”（<code class="inl src-ref" data-src="dsh:packages/core/agent/src/runtime-types.ts:365" data-expect="The turn is about to close: the model owes no response (no live tool">runtime-types.ts:365</code>）。</p>
+<p><strong>上限。</strong>DSH 的核心循环里没有 step 数或 turn 数上限。agent-loop 插件的配置只有一个并发上限 <code class="inl">maxParallelToolCalls</code>，默认 10（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/index.ts:346" data-expect="maxParallelToolCalls: z.number().step(1).min(1).default(DEFAULT_MAX_PARALLEL_TOOL_CALLS).volatile(),">index.ts:346</code>，<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/constants.ts:6" data-expect="export const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 10">constants.ts:6</code>）。能让循环提前停下的都是插件手段：<code class="inl">agent/pre-step</code> 拒绝下一步（<code class="inl src-ref" data-src="dsh:packages/core/agent/src/runtime-types.ts:310" data-expect="Reject a proposed step or replace the messages that enter it.">runtime-types.ts:310</code>）、以 <code class="inl">hook</code> 为原因取消（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:89-90" data-expect="case &#x27;hook&#x27;:">agent.ts:89-90</code>）、工具 <code class="inl">concludeTurn()</code>。反方向的“强制继续”目前没有上限，仓库里自己留了 TODO：<code class="inl src-ref" data-src="dsh:packages/experimental/hooks-claude-code/src/index.ts:275" data-expect="TODO(stop-loop-guard): cap consecutive forced continuations; hooks must self-limit meanwhile.">index.ts:275</code>。实验插件 tool-ralph 的 <code class="inl">maxRounds</code> 默认 256（<code class="inl src-ref" data-src="dsh:packages/experimental/tool-ralph/src/index.ts:35" data-expect="maxRounds: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(256),">index.ts:35</code>），限的是“新开子 agent 跑多少轮”，不是单个 turn 的 step 数。</p>
+<p><strong>中断。</strong><code class="inl">cancel()</code> 中止当前 turn 的 AbortController，默认同时清空收件箱（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:175-181" data-expect="cancel(cause: AgentCancelCause, options: CancelOptions = {}): void {">agent.ts:175-181</code>），循环在各个 await 之后用 <code class="inl">signal.throwIfAborted()</code> 检查。流式输出被打断时，已经显示给用户的文本前缀会作为 <code class="inl">interrupted</code> 消息落盘，工具调用一律不保留，“因为中断发生在派发之前，保留它就得伪造一个结果”（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:165" data-expect="Tool calls are omitted because interruption precedes dispatch; retaining">assembler.ts:165</code>；落盘见 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:465-466" data-expect="if (signal.aborted) {">agent.ts:465-466</code>）。工具执行到一半被取消时，没开始的调用会补一对 call/result，结果是 <code class="inl">isError</code> 的“aborted before dispatch”（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:250-253" data-expect="function appendSkippedToolCall(">tool-calls.ts:250-253</code>）。如果一步因异常失败，<code class="inl">ToolCallRecovery</code> 会给所有还没结果的调用补上错误结果，再关闭这一步（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:344-355" data-expect="} catch (error: unknown) {">agent.ts:344-355</code>），注释写明了原因：<code class="inl src-ref" data-src="dsh:packages/core/session/src/repair.ts:164" data-expect="Close calls before their step: providers reject dangling assistant calls,">repair.ts:164</code>。</p>
+
+<h3 id="hx-01-s2-5">小结：停止信号到底看什么</h3>
+<p>可用的信号有两个：厂商返回的 <code class="inl">stop_reason</code>，以及回复里有没有工具调用块。三个仓库判断“正常完成”时都看后者，没有一个只凭 <code class="inl">stop_reason == "tool_use"</code> 决定继续。差别在于<strong>截断是否先于工具调用检查</strong>：DSH 先判截断，而且在组装层就把截断的工具调用丢掉；labs 同样先判截断；OpenHarness 和 learn-claude-code s01 不看截断，s15 看了但续写路径有配对风险（<a href="#hx-01-s4-2">4.2</a>）。</p>
+<p>谁有权决定停：模型（不再调用工具）、harness 自身（上限、预算、错误）、用户（取消）。DSH 多了第四方：插件，可以拒绝一步、结束一个 turn，也可以通过 steer 让本该停的 turn 继续。</p>
 
 <h2 id="hx-01-s1">最小循环：run_agent 每一行在防什么</h2>
+<p>看完三个仓库的写法，现在自己写一个。下面的实现对照本章开头的五步：第 1、2、5 步在 <code class="inl">run_agent</code> 里，第 3 步是 <code class="inl">next_step</code>（第 3 节单独讲），第 4 步是 <code class="inl">execute_tools</code>。</p>
 <p>labs 的循环在 <code class="inl">labs/harness/loop.py</code>，只用标准库，模型通过 <code class="inl">harness.llm</code> 的适配器调用，测试里换成按脚本回放的 <code class="inl">FakeLLM</code>。先看配置：三个字段对应三种由 harness 主动发起的停止。</p>
 <div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/loop.py::LoopConfig"><span class="dec">@dataclass</span>
 <span class="kw">class</span> <span class="cls">LoopConfig</span><span class="op">:</span>
@@ -107,159 +316,6 @@
 <p>未知工具和工具异常都变成 <code class="inl">is_error=True</code> 的结果交还给模型，让它自己改正；只捕获 <code class="inl">Exception</code>，<code class="inl">KeyboardInterrupt</code> 照常上抛。</p>
 <blockquote><p><strong>不变量</strong>：<code class="inl">run_agent</code> 的每一个返回点上，<code class="inl">messages</code> 都能原样作为下一次请求的历史。测试 <code class="inl">labs/tests/test_loop.py</code> 里的 <code class="inl">assertHistoryValid</code> 在每种停止原因下检查三件事：首条是 user 消息；没有空的 assistant 消息；每条带 tool_use 的 assistant 消息后面紧跟一条 user 消息，里面的 tool_result 与 tool_use 一一对应且顺序相同。运行：<code class="inl">py -m unittest discover -s labs/tests -t labs</code>。</p></blockquote>
 
-<h2 id="hx-01-s2">三个仓库的循环逐段对照</h2>
-<h3 id="hx-01-s2-1">DSH：三层循环和一张出口表</h3>
-<p>DSH 的循环拆在三个方法里。最外层 <code class="inl">kick()</code> 只做一件事：只要 <code class="inl">turn()</code> 返回 true 就再开一个 turn（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:254" data-expect="while (await this.turn()) {}">agent.ts:254</code>）；<code class="inl">turn()</code> 结束时只要收件箱里还有待处理的输入就返回 true（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:392" data-expect="if (!this.inbox.hasPending) return false">agent.ts:392</code>）。中间层 <code class="inl">turn()</code> 是驱动 step 的 <code class="inl">while (true)</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:315" data-expect="while (true) {">agent.ts:315</code>）。最内层 <code class="inl">step()</code> 里还有一个 <code class="inl">while (true)</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:409" data-expect="while (true) {">agent.ts:409</code>），只服务于“请求失败后重试同一步”。</p>
-<p>turn 内部驱动 step 的部分（省略了失败恢复，下面单独讲）：</p>
-<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      while (true) {
-        signal.throwIfAborted()
-        const step = phase.step + 1
-        const decision = await this.preStep(target, { turn, step })
-        if (decision.kind === 'reject') {
-          turnEnds = { kind: 'blocked' }
-          return false
-        }
-        if (turnEnds &amp;&amp; decision.messages.length === 0) break
-        // A removed waking message or an enter decision rewritten to empty
-        // still owns the initial turn boundary, but it spends no model call.
-        if (phase.step === 0 &amp;&amp; decision.messages.length === 0) {
-          turnEnds = { kind: 'completed' }
-          return false
-        }
-        signal.throwIfAborted()
-        this.session.append('step/start', { turn, step })
-        phase.step = step
-        const toolRecovery = new ToolCallRecovery()
-        const stopRecovery = this.ctx.on('session/event', (session, event) =&gt; {
-          if (session === this.session) toolRecovery.observe(event)
-        })
-        try {
-          // max-tokens is sticky: once any step hits the ceiling, later steps
-          // that complete normally must not downgrade the turn outcome.
-          const stepEnd = await this.step(decision)
-          // max-tokens stays sticky: a later completed step must not
-          // downgrade the turn outcome.
-          if (turnEnds === null || turnEnds.kind !== 'max-tokens') turnEnds = stepEnd
-        // …
-        signal.throwIfAborted()
-        if (turnEnds &amp;&amp; this.inbox.nextStep.length === 0) {
-          await this.dispatch.serial('agent/turn-stopping', { turn, signal })
-          signal.throwIfAborted()
-        }
-        if (turnEnds &amp;&amp; this.inbox.nextStep.length === 0) break
-        target = 'next-step'</code></pre></div>
-<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:315-366" data-expect="while (true) {">agent.ts:315-366</code>。<code class="inl">step()</code> 的返回值只有三种：<code class="inl">{ kind: 'max-tokens' }</code>、<code class="inl">{ kind: 'completed' }</code>，或 <code class="inl">null</code> 表示“工具已执行，还欠模型一次回应”（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:52" data-expect="type StepEndReason = Extract">agent.ts:52</code>）。<code class="inl">turnEnds</code> 为 null 时循环继续；非 null 时还要看收件箱。把 <code class="inl">turn()</code> 的所有出口列出来：</p>
-<div class="table-wrap"><table><thead><tr><th>出口</th><th>条件</th><th>turn/end 记录的原因</th><th>源码</th></tr></thead><tbody>
-<tr><td>步骤被拒</td><td><code class="inl">agent/pre-step</code> 钩子返回 reject</td><td><code class="inl">blocked</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:319-322" data-expect="if (decision.kind === &#x27;reject&#x27;) {">agent.ts:319-322</code></td></tr>
-<tr><td>开局没有输入</td><td>第一步认领到的消息为空（唤醒消息被删除或被钩子改写成空）</td><td><code class="inl">completed</code>，不调模型</td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:326-329" data-expect="if (phase.step === 0 &amp;&amp; decision.messages.length === 0) {">agent.ts:326-329</code></td></tr>
-<tr><td>转向消息消失</td><td>上一步已给出结束原因，为插话再开一步时却没认领到消息</td><td>沿用上一步的原因</td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:323" data-expect="if (turnEnds &amp;&amp; decision.messages.length === 0) break">agent.ts:323</code></td></tr>
-<tr><td>正常停止</td><td>本步给出结束原因，且 next-step 收件箱为空；先跑 <code class="inl">agent/turn-stopping</code> 钩子，再查一次</td><td><code class="inl">completed</code> 或 <code class="inl">max-tokens</code></td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:361-365" data-expect="if (turnEnds &amp;&amp; this.inbox.nextStep.length === 0) {">agent.ts:361-365</code></td></tr>
-<tr><td>取消</td><td>本 turn 的 AbortSignal 已中止</td><td><code class="inl">aborted</code>，带取消来源</td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:370-373" data-expect="const cause = abortedCancelCause(signal)">agent.ts:370-373</code></td></tr>
-<tr><td>其他异常</td><td>请求失败且没人要求重试、调度器故障、钩子抛错等</td><td><code class="inl">error</code>，带结构化失败信息</td><td><code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:378-382" data-expect="kind: &#x27;error&#x27;,">agent.ts:378-382</code></td></tr>
-</tbody></table></div>
-<p>不管从哪个出口离开，<code class="inl">finally</code> 都会写一条 <code class="inl">turn/end</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:387" data-expect="this.session.append(&#x27;turn/end&#x27;, { turn, reason: turnEnds! })">agent.ts:387</code>）。原因的完整枚举在 <code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:201" data-expect="export interface TurnEndReasonMap {">types.ts:201</code>，其中 <code class="inl">interrupted</code> 和 <code class="inl">forked</code> 只由崩溃恢复和分叉补写，循环本身不会产生。</p>
-<p>再看 <code class="inl">step()</code> 拿到完整回复之后的判定，这是 DSH 真正决定“停还是继续”的地方：</p>
-<div class="codeblock" data-lang="typescript"><pre><code class="lang-typescript">      try {
-        const finish = live.finish
-        if (finish.kind === 'error' || finish.kind === 'aborted') {
-          // …
-          if (action?.kind !== 'retry') {
-            throw new LlmError(finish.failure.message, finish.failure.code, finish.failure)
-          }
-          continue
-        }
-        // …
-        if (finish.kind === 'max-tokens') return { kind: 'max-tokens' }
-
-        const toolCalls = message.content.filter(block =&gt; block.type === 'tool-call')
-        if (toolCalls.length === 0) return { kind: 'completed' }
-        const { concluded } = await executeToolCalls(
-          this.loopCtx, turn, step, toolCalls, signal,
-          context =&gt; this.inbox.splice('next-step', this.inbox.nextStep.length, 0, [context]),
-        )
-        return concluded ? { kind: 'completed' } : null</code></pre></div>
-<p>出处：<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:504-555" data-expect="try {">agent.ts:504-555</code>。判定顺序是：先看流的结束原因，出错就交给 <code class="inl">agent/request-error</code> 钩子决定重试（<code class="inl">continue</code> 回到内层循环）还是抛错；然后<strong>先判截断</strong>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:547" data-expect="if (finish.kind === &#x27;max-tokens&#x27;) return { kind: &#x27;max-tokens&#x27; }">agent.ts:547</code>），<strong>再看有没有工具调用</strong>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:550" data-expect="if (toolCalls.length === 0) return { kind: &#x27;completed&#x27; }">agent.ts:550</code>）。注意 DSH 的结束原因里同时有 <code class="inl">stop</code> 和 <code class="inl">tool-calls</code>（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/types.ts:156-162" data-expect="export interface FinishReasonMap {">types.ts:156-162</code>），但循环并不区分这两者，是否继续只看回复里有没有 tool-call 块；流里缺结束原因时默认按 <code class="inl">stop</code> 处理（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:188" data-expect="return this._finish ?? { kind: &#x27;stop&#x27; }">assembler.ts:188</code>）。工具执行完，如果某个工具调用了 <code class="inl">concludeTurn()</code>，这一步也算完成（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:555" data-expect="return concluded ? { kind: &#x27;completed&#x27; } : null">agent.ts:555</code>），测试见 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1257" data-expect="a tool can conclude the turn despite owing a follow-up request">loop.spec.ts:1257</code>。</p>
-
-<h3 id="hx-01-s2-2">DSH：截断、插话、上限与中断</h3>
-<p><strong>截断。</strong>DSH 在两层防半截工具调用。组装层：结束原因是 <code class="inl">max-tokens</code> 时，<code class="inl">BlockAssembler</code> 从回复里丢掉所有 tool-call 块，只保留文本，回放元数据也同步裁剪，“写进日志的内容”和“回放时发给厂商的内容”不会对不上（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:131-140" data-expect="The one shared keep/drop decision over all seen blocks: max-token">assembler.ts:131-140</code>）。循环层：<code class="inl">step()</code> 先判截断再找工具调用（上面的 547 行）。两层叠加的效果由测试钉住：截断回复里的工具调用不会被执行，日志里也没有 <code class="inl">tool/call</code> 事件（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1530" data-expect="does not dispatch tool calls from a max-tokens-truncated step">loop.spec.ts:1530</code>）；文本部分保留，下一次请求照常回放（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1665" data-expect="keeps safe max-tokens assistant content while dropping truncated tool calls">loop.spec.ts:1665</code>）。</p>
-<p>DSH 默认<strong>不自动续写</strong>：单步被截断，turn 就以 <code class="inl">max-tokens</code> 结束，只调用一次模型（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1439" data-expect="surfaces max-tokens as the turn-end reason when the last step is cut off">loop.spec.ts:1439</code>）。要续写，由插件在 <code class="inl">agent/turn-stopping</code> 钩子里 steer 一条消息，测试里正是这么做的（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1459" data-expect="a max-tokens step earlier in a turn still surfaces as max-tokens after a later completed step">loop.spec.ts:1459</code>）。这个测试还说明了第二个设计：max-tokens 是<strong>粘滞</strong>的，后面的步骤正常结束也不会把 turn 的结局改回 completed（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:343" data-expect="if (turnEnds === null "></code>；类型注释写得很直白：<code class="inl src-ref" data-src="dsh:packages/core/session/src/types.ts:213" data-expect="At least one step reached its output-token ceiling, even if a plugin continued the turn.">types.ts:213</code>）。</p>
-<p><strong>插话（inbox）。</strong>DSH 的待处理输入是持久化在会话日志里的两个队列：<code class="inl">next-turn</code> 和 <code class="inl">next-step</code>（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/inbox.ts:22-23" data-expect="&#x27;next-turn&#x27;: z.array(">inbox.ts:22-23</code>）。三个入口分别是 <code class="inl">followup</code>（排到下一个 turn 并唤醒，<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:164" data-expect="this.send(input, &#x27;next-turn&#x27;, true)">agent.ts:164</code>）、<code class="inl">steer</code>（排到下一步并唤醒，<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:168" data-expect="this.send(input, &#x27;next-step&#x27;, true)">agent.ts:168</code>）和 <code class="inl">inject</code>（排到下一步但不唤醒，<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:172" data-expect="this.send(input, &#x27;next-step&#x27;, false)">agent.ts:172</code>）。并入时机是每一步开始前的认领：先取走全部 next-step 消息，新 turn 的第一步再额外取一条 next-turn（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/inbox.ts:109-111" data-expect="claim(target: InboxTarget, turn: number): UserMessage[] {">inbox.ts:109-111</code>）。认领到的消息只在本步第一次请求时写入会话，失败重试不会重复写（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:426" data-expect="if (firstAttempt) {">agent.ts:426</code>）。</p>
-<p>工具执行期间产生的上下文也走 next-step 队列（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:553" data-expect="context =&gt; this.inbox.splice(&#x27;next-step&#x27;, this.inbox.nextStep.length, 0, [context]),">agent.ts:553</code>），所以它们总是排在工具结果之后，不会把 tool_use 和 tool_result 隔开（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1155" data-expect="defers inject() during tool execution until after the tool result">loop.spec.ts:1155</code>）。工具执行时用户 steer 的消息，会进入同一 turn 的下一步（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/tests/loop.spec.ts:1018" data-expect="injects steering between steps and continues the turn">loop.spec.ts:1018</code>）。最关键的一点在出口表的“正常停止”一行：即使模型已经不再调用工具，只要 next-step 队列里还有消息，turn 就不会停，而是再跑一步。换句话说，DSH 的停止条件是“模型不欠回应<strong>并且</strong>没有待处理的转向”，钩子文档把这个规则写成“数据决定，监听器的顺序改变不了结果”（<code class="inl src-ref" data-src="dsh:packages/core/agent/src/runtime-types.ts:365" data-expect="The turn is about to close: the model owes no response (no live tool">runtime-types.ts:365</code>）。</p>
-<p><strong>上限。</strong>DSH 的核心循环里没有 step 数或 turn 数上限。agent-loop 插件的配置只有一个并发上限 <code class="inl">maxParallelToolCalls</code>，默认 10（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/index.ts:346" data-expect="maxParallelToolCalls: z.number().step(1).min(1).default(DEFAULT_MAX_PARALLEL_TOOL_CALLS).volatile(),">index.ts:346</code>，<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/constants.ts:6" data-expect="export const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 10">constants.ts:6</code>）。能让循环提前停下的都是插件手段：<code class="inl">agent/pre-step</code> 拒绝下一步（<code class="inl src-ref" data-src="dsh:packages/core/agent/src/runtime-types.ts:310" data-expect="Reject a proposed step or replace the messages that enter it.">runtime-types.ts:310</code>）、以 <code class="inl">hook</code> 为原因取消（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:89-90" data-expect="case &#x27;hook&#x27;:">agent.ts:89-90</code>）、工具 <code class="inl">concludeTurn()</code>。反方向的“强制继续”目前没有上限，仓库里自己留了 TODO：<code class="inl src-ref" data-src="dsh:packages/experimental/hooks-claude-code/src/index.ts:275" data-expect="TODO(stop-loop-guard): cap consecutive forced continuations; hooks must self-limit meanwhile.">index.ts:275</code>。实验插件 tool-ralph 的 <code class="inl">maxRounds</code> 默认 256（<code class="inl src-ref" data-src="dsh:packages/experimental/tool-ralph/src/index.ts:35" data-expect="maxRounds: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(256),">index.ts:35</code>），限的是“新开子 agent 跑多少轮”，不是单个 turn 的 step 数。</p>
-<p><strong>中断。</strong><code class="inl">cancel()</code> 中止当前 turn 的 AbortController，默认同时清空收件箱（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:175-181" data-expect="cancel(cause: AgentCancelCause, options: CancelOptions = {}): void {">agent.ts:175-181</code>），循环在各个 await 之后用 <code class="inl">signal.throwIfAborted()</code> 检查。流式输出被打断时，已经显示给用户的文本前缀会作为 <code class="inl">interrupted</code> 消息落盘，工具调用一律不保留，“因为中断发生在派发之前，保留它就得伪造一个结果”（<code class="inl src-ref" data-src="dsh:packages/llm/llm/src/assembler.ts:165" data-expect="Tool calls are omitted because interruption precedes dispatch; retaining">assembler.ts:165</code>；落盘见 <code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:465-466" data-expect="if (signal.aborted) {">agent.ts:465-466</code>）。工具执行到一半被取消时，没开始的调用会补一对 call/result，结果是 <code class="inl">isError</code> 的“aborted before dispatch”（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/tool-calls.ts:250-253" data-expect="function appendSkippedToolCall(">tool-calls.ts:250-253</code>）。如果一步因异常失败，<code class="inl">ToolCallRecovery</code> 会给所有还没结果的调用补上错误结果，再关闭这一步（<code class="inl src-ref" data-src="dsh:packages/core/agent-loop/src/agent.ts:344-355" data-expect="} catch (error: unknown) {">agent.ts:344-355</code>），注释写明了原因：<code class="inl src-ref" data-src="dsh:packages/core/session/src/repair.ts:164" data-expect="Close calls before their step: providers reject dangling assistant calls,">repair.ts:164</code>。</p>
-
-<h3 id="hx-01-s2-3">OpenHarness：一个 while 加一个异常</h3>
-<p>OpenHarness 的循环集中在 <code class="inl">run_query</code> 一个函数里，文档字符串就是它的停止条件：“运行对话循环，直到模型不再请求工具”（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:637" data-expect="Run the conversation loop until the model stops requesting tools.">query.py:637</code>）。与停止有关的三段：</p>
-<div class="codeblock" data-lang="python"><pre><code class="lang-python">    turn_count <span class="op">=</span> <span class="num">0</span>
-    <span class="kw">while</span> context.max_turns <span class="kw">is</span> <span class="kw">None</span> <span class="kw">or</span> turn_count <span class="op">&lt;</span> context.max_turns<span class="op">:</span>
-        turn_count <span class="op">+=</span> <span class="num">1</span>
-        <span class="cmt"># …</span>
-        <span class="kw">if</span> <span class="kw">not</span> final_message.tool_uses<span class="op">:</span>
-            <span class="kw">if</span> context.hook_executor <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
-                <span class="kw">await</span> context.hook_executor.execute(
-                    <span class="cls">HookEvent</span>.<span class="cls">STOP</span>,
-                    {
-                        <span class="str">"event"</span><span class="op">:</span> <span class="cls">HookEvent</span>.<span class="cls">STOP</span>.value,
-                        <span class="str">"stop_reason"</span><span class="op">:</span> <span class="str">"tool_uses_empty"</span>,
-                    },
-                )
-            <span class="kw">return</span>
-        <span class="cmt"># …</span>
-        messages.append(<span class="cls">ConversationMessage</span>(role<span class="op">=</span><span class="str">"user"</span>, content<span class="op">=</span>tool_results))
-
-    <span class="kw">if</span> context.max_turns <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span><span class="op">:</span>
-        <span class="kw">raise</span> <span class="cls">MaxTurnsExceeded</span>(context.max_turns)
-    <span class="kw">raise</span> <span class="cls">RuntimeError</span>(<span class="str">"Query loop exited without a max_turns limit or final response"</span>)</code></pre></div>
-<p>出处：<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:699-884" data-expect="turn_count = 0">query.py:699-884</code>。逐项看：</p>
-<ul>
-<li><strong>停止判定</strong>：只看 <code class="inl">final_message.tool_uses</code> 是否为空（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:808" data-expect="if not final_message.tool_uses:">query.py:808</code>）。API 客户端其实把 <code class="inl">stop_reason</code> 带回来了（<code class="inl src-ref" data-src="oh:src/openharness/api/client.py:64" data-expect="stop_reason: str "> None = None</code>，<code class="inl src-ref" data-src="oh:src/openharness/api/client.py:261" data-expect="stop_reason=getattr(final_message,">client.py:261</code>），但循环只取走 message 和 usage（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:750-752" data-expect="if isinstance(event, ApiMessageCompleteEvent):">query.py:750-752</code>），STOP 钩子收到的 stop_reason 是一个固定字符串 <code class="inl">tool_uses_empty</code>。</li>
-<li><strong>截断</strong>：没有处理输出截断。它处理的是请求侧的 max_tokens：先夹到 128000 和上下文窗口以内（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:90" data-expect="def _bounded_completion_tokens(">query.py:90</code>），厂商仍嫌太大时从错误信息里解析上限、重试，并把这一轮的计数退回去（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:766" data-expect="turn_count = max(0, turn_count - 1)">query.py:766</code>）。如果输出在 tool_use 中间被截断，这个块照样被转成 <code class="inl">ToolUseBlock</code>（<code class="inl src-ref" data-src="oh:src/openharness/engine/messages.py:205" data-expect="def assistant_message_from_api(">messages.py:205</code>）并执行，唯一的保护是参数的 pydantic 校验（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:917" data-expect="parsed_input = tool.input_model.model_validate(tool_input)">query.py:917</code>）。</li>
-<li><strong>插话</strong>：<code class="inl">run_query</code> 里没有收件箱，用户的新输入只能等这次循环结束、下一次 <code class="inl">submit_message</code>。</li>
-<li><strong>上限</strong>：<code class="inl">max_turns</code> 写在 while 条件里，检查发生在调模型之前。默认值有三处且不一致：<code class="inl">QueryContext</code> 是 200（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:153" data-expect="max_turns: int "> None = 200</code>），<code class="inl">QueryEngine</code> 构造参数是 8（<code class="inl src-ref" data-src="oh:src/openharness/engine/query_engine.py:36" data-expect="max_turns: int "> None = 8,</code>），设置文件是 200（<code class="inl src-ref" data-src="oh:src/openharness/config/settings.py:581" data-expect="max_turns: int = 200">settings.py:581</code>）。可以设成 None 表示不设限（<code class="inl src-ref" data-src="oh:tests/test_engine/test_query_engine.py:375" data-expect="async def test_query_engine_allows_unbounded_turns_when_max_turns_is_none">test_query_engine.py:375</code>）。超限时抛 <code class="inl">MaxTurnsExceeded</code> 而不是返回，由 UI 捕获后提示（<code class="inl src-ref" data-src="oh:src/openharness/ui/runtime.py:681" data-expect="except MaxTurnsExceeded as exc:">runtime.py:681</code>），再由 <code class="inl">/continue</code> 走 <code class="inl">continue_pending</code> 接着跑（<code class="inl src-ref" data-src="oh:src/openharness/engine/query_engine.py:280" data-expect="async def continue_pending(self, *, max_turns: int "> None = None)</code>）。</li>
-<li><strong>错误</strong>：模型调用失败时发一个 ErrorEvent 后返回（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:781" data-expect="yield ErrorEvent(message=f">query.py:781</code>），提示过长时先做一次反应式压缩再重试（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:768" data-expect="if not reactive_compact_attempted and _is_prompt_too_long_error(exc):">query.py:768</code>）；模型回了空消息就丢掉并返回（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:792" data-expect="final_message.is_effectively_empty()">query.py:792</code>）。工具侧：未知工具（<code class="inl src-ref" data-src="oh:src/openharness/engine/query.py:912" data-expect="Unknown tool: {tool_name}">query.py:912</code>）、参数非法、工具抛异常都变成 <code class="inl">is_error=True</code> 的结果。</li>
-<li><strong>中断</strong>：循环内没有取消信号。悬空的 tool_use 在下一次进入时修补：<code class="inl">sanitize_conversation_messages</code> 把没有配对结果的 tool_use 所在的 assistant 消息整条删掉（<code class="inl src-ref" data-src="oh:src/openharness/engine/messages.py:119-127" data-expect="def sanitize_conversation_messages(">messages.py:119-127</code>），<code class="inl">submit_message</code> 和 <code class="inl">continue_pending</code> 开头都会调用（<code class="inl src-ref" data-src="oh:src/openharness/engine/query_engine.py:237" data-expect="self._messages = sanitize_conversation_messages(self._messages)">query_engine.py:237</code>）。</li>
-</ul>
-
-<h3 id="hx-01-s2-4">learn-claude-code s01：最小版本</h3>
-<p>learn-claude-code 的第一课把循环压到三十行，README 的说法是“模型调用工具就继续，不调用就停”（<code class="inl src-ref" data-src="lcc:s01_agent_loop/README.zh.md:28" data-expect="模型调用工具就继续，不调用就停">README.zh.md:28</code>）：</p>
-<div class="codeblock" data-lang="python"><pre><code class="lang-python"><span class="kw">def</span> <span class="fn">agent_loop</span>(messages<span class="op">:</span> list)<span class="op">:</span>
-    <span class="kw">while</span> <span class="kw">True</span><span class="op">:</span>
-        response <span class="op">=</span> client.messages.create(
-            model<span class="op">=</span><span class="cls">MODEL</span>, system<span class="op">=</span><span class="cls">SYSTEM</span>, messages<span class="op">=</span>messages,
-            tools<span class="op">=</span><span class="cls">TOOLS</span>, max_tokens<span class="op">=</span><span class="num">8000</span>,
-        )
-
-        <span class="cmt"># Append assistant turn</span>
-        messages.append({<span class="str">"role"</span><span class="op">:</span> <span class="str">"assistant"</span>, <span class="str">"content"</span><span class="op">:</span> response.content})
-
-        <span class="cmt"># If the model didn't call a tool, we're done</span>
-        tool_calls <span class="op">=</span> [
-            block <span class="kw">for</span> block <span class="kw">in</span> response.content <span class="kw">if</span> block.type <span class="op">==</span> <span class="str">"tool_use"</span>
-        ]
-        <span class="kw">if</span> <span class="kw">not</span> tool_calls<span class="op">:</span>
-            <span class="kw">return</span>
-
-        <span class="cmt"># Execute each tool call, collect results</span>
-        results <span class="op">=</span> []
-        <span class="kw">for</span> block <span class="kw">in</span> tool_calls<span class="op">:</span>
-            print(<span class="str">f"\033[33m$ {block.input['command']}\033[0m"</span>)
-            output <span class="op">=</span> run_bash(block.input[<span class="str">"command"</span>])
-            print(output[<span class="op">:</span><span class="num">200</span>])
-            results.append({
-                <span class="str">"type"</span><span class="op">:</span> <span class="str">"tool_result"</span>,
-                <span class="str">"tool_use_id"</span><span class="op">:</span> block.id,
-                <span class="str">"content"</span><span class="op">:</span> output,
-            })
-
-        <span class="cmt"># Feed tool results back, loop continues</span>
-        messages.append({<span class="str">"role"</span><span class="op">:</span> <span class="str">"user"</span>, <span class="str">"content"</span><span class="op">:</span> results})</code></pre></div>
-<p>出处：<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:96-126" data-expect="def agent_loop(messages: list):">code.py:96-126</code>。它做对了两件事：没有 tool_use 块就返回（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:110" data-expect="if not tool_calls:">code.py:110</code>），一批调用的结果放进同一条 user 消息（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:126" data-expect="results})">code.py:126</code>）。其余都没做：<code class="inl">while True</code> 没有上限（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:97" data-expect="while True:">code.py:97</code>）；<code class="inl">max_tokens</code> 写死 8000 且不看 <code class="inl">stop_reason</code>（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:100" data-expect="tools=TOOLS, max_tokens=8000,">code.py:100</code>）；不检查工具名，所有 tool_use 都当 bash 执行；<code class="inl">run_bash</code> 只接住超时和两类系统错误（<code class="inl src-ref" data-src="lcc:s01_agent_loop/code.py:89-92" data-expect="except subprocess.TimeoutExpired:">code.py:89-92</code>）；没有插话，也没有中断。这是有意的教学取舍，README 自己说后面 16 章都在这个循环上叠机制（<code class="inl src-ref" data-src="lcc:s01_agent_loop/README.zh.md:116" data-expect="三十多行，这就是最小可运行的 agent harness 内核">README.zh.md:116</code>）。</p>
-<p>后面的章节补上了一部分。s15 把“只看块、不信 stop_reason”写成了注释（<code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:1924" data-expect="Do not rely on stop_reason alone; the concrete tool_use block is the">code.py:1924</code>），仓库测试专门验证：stop_reason 说 <code class="inl">end_turn</code> 但回复里有真实的 tool_use 时，工具照样执行（<code class="inl src-ref" data-src="lcc:tests/test_agent_loop_boundaries.py:244" data-expect="def test_parent_loop_executes_a_real_tool_call_even_if_stop_reason_disagrees(">test_agent_loop_boundaries.py:244</code>）。s15 也处理了截断：第一次截断丢弃整个回复、把 max_tokens 从 8000 提到 16000 重试；再截断就把回复写进历史、追加续写提示，最多两次（<code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:3185-3197" data-expect="if response.stop_reason ==">code.py:3185-3197</code>，常量见 <code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:69" data-expect="ESCALATED_MAX_TOKENS = 16000">code.py:69</code> 和 <code class="inl src-ref" data-src="lcc:s15_integrated_harness/code.py:72" data-expect="MAX_RECOVERY_RETRIES = 2">code.py:72</code>）。</p>
-
-<h3 id="hx-01-s2-5">小结：停止信号到底看什么</h3>
-<p>可用的信号有两个：厂商返回的 <code class="inl">stop_reason</code>，以及回复里有没有工具调用块。三个仓库判断“正常完成”时都看后者，没有一个只凭 <code class="inl">stop_reason == "tool_use"</code> 决定继续。差别在于<strong>截断是否先于工具调用检查</strong>：DSH 先判截断，而且在组装层就把截断的工具调用丢掉；labs 同样先判截断；OpenHarness 和 learn-claude-code s01 不看截断，s15 看了但续写路径有配对风险（<a href="#hx-01-s4-2">4.2</a>）。</p>
-<p>谁有权决定停：模型（不再调用工具）、harness 自身（上限、预算、错误）、用户（取消）。DSH 多了第四方：插件，可以拒绝一步、结束一个 turn，也可以通过 steer 让本该停的 turn 继续。</p>
-
 <h2 id="hx-01-s3">next_step：把“下一步做什么”写成纯函数</h2>
 <div class="codeblock" data-lang="python"><pre><code class="lang-python" data-lab="labs/harness/loop.py::next_step"><span class="kw">def</span> <span class="fn">next_step</span>(turn<span class="op">:</span> <span class="cls">AssistantTurn</span>, state<span class="op">:</span> <span class="cls">LoopState</span>) <span class="op">-&gt;</span> <span class="cls">Step</span><span class="op">:</span>
     <span class="str">"""采样之后决定下一步。纯函数：只读 turn 和 state，不改任何东西。"""</span>
@@ -357,4 +413,9 @@
 <tr><td>labs</td><td>同步单线程，工具按顺序执行；不支持插话；续写提示是固定文本</td><td>教学、测试替身、用 FakeLLM 复现边界情况</td></tr>
 </tbody></table></div>
 <p>选择时最值得照抄的是两条不变量，与规模无关：<strong>先判截断再看工具调用</strong>，以及<strong>任何一个停止点上，每个 tool_use 都有结果</strong>。前者 DSH 做得最彻底，后者 DSH 用“补结果”、OpenHarness 用“删调用”实现，各有代价；labs 选了补结果，并把两条都写成了测试。</p>
+<div class="hx-story hx-story-end"><span class="hx-story-tag">主线故事 · 下一站（虚构）</span>
+<p>周三的演示很顺利。客户问“它要是卡住了怎么办”，林舟当场按下 Ctrl+C，再输入一句新指令，橘子接着干活，历史完好。老唐在会议室后排比了个大拇指。</p>
+<p>当天晚上，林舟翻演示日志时发现了一件怪事：客户让橘子“查一下官方文档里 timeout 参数的默认值”，橘子调了 <code class="inl">search</code>，拿回来的却是本地代码的 grep 结果，然后一本正经地根据一段测试代码编出了一个默认值。查了半天才发现，实习生小满上周加了一个代码搜索工具，名字也叫 <code class="inl">search</code>，后注册的悄悄覆盖了先注册的网页搜索，没有任何报错。</p>
+<p>循环已经会停了。下一个问题是：模型手里那些工具，到底是谁、长什么样、出了错怎么说。下一章：<a href="#hx-02">工具定义与注册</a>。</p>
+</div>
 </section>

@@ -98,6 +98,17 @@
 [data-theme="light"] #mod-harness .book-scope, [data-theme="sepia"] #mod-harness .book-scope { --h-blue: #245dad; }
 #mod-harness .book-scope th:first-child, #mod-harness .book-scope td:first-child { white-space: nowrap; }
 #mod-harness .book-scope th { word-break: keep-all; }
+/* 主线故事：章首引子与章末续篇，与正文区分开，读者可以跳过 */
+#mod-harness .book-scope .hx-story {
+  margin: 18px 0 26px; padding: 16px 22px; background: var(--bg-soft);
+  border: 1px solid var(--border); border-left: 3px solid var(--warn); border-radius: 10px;
+}
+#mod-harness .book-scope .hx-story-end { margin-top: 32px; }
+#mod-harness .book-scope .hx-story .hx-story-tag {
+  display: block; margin: 0 0 .5em; font-size: .82em; letter-spacing: .06em; color: var(--text-dim);
+}
+#mod-harness .book-scope .hx-story p { margin: .65em 0; }
+#mod-harness .book-scope .hx-story .hx-story-say { color: var(--text-strong); }
 /* 窄屏：三列以上的表给最小宽度，横向滚动，避免各列被挤成三五个字一行 */
 @media (max-width: 640px) {
   #mod-harness .book-scope .table-wrap table:has(th:nth-child(3)) { min-width: 32rem; }
